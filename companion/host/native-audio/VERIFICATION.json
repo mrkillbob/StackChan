@@ -1,0 +1,179 @@
+{
+  "source_hashes": {
+    "native_adapter.py": "7ec26a979c617072846db6d9f8c63b0937b01418d2d1b7b21a809a5fc52d601b",
+    "coreaudio_bridge.cpp": "3e710822d265f22376ea34bb9f62ed8b4142629e1dd43c095893cf65ad077f41",
+    "pcm_ring.hpp": "e24e6a94d2f47965d22b66148c500caf4fb1eacbb6a24dd55ef550296740325a",
+    "test_native.cpp": "efa7d696076f0625219d5ce363c878a5d88a65fcd59deb0eb8e375f5194ae7cb",
+    "audio_session.hpp": "3541aba9daf13ae210c4a665d46678b00660c3655bbe91a01c183cd73abe6d1d",
+    "test_ring.cpp": "b1aaaed1232088c8ad442605e07279a85d67b2c064e93f0c2b5236f2188fdc8d",
+    "verify.py": "28536c7afb3eb695854aebf8122ee2a5aab47d4eaaf674a26dea762667f1a705",
+    "test_session.cpp": "94506b6b251a19f5c5cb26801fa45b23c8ce1bfe2f391936d36a443075f4f179"
+  },
+  "commands": [
+    {
+      "argv": [
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+        "-isysroot",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk",
+        "-isystem",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk/usr/include/c++/v1",
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-dynamiclib",
+        "/Users/mikedemott/Documents/Codex/2026-10-08/task-3/native-audio/coreaudio_bridge.cpp",
+        "-framework",
+        "AudioUnit",
+        "-framework",
+        "CoreAudio",
+        "-framework",
+        "CoreFoundation",
+        "-o",
+        "/var/folders/1_/85m0gzgx34dgj2mjfjz4r8qc0000gn/T/stackchan-native-04f8b7u2/libstackchan_audio.dylib"
+      ],
+      "exit": 0,
+      "seconds": 1.1223769999996875,
+      "sampled_peak_tree_rss_bytes": 98975744,
+      "retained_identities": {
+        "73058": "Thu Oct 8 15:17:04 2026",
+        "73060": "Thu Oct 8 15:17:04 2026"
+      },
+      "cleanup_errors": [],
+      "remaining_group_pids": [],
+      "log": ""
+    },
+    {
+      "argv": [
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+        "-isysroot",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk",
+        "-isystem",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk/usr/include/c++/v1",
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/mikedemott/Documents/Codex/2026-10-08/task-3/native-audio/test_ring.cpp",
+        "-o",
+        "/var/folders/1_/85m0gzgx34dgj2mjfjz4r8qc0000gn/T/stackchan-native-04f8b7u2/test_ring"
+      ],
+      "exit": 0,
+      "seconds": 0.9449857080035144,
+      "sampled_peak_tree_rss_bytes": 92127232,
+      "retained_identities": {
+        "73072": "Thu Oct 8 15:17:05 2026",
+        "73074": "Thu Oct 8 15:17:05 2026",
+        "73079": "Thu Oct 8 15:17:05 2026"
+      },
+      "cleanup_errors": [],
+      "remaining_group_pids": [],
+      "log": ""
+    },
+    {
+      "argv": [
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+        "-isysroot",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk",
+        "-isystem",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk/usr/include/c++/v1",
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/mikedemott/Documents/Codex/2026-10-08/task-3/native-audio/test_session.cpp",
+        "-o",
+        "/var/folders/1_/85m0gzgx34dgj2mjfjz4r8qc0000gn/T/stackchan-native-04f8b7u2/test_session"
+      ],
+      "exit": 0,
+      "seconds": 0.35154545799741754,
+      "sampled_peak_tree_rss_bytes": 49397760,
+      "retained_identities": {
+        "73087": "Thu Oct 8 15:17:06 2026",
+        "73089": "Thu Oct 8 15:17:06 2026"
+      },
+      "cleanup_errors": [],
+      "remaining_group_pids": [],
+      "log": ""
+    },
+    {
+      "argv": [
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+        "-isysroot",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk",
+        "-isystem",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk/usr/include/c++/v1",
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/mikedemott/Documents/Codex/2026-10-08/task-3/native-audio/test_native.cpp",
+        "-framework",
+        "AudioUnit",
+        "-framework",
+        "CoreAudio",
+        "-framework",
+        "CoreFoundation",
+        "-o",
+        "/var/folders/1_/85m0gzgx34dgj2mjfjz4r8qc0000gn/T/stackchan-native-04f8b7u2/test_native"
+      ],
+      "exit": 0,
+      "seconds": 0.7402250829982222,
+      "sampled_peak_tree_rss_bytes": 87523328,
+      "retained_identities": {
+        "73096": "Thu Oct 8 15:17:06 2026",
+        "73098": "Thu Oct 8 15:17:06 2026",
+        "73102": "Thu Oct 8 15:17:06 2026"
+      },
+      "cleanup_errors": [],
+      "remaining_group_pids": [],
+      "log": ""
+    },
+    {
+      "argv": [
+        "/var/folders/1_/85m0gzgx34dgj2mjfjz4r8qc0000gn/T/stackchan-native-04f8b7u2/test_ring"
+      ],
+      "exit": 0,
+      "seconds": 0.587802832997113,
+      "sampled_peak_tree_rss_bytes": 1720320,
+      "retained_identities": {
+        "73108": "Thu Oct 8 15:17:07 2026"
+      },
+      "cleanup_errors": [],
+      "remaining_group_pids": [],
+      "log": ""
+    },
+    {
+      "argv": [
+        "/var/folders/1_/85m0gzgx34dgj2mjfjz4r8qc0000gn/T/stackchan-native-04f8b7u2/test_session"
+      ],
+      "exit": 0,
+      "seconds": 0.17176287499751197,
+      "sampled_peak_tree_rss_bytes": 32768,
+      "retained_identities": {
+        "73115": "Thu Oct 8 15:17:07 2026"
+      },
+      "cleanup_errors": [],
+      "remaining_group_pids": [],
+      "log": ""
+    },
+    {
+      "argv": [
+        "/var/folders/1_/85m0gzgx34dgj2mjfjz4r8qc0000gn/T/stackchan-native-04f8b7u2/test_native"
+      ],
+      "exit": 0,
+      "seconds": 0.31751333300053375,
+      "sampled_peak_tree_rss_bytes": 32768,
+      "retained_identities": {
+        "73119": "Thu Oct 8 15:17:07 2026"
+      },
+      "cleanup_errors": [],
+      "remaining_group_pids": [],
+      "log": ""
+    }
+  ],
+  "worker_load_only": "PASS, no device IO",
+  "library_sha256": "c3b4afcf9329cf66548e7ae044fc78b539ad8d2c84aaa2186c92cb8d22292b7a",
+  "result": "PASS",
+  "wall_seconds": 4.348092000000179
+}
