@@ -17,20 +17,21 @@ bool CompanionSocket::Connect(NetworkInterface& network,const std::string& uri,c
     std::shared_ptr<BoundedWebSocket> ws=std::make_shared<BoundedWebSocket>(&network,2);if(!ws)return false;
     ws->SetReceiveBufferSize(4112);ws->SetHeader("Authorization",("Bearer "+credential).c_str());ws->SetHeader("X-Companion-Device",device.c_str());
     ws->OnData([this](const char* data,size_t bytes,bool binary){Data(data,bytes,binary);});
-    ws->OnDisconnected([this]{consent_=false;tasks_.Interrupt(epoch_);});
-    ws->OnError([this](int){consent_=false;tasks_.Interrupt(epoch_);});
+    ws->OnDisconnected([this]{state_=State::Disconnected;consent_=false;tasks_.Interrupt(epoch_);});
+    ws->OnError([this](int){state_=State::Fault;consent_=false;tasks_.Interrupt(epoch_);});
     {std::lock_guard<std::mutex> lock(mutex_);socket_=ws;}
+    state_=State::AwaitingBegin;
     if(!ws->Connect(uri.c_str())){Close();return false;}
     cJSON* root=cJSON_CreateObject();cJSON_AddStringToObject(root,"type","begin");cJSON_AddStringToObject(root,"request_id",request.c_str());
     char* encoded=cJSON_PrintUnformatted(root);bool ok=encoded && Text(encoded);cJSON_free(encoded);cJSON_Delete(root);return ok;
 }
 bool CompanionSocket::PhysicalConsent(){
-    auto epoch=epoch_.load();if(!epoch)return false;consent_=true;
+    auto epoch=epoch_.load();if(!epoch || state_!=State::ConsentRequired)return false;consent_=true;state_=State::Arming;
     return Text("{\"type\":\"consent\",\"epoch\":"+std::to_string(epoch)+",\"physical\":true}");
 }
-void CompanionSocket::Tick(){if(!epoch_)return;auto now=ms();if(now-last_heartbeat_ms_>=500){last_heartbeat_ms_=now;if(!Text("{\"type\":\"heartbeat\",\"epoch\":"+std::to_string(epoch_.load())+"}"))tasks_.Interrupt(epoch_);}}
+void CompanionSocket::Tick(){if(!epoch_)return;if((state_==State::Listening || state_==State::Speaking) && !tasks_.IsActive()){state_=State::Muted;consent_=false;}auto now=ms();if(now-last_heartbeat_ms_>=500){last_heartbeat_ms_=now;if(!Text("{\"type\":\"heartbeat\",\"epoch\":"+std::to_string(epoch_.load())+"}"))tasks_.Interrupt(epoch_);}}
 void CompanionSocket::Close(){
-    consent_=false;tasks_.Interrupt(epoch_);epoch_=0;
+    state_=State::Disconnected;consent_=false;tasks_.Interrupt(epoch_);epoch_=0;
     std::shared_ptr<BoundedWebSocket> ws;{std::lock_guard<std::mutex> lock(mutex_);ws=std::move(socket_);}if(ws)ws->Close();
 }
 void CompanionSocket::Data(const char* data,std::size_t bytes,bool binary){
@@ -45,15 +46,15 @@ void CompanionSocket::Data(const char* data,std::size_t bytes,bool binary){
         auto audio=cJSON_GetObjectItemCaseSensitive(root,"audio"),fixture=cJSON_GetObjectItemCaseSensitive(root,"fixture");
         auto number=[audio](const char* key,double expected){auto value=cJSON_GetObjectItemCaseSensitive(audio,key);return cJSON_IsNumber(value) && value->valuedouble==expected;};
         valid=cJSON_IsObject(audio) && number("uplink_rate",16000) && number("downlink_rate",24000) && number("channels",1) && number("frame_ms",60) && cJSON_IsFalse(fixture);
-        if(valid && tasks_.Begin(epoch) && tasks_.Acknowledge(epoch)){epoch_=epoch;consent_=false;last_heartbeat_ms_=ms();valid=Text("{\"type\":\"ack\",\"epoch\":"+std::to_string(epoch)+"}");}else valid=false;
+        if(valid && tasks_.Begin(epoch) && tasks_.Acknowledge(epoch)){epoch_=epoch;state_=State::ConsentRequired;consent_=false;last_heartbeat_ms_=ms();valid=Text("{\"type\":\"ack\",\"epoch\":"+std::to_string(epoch)+"}");}else valid=false;
     }else if(valid && epoch==epoch_){
         auto kind=std::string(type->valuestring);
-        if(kind=="armed")valid=consent_ && tasks_.Consent(epoch,true);
+        if(kind=="armed"){valid=consent_ && tasks_.Consent(epoch,true);if(valid)state_=State::Listening;}
         else if(kind=="heartbeat")valid=tasks_.Heartbeat(epoch);
-        else if(kind=="playing"){auto value=cJSON_GetObjectItemCaseSensitive(root,"value");valid=cJSON_IsBool(value) && tasks_.Playing(epoch,cJSON_IsTrue(value));}
-        else if(kind=="interrupt"){consent_=false;tasks_.Interrupt(epoch);}
+        else if(kind=="playing"){auto value=cJSON_GetObjectItemCaseSensitive(root,"value");valid=cJSON_IsBool(value) && tasks_.Playing(epoch,cJSON_IsTrue(value));if(valid)state_=cJSON_IsTrue(value)?State::Speaking:State::Listening;}
+        else if(kind=="interrupt"){state_=State::Muted;consent_=false;tasks_.Interrupt(epoch);}
         else if(kind!="acknowledged")valid=false;
     }else valid=false;
-    cJSON_Delete(root);if(!valid){consent_=false;tasks_.Interrupt(epoch_);}
+    cJSON_Delete(root);if(!valid){state_=State::Fault;consent_=false;tasks_.Interrupt(epoch_);}
 }
 }

@@ -46,6 +46,7 @@ private:
     bool continuation_ = false;
     size_t receive_buffer_size_ = 2048;
     std::string receive_buffer_;
+    std::string expected_accept_;
     bool handshake_completed_ = false;
     std::atomic<bool> connected_{false};
     bool failed_ = false;

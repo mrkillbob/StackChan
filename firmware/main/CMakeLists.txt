@@ -290,6 +290,14 @@ if(CONFIG_IDF_TARGET_ESP32S3)
     list(APPEND SOURCES "${XIAOZHI_MAIN_DIR}/boards/common/esp32_camera.cc")
 endif()
 
+# Custom companion is the default; fetched vendor sources remain unchanged.
+option(STACKCHAN_COMPANION_BOOT "Boot the muted custom companion" ON)
+if(STACKCHAN_COMPANION_BOOT)
+    list(REMOVE_ITEM SOURCES "${XIAOZHI_MAIN_DIR}/settings.cc" "${XIAOZHI_MAIN_DIR}/boards/common/board.cc")
+else()
+    list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/companion/readonly_settings.cc" "${CMAKE_CURRENT_SOURCE_DIR}/companion/readonly_board.cc")
+endif()
+
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
@@ -532,4 +540,8 @@ if ("${size}" AND "${offset}")
     endif()
 else()
     message(STATUS "Assets partition not found, using v1 partition table")
+endif()
+
+if(STACKCHAN_COMPANION_BOOT)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE STACKCHAN_COMPANION_BOOT=1)
 endif()

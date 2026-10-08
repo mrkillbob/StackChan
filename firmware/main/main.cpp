@@ -9,6 +9,7 @@
 #include <mooncake.h>
 #include <apps/apps.h>
 #include <hal/hal.h>
+#include "companion/boot.h"
 
 using namespace mooncake;
 using namespace smooth_ui_toolkit;
@@ -18,6 +19,11 @@ extern "C" void app_main(void)
     // Setup logger
     mclog::set_level(mclog::level_info);
     mclog::set_time_format(mclog::time_format_unix_milliseconds);
+
+#ifdef STACKCHAN_COMPANION_BOOT
+    companion::RunBoot(); // Never starts stock launcher, cloud, OTA or wake-word audio.
+    return;
+#endif
 
     // HAL init
     GetHAL().init();

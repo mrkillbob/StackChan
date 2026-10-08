@@ -1,6 +1,6 @@
 # Michael’s Stack-chan expansion and integration plan
 
-Updated 8 October 2026. This is the plan for the existing project, with implementation and acceptance status recorded separately.
+Updated 8 October 2026. **Later implementation update:** custom boot/consent UI now compiles; see BOOT-IMPLEMENTATION.md for the current image and evidence. Earlier image/test entries below remain historical evidence. This is the plan for the existing project, with implementation and acceptance status recorded separately.
 
 ## Goal
 
@@ -30,7 +30,7 @@ Receipts live in `companion/host/native-audio/VERIFICATION.json`, `companion/hos
 
 ## 1. Finish audio and the custom robot experience
 
-Implement the custom boot path, touch consent, visible listening/speaking/muted states and companion lifecycle. The compiled components currently have no boot/UI entry point; flashing this image would not deliver the requested experience.
+Implement the custom boot path, touch consent, visible listening/speaking/muted states and companion lifecycle. A custom boot/UI entry point now compiles. Its trusted grant provisioning, physical audio and recovery acceptance remain open; flashing alone would not deliver the requested experience.
 
 Use the native Mac audio bridge to connect to Mira’s existing voice session. The current allowlisted routes are Pro Tools Audio Bridge 2-A and 2-B, with mono 48 kHz PCM on channel 1. Verify their actual direction and isolation before opening audio. Keep audio callbacks bounded; process codecs and network work outside callbacks. Do not replace Mira with cloned TTS or a new API conversation. The [Codex voice documentation](https://learn.chatgpt.com/docs/features/voice) describes conversation-linked voice, but the inspected public interfaces do not establish an arbitrary raw-audio injection/export API. The native OS audio path therefore still needs qualification.
 

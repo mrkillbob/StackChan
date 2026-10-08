@@ -1,6 +1,6 @@
 # StackChan flashing review — no write authorization
 
-Reviewed 8 October 2026 after Michael placed the robot in download mode and inserted the prepared SD card.
+Historical image review, with a later custom boot build recorded in BOOT-IMPLEMENTATION.md. Reviewed 8 October 2026 after Michael placed the robot in download mode and inserted the prepared SD card.
 
 ## Verified now
 
@@ -26,7 +26,7 @@ The new application fits an OTA slot. Active slot/OTA metadata has not been read
 
 ## Why not flash this image yet
 
-The companion components compile but have no custom boot/UI activation. Native Mac audio has synthetic callback and codec evidence, but no physical IO, native Mira routing, live TLS listener or real robot pairing acceptance. WebSocket handshake/lifecycle review remains open. This image therefore cannot yet deliver the requested custom companion.
+The reviewed earlier image had no boot/UI activation. The later custom boot image now compiles, but trusted grant provisioning and physical acceptance are still incomplete. Native Mac audio has synthetic callback and codec evidence, but no physical IO, native Mira routing, live TLS listener or real robot pairing acceptance. WebSocket handshake/lifecycle review remains open. This image therefore cannot yet deliver the requested custom companion.
 
 No installed firmware backup exists. Saved upstream-built baseline app/bootloader/table files do not reproduce current installed state, and no exact vendor recovery download was qualified. The current generated full flash manifest writes bootloader `0x0`, table `0x8000`, app `0x20000`, OTA metadata `0xd000` and assets `0xa00000`. It does not directly write NVS, but replacing the table/bootloader/OTA metadata changes boot behavior. Stock HAL also erases NVS on certain initialization failures. Keeping NVS sectors out of a write command does not prove preservation of Wi-Fi, pairing or calibration after boot.
 

@@ -181,6 +181,7 @@ private:
 class Hal {
 public:
     void init();
+    bool initCompanion();
 
     /* --------------------------------- System --------------------------------- */
     void delay(std::uint32_t ms);

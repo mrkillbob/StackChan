@@ -2,6 +2,8 @@
 // See WEBSOCKET-VENDOR.json and Apache-2.0.txt. Original package remains unchanged.
 #include "bounded_web_socket.h"
 #include <esp_random.h>
+#include <mbedtls/sha1.h>
+#include "websocket_handshake.hpp"
 #include "network_interface.h"
 #include <esp_log.h>
 #include <cstdlib>
@@ -116,13 +118,19 @@ bool BoundedWebSocket::Connect(const char* uri) {
     // 设置 BoundedWebSocket 特定的头部
     SetHeader("Upgrade", "websocket");
     SetHeader("Connection", "Upgrade");
-    SetHeader("Sec-BoundedWebSocket-Version", "13");
+    SetHeader("Sec-WebSocket-Version", "13");
     
-    // 生成随机的 Sec-BoundedWebSocket-Key
+    // 生成随机的 Sec-WebSocket-Key
     char key[25];
     esp_fill_random(key,16);
     std::string base64_key = base64_encode(reinterpret_cast<const unsigned char*>(key), 16);
-    SetHeader("Sec-BoundedWebSocket-Key", base64_key.c_str());
+    SetHeader("Sec-WebSocket-Key", base64_key.c_str());
+    auto accept_input=base64_key+"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    unsigned char digest[20];
+    if(mbedtls_sha1(reinterpret_cast<const unsigned char*>(accept_input.data()),accept_input.size(),digest)!=0)return false;
+    expected_accept_=base64_encode(digest,sizeof(digest));
+    handshake_completed_=false;failed_=false;receive_buffer_.clear();current_message_.clear();
+
 
     if (protocol == "wss" || protocol == "https") {
         tcp_ = network_->CreateSsl(connect_id_);
@@ -232,9 +240,7 @@ bool BoundedWebSocket::Send(const void* data, size_t len, bool binary, bool fin)
 
     // 生成随机的4字节mask
     uint8_t mask[4];
-    for (int i = 0; i < 4; ++i) {
-        mask[i] = rand() & 0xFF;
-    }
+    esp_fill_random(mask,4);
     frame.append(reinterpret_cast<const char*>(mask), 4);
 
     // 添加并mask处理有效载荷
@@ -297,7 +303,7 @@ void BoundedWebSocket::OnTcpData(const std::string& data) {
             std::string handshake_response = receive_buffer_.substr(0, pos + 4);
             receive_buffer_ = receive_buffer_.substr(pos + 4);
             
-            if (handshake_response.find("HTTP/1.1 101") != std::string::npos) {
+            if (companion::valid_upgrade(handshake_response,expected_accept_)) {
                 handshake_completed_ = true;
                 // 设置握手成功事件
                 xEventGroupSetBits(handshake_event_group_, HANDSHAKE_SUCCESS_BIT);
@@ -429,9 +435,7 @@ bool BoundedWebSocket::SendControlFrame(uint8_t opcode, const void* data, size_t
 
     // 生成随机的4字节掩码
     uint8_t mask[4];
-    for (int i = 0; i < 4; ++i) {
-        mask[i] = rand() & 0xFF;
-    }
+    esp_fill_random(mask,4);
     frame.append(reinterpret_cast<const char*>(mask), 4);
 
     // 添加并掩码处理有效载荷

@@ -11,15 +11,18 @@ namespace companion {
 // Endpoint is WSS with vendor ESP TLS certificate verification, no insecure mode.
 class CompanionSocket {
 public:
+    enum class State { Disconnected, AwaitingBegin, ConsentRequired, Arming, Listening, Speaking, Muted, Fault };
+    State GetState() const { return state_.load(); }
     explicit CompanionSocket(CodecTasks& tasks):tasks_(tasks){}
     bool Connect(NetworkInterface& network,const std::string& uri,const std::string& device_id,const std::string& credential,const std::string& request_id);
     bool PhysicalConsent();
     bool SendAudio(const uint8_t* data,std::size_t bytes);
     void Tick(); void Close();
 private:
+    std::atomic<State> state_{State::Disconnected};
     CodecTasks& tasks_;std::shared_ptr<BoundedWebSocket> socket_;std::mutex mutex_;
     std::atomic<uint32_t> epoch_{0};std::atomic<bool> consent_{false};
-    uint64_t last_heartbeat_ms_=0;std::string request_id_;
+    std::atomic<uint64_t> last_heartbeat_ms_{0};std::string request_id_;
     bool Text(const std::string& message);void Data(const char* data,std::size_t bytes,bool binary);
 };
 }

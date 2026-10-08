@@ -319,7 +319,7 @@ private:
     Aw9523* aw9523_;
     Ft6336* ft6336_;
     LvglDisplay* display_;
-    StackChanCamera* camera_;
+    StackChanCamera* camera_ = nullptr;
     esp_timer_handle_t touchpad_timer_;
     PowerSaveTimer* power_save_timer_;
     hal_bridge::XiaozhiConfig_t xiaozhi_config_;
@@ -462,7 +462,9 @@ private:
                 [](void* arg) {
                     M5StackCoreS3Board* board = (M5StackCoreS3Board*)arg;
                     board->PollTouchpad();
-                    board->PollPowerSaveState();
+        #ifndef STACKCHAN_COMPANION_BOOT
+            board->PollPowerSaveState();
+#endif
                 },
             .arg                   = this,
             .dispatch_method       = ESP_TIMER_TASK,
@@ -591,13 +593,19 @@ public:
     {
         InitializeI2c();
         InitializeAxp2101();
+#ifndef STACKCHAN_COMPANION_BOOT
         InitializePowerSaveTimer();
+#endif
         InitializeAw9523();
+#ifndef STACKCHAN_COMPANION_BOOT
         I2cDetect();
+#endif
         InitializeFt6336();
         InitializeSpi();
         InitializeIli9342Display();
+#ifndef STACKCHAN_COMPANION_BOOT
         InitializeCamera();
+#endif
         StartTouchpadTimer();
         GetBacklight()->RestoreBrightness();
     }

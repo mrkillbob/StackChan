@@ -20,6 +20,15 @@ Hal& GetHAL()
     return *_hal_instance.get();
 }
 
+bool Hal::initCompanion()
+{
+    // Errors preserve NVS rather than erasing pairing, Wi-Fi or calibration.
+    if (nvs_flash_init() != ESP_OK) return false;
+    xiaozhi_board_init(); // Board/display/touch only under companion build.
+    lvgl_init();
+    return true;
+}
+
 void Hal::init()
 {
     mclog::tagInfo(_tag, "init");
