@@ -30,3 +30,20 @@ For internet portability prefer already-authorized authenticated private connect
 ## Physical review boundary
 
 Current work changes source only. No flash, reset, serial open, pairing/token/NVS modification, live capture, movement, permission prompt or home action. The immediate next physical gate is finite virtual-audio qualification after its probe code and exact route/cleanup are ready. Hardware flashing is a separate review of a concrete candidate plus verified recovery packet.
+
+
+## Authenticated streaming continuation
+
+New host StreamingSession reuses actual HomeLab DeviceRegistry and ConversationSessions, binds an explicit existing native-session reference for production, checks granted audio capabilities, preserves duplicate requests, rejects replay/foreign epochs and invalidates output on interruption/revocation/heartbeat expiry. Nine new lifecycle/wire tests PASS. Finite localhost synthetic WebSocket+native Opus loopback PASS: four uplink packets, three generated return packets, invalid synthetic credential rejected, interrupt queues cleared, listener closed. Only ephemeral in-memory fixture credentials were created; no real device was paired. Fixture WS is explicitly localhost-only and does not qualify production TLS.
+
+HomeLab has advanced independently to f8f47b8e26cee976ff208722f7c6e667fe19a4aa, requiring Python3.14.7. Tests use its existing .venv; the initial Python3.13 import failure is retained. Previous c0d1181 fixture evidence remains valid for its original revision and is not silently relabeled. No HomeLab files were changed here.
+
+Firmware CodecTasks implements exclusive official-BSP codec ownership, 24→16k resampling/60ms Opus capture, two-packet downlink queue, 24k decode/20ms output slices, epoch/heartbeat/consent and half-duplex gates, mute/stop lifecycle without forced task deletion. CompanionSocket accepts only explicit volatile WSS endpoint/device credential, uses the existing verified ESP TLS certificate-bundle backend, and requests a new epoch/ack plus local physical consent before arm. Reconnection requires the codec worker to stop successfully before resetting connection-local epochs. No auto-connect, NVS write or token issuance exists.
+
+Companion-only BoundedWebSocket adapts the pinned Apache2 vendor source, preserving the original managed dependency. It adds receive/message/fragment limits and secure random handshake keys; provenance hashes and license are beside the code. Neither production TLS/network nor physical codec-stop timing is live-qualified. Public/native Voice remains the real Mira owner, and interruption reports speaker/provider stop as unconfirmed until actual acknowledgements.
+
+Incremental ESP-IDF firmware compile PASS, one worker/network denied, 30.37s, dependency lock unchanged, no owned process remaining. Binary3,789,424bytes SHA2561b2c3189e71aa4923b7181fc6689475c7eeee2f5fcca572b607c49af2b77a29f. These new components are compiled into the development build but are not activated at boot or exposed by a robot consent UI yet; this is not a working hardware audio/flash-ready image. First Xtensa uint32_t template mismatch and corrected-build receipts are retained. Baseline build artifacts remain independently preserved under .tools/baseline-1b576559.
+
+Next: native-bus probe and streaming worker scheduling/control wiring, dedicated robot consent/status UI and custom boot entry with no vendor cloud/OTA side effects, then actual physical/audio qualification and recovery gate. Do not flash this dormant-component build as if it fulfilled streaming.
+
+Optional electronics roadmap follows audio: vendor docs verify IR transmitter/receiver and ST25R3916 NFC, GPIO/I2C/UART and BLE. Build authorized-device capability adapters first; later sub-GHz/125kHzRFID/iButton require verified optional hardware/drivers/power/protocol limits. No full-Flipper parity, purchase, credential cloning or security bypass is promised. Any reuse from official Flipper repositories needs license and ESP32 portability review before source is copied.
