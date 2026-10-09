@@ -43,10 +43,16 @@ def _transport_projection(value):
     if diagnostics:result['diagnostics']=diagnostics
     return result
 
+def _robot_boot_projection(nonce,reason):
+    if type(nonce) is int and 1<=nonce<=0xffffffff and type(reason) is int and 0<=reason<=64:
+        return {'robot_boot_nonce':nonce,'robot_reset_reason':reason}
+    return {}
+
 class NumericWorker:
     def __init__(self,*,approved=False,paused,serial_factory,runtime_loader,emit,clock=time.monotonic,sleep=asyncio.sleep,consume_approval=lambda:None,audio_enabled=False):
         self.audio_enabled=audio_enabled;self.audio_authorized=False;self.last_transport_result=None
         self.first_terminal_result=None;self._attempt_authorized=False
+        self.robot_boot_nonce=self.robot_reset_reason=None
         self.approved=approved;self.paused=paused;self.serial_factory=serial_factory;self.runtime_loader=runtime_loader
         self.emit=emit;self.clock=clock;self.sleep=sleep;self.consume_approval=consume_approval
         self.state='idle';self.port=None;self.pairing=None;self.gateway=None;self.task=None;self._closed=False
@@ -62,6 +68,7 @@ class NumericWorker:
         else:
             if value['state'] in ('failed','expired','cancelled','closed') and self._attempt_authorized and self.first_terminal_result is None:
                 first={'state':value['state'],'audio_enabled':self.audio_authorized}
+                first.update(_robot_boot_projection(self.robot_boot_nonce,self.robot_reset_reason))
                 reason=value.get('message')
                 if type(reason) is str and reason in DIAGNOSTIC_REASONS:first['reason']=reason
                 remaining=value.get('remaining')
@@ -122,6 +129,7 @@ class NumericWorker:
             try:self.consume_approval()
             except FileExistsError:raise PairingError('approval_consumed') from None
             self.audio_authorized=self.audio_enabled;self.last_transport_result=None;self._attempt_authorized=True
+            self.robot_boot_nonce=self.robot_reset_reason=None
             self._deadline=self.clock()+180;self.pairing=None;self.gateway=None;self._usb_buffer=b'';self._terminal_status=None
             self.status('opening','usb_open_may_reset')
             self.port=self.serial_factory()  # Configured closed, DTR/RTS false.
@@ -135,6 +143,8 @@ class NumericWorker:
             if ready.status==REJECTED:raise PairingError('rejected')
             if ready.status==EXPIRED:raise PairingError('expired')
             if ready.status!=READY:raise PairingError('unsupported_receipt')
+            if not _robot_boot_projection(ready.boot_nonce,ready.reset_reason):raise PairingError('invalid_receipt')
+            self.robot_boot_nonce=ready.boot_nonce;self.robot_reset_reason=ready.reset_reason
             # Runtime verification/key loading and listener happen only AFTER Ready.
             if self.paused():raise PairingError('paused')
             runtime=self.runtime_loader()
@@ -278,10 +288,11 @@ def _append_history(metadata):
             history.seek(0,os.SEEK_END);history.write(line);history.flush()
         finally:fcntl.flock(history.fileno(),fcntl.LOCK_UN)
 
-def _status_metadata(value,*,audio_enabled=False,transport_result=None,first_terminal_result=None):
+def _status_metadata(value,*,audio_enabled=False,transport_result=None,first_terminal_result=None,robot_boot_nonce=None,robot_reset_reason=None):
     state=value.get('state')
     if state not in STATES:raise PairingError('invalid_status')
     metadata={'state':state,'observed_unix':time.time(),'worker_pid':os.getpid(),'audio_enabled':audio_enabled is True}
+    metadata.update(_robot_boot_projection(robot_boot_nonce,robot_reset_reason))
     if type(value.get('acknowledged')) is bool:metadata['acknowledged']=value['acknowledged']
     if type(value.get('remaining')) is int and 0<=value['remaining']<=120:metadata['remaining']=value['remaining']
     reason=value.get('message')
@@ -291,6 +302,7 @@ def _status_metadata(value,*,audio_enabled=False,transport_result=None,first_ter
         if projected is not None:metadata['transport']=projected
     if type(first_terminal_result) is dict and first_terminal_result.get('state') in ('failed','expired','cancelled','closed'):
         first={'state':first_terminal_result['state'],'audio_enabled':first_terminal_result.get('audio_enabled') is True}
+        first.update(_robot_boot_projection(first_terminal_result.get('robot_boot_nonce'),first_terminal_result.get('robot_reset_reason')))
         reason=first_terminal_result.get('reason')
         if type(reason) is str and reason in DIAGNOSTIC_REASONS:first['reason']=reason
         remaining=first_terminal_result.get('remaining')
@@ -306,7 +318,7 @@ def _status_metadata(value,*,audio_enabled=False,transport_result=None,first_ter
     _output(value)
 
 async def _run(args):
-    worker=NumericWorker(approved=args.approved_test,paused=lambda:(ROOT/'.tools/TRANSPORT-PAIRING-PAUSED').exists(),serial_factory=lambda:_serial_factory(args.port),runtime_loader=lambda:_runtime(args),emit=lambda value:_status_metadata(value,audio_enabled=worker.audio_authorized,transport_result=worker.last_transport_result,first_terminal_result=worker.first_terminal_result),consume_approval=lambda:_consume_approval(audio_enabled=args.approved_audio),audio_enabled=args.approved_audio)
+    worker=NumericWorker(approved=args.approved_test,paused=lambda:(ROOT/'.tools/TRANSPORT-PAIRING-PAUSED').exists(),serial_factory=lambda:_serial_factory(args.port),runtime_loader=lambda:_runtime(args),emit=lambda value:_status_metadata(value,audio_enabled=worker.audio_authorized,transport_result=worker.last_transport_result,first_terminal_result=worker.first_terminal_result,robot_boot_nonce=worker.robot_boot_nonce,robot_reset_reason=worker.robot_reset_reason),consume_approval=lambda:_consume_approval(audio_enabled=args.approved_audio),audio_enabled=args.approved_audio)
     worker.status('idle')
     loop=asyncio.get_running_loop();reader=asyncio.StreamReader(limit=2048);protocol=asyncio.StreamReaderProtocol(reader)
     pipe=None;monitor=None

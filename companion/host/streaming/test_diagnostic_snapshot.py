@@ -45,6 +45,8 @@ class ParserTests(unittest.TestCase):
         value=d.decode_snapshot(frame(changes={7:1,8:4,9:0xfffffffe,10:0xffffffff,11:35,12:0xffffffff,13:4096}))
         self.assertEqual(value['first_fault'],dict(task=1,reason=4,detail=-2,time_ms=0xffffffff))
         self.assertEqual(value['tasks'][0],dict(task=0,stage=35,time_ms=0xffffffff,stack_highwater_bytes=4096))
+    def test_prior_cannot_claim_current_boot_nonce(self):
+        with self.assertRaises(d.SnapshotError):d.decode_snapshot(frame(flags=1,changes={23:91,24:4}))
     def test_valid_prior_boot_is_separate(self):
         value=d.decode_snapshot(frame(flags=1,changes={23:81,24:4,25:2,26:25,27:0xfffffff9,28:99}))
         self.assertEqual(value['prior']['boot_nonce'],81);self.assertEqual(value['prior']['first_fault']['detail'],-7)

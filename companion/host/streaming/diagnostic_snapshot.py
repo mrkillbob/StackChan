@@ -39,7 +39,7 @@ def decode_snapshot(frame):
     if not words[0] or words[1]>64:raise SnapshotError('invalid_snapshot')
     result=dict(version=1,back_observed=bool(flags&2),boot_nonce=words[0],reset_reason=words[1],uptime_ms=words[2],tick_count=words[3],heartbeat_success=words[4],heartbeat_failure=words[5],dropped_updates=words[6],first_fault=_fault(words,7),tasks=_tasks(words,11),prior=None)
     if flags&1:
-        if words[1] in (0,1,9) or not words[23] or words[24]>64:raise SnapshotError('invalid_snapshot')
+        if words[1] in (0,1,9) or not words[23] or words[23]==words[0] or words[24]>64:raise SnapshotError('invalid_snapshot')
         result['prior']=dict(boot_nonce=words[23],reset_reason=words[24],first_fault=_fault(words,25),tasks=_tasks(words,29))
     elif tuple(words[23:])!=(0,0,NO_FAULT,0,0,0,*([0]*12)):
         raise SnapshotError('invalid_snapshot')

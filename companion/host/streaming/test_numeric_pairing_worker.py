@@ -451,4 +451,65 @@ class HistoryTests(unittest.TestCase):
         record=json.loads((self.root/'notes/NUMERIC-PAIRING-LIVE-STATUS.json').read_text())
         self.assertEqual(record['first_terminal']['reason'],'transport_lost');self.assertEqual(record['first_terminal']['transport']['decoded_mic_frames'],960)
         self.assertNotIn('credential',record['first_terminal']);self.assertNotIn('raw_pcm',record['first_terminal']['transport'])
+class BootMetadataTests(unittest.TestCase):
+    setUp=ApprovalMetadataTests.setUp
+    def test_verified_identity_is_metadata_only_and_first_terminal_retained(self):
+        payload={'state':'failed','message':'transport_lost'}
+        first={'state':'failed','audio_enabled':False,'robot_boot_nonce':91,'robot_reset_reason':3}
+        with patch.object(w,'_output') as output:
+            w._status_metadata(payload,robot_boot_nonce=92,robot_reset_reason=4,first_terminal_result=first)
+        record=json.loads((self.root/'notes/NUMERIC-PAIRING-LIVE-STATUS.json').read_text())
+        self.assertEqual(record['robot_boot_nonce'],92);self.assertEqual(record['robot_reset_reason'],4)
+        self.assertEqual(record['first_terminal']['robot_boot_nonce'],91);self.assertEqual(record['first_terminal']['robot_reset_reason'],3)
+        output.assert_called_once_with(payload)
+        history=json.loads((self.root/'notes/NUMERIC-PAIRING-STATUS-HISTORY.jsonl').read_text().splitlines()[0])
+        self.assertEqual(history['robot_boot_nonce'],92)
+    def test_invalid_or_unverified_identity_is_omitted_as_a_pair(self):
+        for nonce,reason in ((None,None),(0,1),(True,1),(0x100000000,1),(91,True),(91,-1),(91,65),(91,'3')):
+            with self.subTest(nonce=nonce,reason=reason),patch.object(w,'_output'):
+                w._status_metadata({'state':'failed'},robot_boot_nonce=nonce,robot_reset_reason=reason,first_terminal_result={'state':'failed','robot_boot_nonce':nonce,'robot_reset_reason':reason})
+            value=json.loads((self.root/'notes/NUMERIC-PAIRING-LIVE-STATUS.json').read_text())
+            self.assertNotIn('robot_boot_nonce',value);self.assertNotIn('robot_reset_reason',value)
+            self.assertNotIn('robot_boot_nonce',value['first_terminal']);self.assertNotIn('robot_reset_reason',value['first_terminal'])
+class WorkerBootIdentityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ready_identity_reset_on_new_authorized_prepare_without_old_reuse(self):
+        import tempfile
+        from pathlib import Path
+        temporary=tempfile.TemporaryDirectory(prefix='ready-identity-fixture-');self.addCleanup(temporary.cleanup)
+        root=Path(temporary.name);(root/'notes').mkdir()
+        root_patch=patch.object(w,'ROOT',root);root_patch.start();self.addCleanup(root_patch.stop)
+        output_patch=patch.object(w,'_output');output=output_patch.start();self.addCleanup(output_patch.stop)
+        clock=Clock();attempts=[];observed=[]
+        async def sleep(n):clock.now+=n;await asyncio.sleep(0)
+        def factory():
+            port=Port();port.reads=[];attempts.append(port)
+            if len(attempts)==2:
+                def open_failure():raise OSError('synthetic-no-secret')
+                port.open=open_failure;return port
+            sent=False
+            ready=struct.pack('>4sBB16s',b'SCPS',1,1,struct.pack('>II8s',91,3,bytes(8)))
+            def read(cap):
+                nonlocal sent
+                if clock.now>=2 and not sent:sent=True;return ready
+                return b''
+            port.read=read;return port
+        def emit(value):
+            observed.append((value['state'],worker.robot_boot_nonce,worker.robot_reset_reason))
+            w._status_metadata(value,robot_boot_nonce=worker.robot_boot_nonce,robot_reset_reason=worker.robot_reset_reason,first_terminal_result=worker.first_terminal_result)
+
+        def load():raise RuntimeError('synthetic runtime boundary')
+        worker=w.NumericWorker(approved=True,paused=lambda:False,serial_factory=factory,runtime_loader=load,emit=emit,clock=clock,sleep=sleep)
+        await worker.command('prepare');await worker.wait()
+        self.assertEqual((worker.robot_boot_nonce,worker.robot_reset_reason),(91,3))
+        self.assertEqual(worker.first_terminal_result['robot_boot_nonce'],91)
+        record=json.loads((root/'notes/NUMERIC-PAIRING-LIVE-STATUS.json').read_text())
+        self.assertEqual((record['robot_boot_nonce'],record['robot_reset_reason']),(91,3))
+        self.assertEqual(record['first_terminal']['robot_boot_nonce'],91)
+        self.assertTrue(all('robot_boot_nonce' not in call.args[0] and 'robot_reset_reason' not in call.args[0] for call in output.call_args_list))
+        observed.clear();await worker.command('retry');await worker.wait()
+        self.assertEqual(observed[0],('opening',None,None));self.assertEqual((worker.robot_boot_nonce,worker.robot_reset_reason),(None,None))
+        self.assertEqual(worker.first_terminal_result['robot_boot_nonce'],91)
+        record=json.loads((root/'notes/NUMERIC-PAIRING-LIVE-STATUS.json').read_text())
+        self.assertNotIn('robot_boot_nonce',record);self.assertNotIn('robot_reset_reason',record)
+        self.assertEqual(record['first_terminal']['robot_boot_nonce'],91)
 if __name__=='__main__':unittest.main()
