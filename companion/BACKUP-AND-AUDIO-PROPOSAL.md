@@ -1,3 +1,5 @@
+**Superseded: Michael declined the full-backup/encrypted-container workflow. Do not execute these steps or request a password. No full backup is a release prerequisite.**
+
 # StackChan installed-state backup and Mac audio qualification proposal
 
 Prepared 8 October 2026. Michael subsequently approved the installed-state backup. Its collection has not started: the native encrypted-container command failed before a private password prompt, and Time Machine exclusion is not confirmed. Mac audio tests remain separately unapproved and unexecuted. No flash operation is included.

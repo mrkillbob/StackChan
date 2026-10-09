@@ -1,3 +1,5 @@
+**Superseded: Michael declined the full-backup/encrypted-container workflow. Do not execute these steps or request a password. No full backup is a release prerequisite.**
+
 # Private backup container: user step
 
 The complete flash read is approved, but has not started. This is a blank local container, not an image of any attached disk or the robot. Apple's current guide: https://support.apple.com/guide/disk-utility/create-a-disk-image-dskutl11888/mac

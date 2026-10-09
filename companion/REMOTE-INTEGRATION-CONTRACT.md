@@ -25,7 +25,7 @@ The endpoint validation helper require_production_tls enforces WSS, the /compani
 
 ## Evidence needed before production
 
-- Robot microphone/speaker and panel acceptance after separately approved image write, plus verified protected installed-state backup.
+- Robot microphone/speaker and panel acceptance after separately approved image write, using the NVS-preserving minimal-write proposal; Michael declined full backup.
 - TLS handshake against the intended remote service, certificate rejection and revocation/expired-grant rejection.
 - Existing Mira conversation identity and intended memory continuity demonstrated through a supported adapter, not inferred from a string or matching voice.
 - Measured bidirectional speech, mute, disconnect, interruption and bounded latency; explicitly report any unconfirmed cancellation/silence/barge-in behavior.
