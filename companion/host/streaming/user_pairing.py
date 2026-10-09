@@ -40,7 +40,7 @@ def main(argv=None):
             print('Denied: provide a bounded serial port path.', file=sys.stderr)
             return 2
         print(f'Pinned device: {DEVICE}\nPinned endpoint: {ENDPOINT}')
-        print('Read the current token from your protected local preparation sheet. Do not paste it into chat.')
+        print('Read the current token from your protected local preparation sheet or transport-test terminal. Do not paste it into chat.')
         with warnings.catch_warnings():
             # getpass otherwise falls back to echoed input if terminal control
             # fails. Treat that warning as denial before any fallback read.
