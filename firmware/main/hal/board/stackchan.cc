@@ -635,7 +635,7 @@ public:
         charging                     = pmic_->IsCharging();
         discharging                  = pmic_->IsDischarging();
         if (discharging != last_discharging) {
-            power_save_timer_->SetEnabled(discharging);
+            if(power_save_timer_)power_save_timer_->SetEnabled(discharging);
             last_discharging = discharging;
         }
 
@@ -646,7 +646,7 @@ public:
     virtual void SetPowerSaveLevel(PowerSaveLevel level) override
     {
         if (level != PowerSaveLevel::LOW_POWER) {
-            power_save_timer_->WakeUp();
+            if(power_save_timer_)power_save_timer_->WakeUp();
         }
         WifiBoard::SetPowerSaveLevel(level);
     }

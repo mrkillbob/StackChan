@@ -64,7 +64,7 @@ dependencies:
       require: private
       version: '>=5.5.2'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 0.2.1
   78/xiaozhi-fonts:
@@ -77,6 +77,24 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.6.0
+  M5HAL:
+    dependencies: []
+    source:
+      path: /Users/mikedemott/Developer/AgentWork/StackChan/src/upstream/firmware/components/M5HAL
+      type: local
+    version: 0.1.4
+  M5UnitUnified:
+    dependencies: []
+    source:
+      path: /Users/mikedemott/Developer/AgentWork/StackChan/src/upstream/firmware/components/M5UnitUnified
+      type: local
+    version: 0.6.0
+  M5Utility:
+    dependencies: []
+    source:
+      path: /Users/mikedemott/Developer/AgentWork/StackChan/src/upstream/firmware/components/M5Utility
+      type: local
+    version: 0.3.1
   espressif/adc_battery_estimation:
     component_hash: b915167c87ed5a84b13d680bd011c2ed9a15121f1e247c6903141b9f138f3606
     dependencies:
@@ -158,7 +176,7 @@ dependencies:
       require: private
       version: '>=5.0'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 0.3.1
   espressif/esp-dsp:
@@ -590,7 +608,7 @@ dependencies:
       require: private
       version: '>=5.3'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 0.0.8
   espressif/esp_video:
@@ -654,7 +672,7 @@ dependencies:
       require: private
       version: '>=4.0'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 1.5.1
   espressif/iot_eth:
@@ -682,7 +700,7 @@ dependencies:
       require: private
       version: '*'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     targets:
     - esp32s2
@@ -866,12 +884,14 @@ direct_dependencies:
 - 78/esp-wifi-connect
 - 78/esp_lcd_nv3023
 - 78/uart-eth-modem
+- 78/uart-uhci
 - 78/xiaozhi-fonts
 - espressif/adc_battery_estimation
 - espressif/adc_mic
 - espressif/bmi270_sensor
 - espressif/button
 - espressif/cmake_utilities
+- espressif/dl_fft
 - espressif/esp-sr
 - espressif/esp32-camera
 - espressif/esp_audio_codec
@@ -897,19 +917,25 @@ direct_dependencies:
 - espressif/esp_lvgl_port
 - espressif/esp_mmap_assets
 - espressif/esp_new_jpeg
+- espressif/esp_sccb_intf
 - espressif/esp_video
+- espressif/i2c_bus
+- espressif/iot_usbh_cdc
 - espressif/iot_usbh_rndis
 - espressif/knob
 - espressif/led_strip
 - espressif2022/image_player
 - idf
 - lvgl/lvgl
+- m5stack/M5HAL
+- m5stack/M5UnitUnified
+- m5stack/M5Utility
 - tny-robotics/sh1106-esp-idf
 - txp666/otto-emoji-gif-component
 - waveshare/custom_io_expander_ch32v003
 - waveshare/esp_lcd_sh8601
 - waveshare/esp_lcd_touch_cst9217
 - wvirgil123/sscma_client
-manifest_hash: 350e17991f1a3226438480b027525b7cde67c34ed4ec6c5847cdfcb22e18dc4a
+manifest_hash: 3153b2a2dd1ff94ce1e6662fc972ed29dbeb79f780d2a97ca6f8c5c659d736b1
 target: esp32s3
 version: 2.0.0

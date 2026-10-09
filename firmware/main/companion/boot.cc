@@ -88,29 +88,51 @@ bool StageAuthorizedGrant(AuthorizedGrant grant) {
     std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant)return false;
     pending_grant=std::move(grant);return true;
 }
-[[noreturn]] void RunBoot() {
-    if(!GetHAL().initCompanion()) {
-        ESP_LOGE("Companion","NVS unavailable; preserved settings; halted muted");
-        while(true)GetHAL().delay(1000);
-    }
+namespace {
+// Persistent boot-lifetime owner: never destroy callbacks while workers unwind.
+struct Runtime {
+    UsbProvisioner provisioner;
+    CodecTasks tasks;
+    CompanionSocket socket{tasks};
+    bool wifi_started=false,grant_connected=false;
+    ConnectGate connect_gate;
     lv_obj_t* status=nullptr;
-    {LvglLockGuard lock;auto screen=lv_screen_active();lv_obj_clean(screen);
+    const char* message="Mira companion\nMuted - pair a trusted host\nCamera and motion inactive";
+};
+Runtime& runtime() { static auto* value=new Runtime;return *value; }
+}
+void OpenView(lv_obj_t* parent) {
+    auto& state=runtime();auto& status=state.status;
+    pair_requested=false;connect_requested=false;listen_requested=false;mute_requested=false;
+    {LvglLockGuard lock;auto screen=parent;
      lv_obj_set_style_bg_color(screen,lv_color_hex(0x10232d),0);
-     status=lv_label_create(screen);lv_obj_set_width(status,290);lv_obj_align(status,LV_ALIGN_TOP_MID,0,16);
+     status=lv_label_create(screen);lv_obj_set_width(status,240);lv_obj_align(status,LV_ALIGN_TOP_LEFT,8,34);
      lv_obj_set_style_text_color(status,lv_color_hex(0xffffff),0);
      lv_label_set_text(status,"Mira companion\nMuted - pair a trusted host\nCamera and motion inactive");
-     auto pair=lv_button_create(screen);lv_obj_set_size(pair,290,32);lv_obj_align(pair,LV_ALIGN_CENTER,0,-28);
+     auto pair=lv_button_create(screen);lv_obj_set_size(pair,290,32);lv_obj_align(pair,LV_ALIGN_CENTER,0,-12);
      auto pair_label=lv_label_create(pair);lv_label_set_text(pair_label,"Pair trusted host");lv_obj_center(pair_label);
      lv_obj_add_event_cb(pair,[](lv_event_t*){pair_requested=true;},LV_EVENT_CLICKED,nullptr);
      button(screen,"Connect",-76,connect_requested);button(screen,"Mute",76,mute_requested);
-     auto listen=lv_button_create(screen);lv_obj_set_size(listen,290,48);lv_obj_align(listen,LV_ALIGN_CENTER,0,20);
+     auto listen=lv_button_create(screen);lv_obj_set_size(listen,290,48);lv_obj_align(listen,LV_ALIGN_CENTER,0,32);
      auto label=lv_label_create(listen);lv_label_set_text(label,"Allow this conversation");lv_obj_center(label);
      lv_obj_add_event_cb(listen,[](lv_event_t*){listen_requested=true;},LV_EVENT_CLICKED,nullptr);
     }
-    // Lifetime is the boot loop. No destructor races with codec/network workers.
-    UsbProvisioner provisioner; CodecTasks tasks;CompanionSocket socket(tasks);bool wifi_started=false,grant_connected=false;ConnectGate connect_gate;
-    const char* message="Mira companion\nMuted - pair a trusted host\nCamera and motion inactive";
-    while(true) {
+    state.message="Mira companion\nMuted - pair a trusted host\nCamera and motion inactive";
+}
+bool CloseView() {
+    auto& state=runtime();state.provisioner.Close();state.connect_gate.Cancel();
+    pair_requested=false;connect_requested=false;listen_requested=false;mute_requested=false;
+    {std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant)std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');pending_grant.reset();}
+    state.socket.Close();state.grant_connected=false;
+    bool stopped=state.tasks.Stop();
+    if(stopped)state.status=nullptr;
+    return stopped;
+}
+void TickView() {
+    auto& state=runtime();if(!state.status)return;
+    auto& provisioner=state.provisioner;auto& tasks=state.tasks;auto& socket=state.socket;
+    auto& wifi_started=state.wifi_started;auto& grant_connected=state.grant_connected;
+    auto& connect_gate=state.connect_gate;auto& message=state.message;auto status=state.status;
         if(mute_requested.exchange(false)) {
             provisioner.Close();connect_gate.Cancel();pair_requested=false;connect_requested=false;listen_requested=false;
             {std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant)std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');pending_grant.reset();}
@@ -164,7 +186,10 @@ bool StageAuthorizedGrant(AuthorizedGrant grant) {
             }
         }
         {LvglLockGuard lock;lv_label_set_text(status,message);}
-        GetHAL().delay(20);
-    }
+ }
+[[noreturn]] void RunBoot() {
+    if(!GetHAL().initCompanion())while(true)GetHAL().delay(1000);
+    OpenView(lv_screen_active());
+    while(true){TickView();GetHAL().delay(20);}
 }
 }

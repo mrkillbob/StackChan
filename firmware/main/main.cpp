@@ -10,6 +10,7 @@
 #include <apps/apps.h>
 #include <hal/hal.h>
 #include "companion/boot.h"
+#include "apps/stock_shell/stock_apps.h"
 
 using namespace mooncake;
 using namespace smooth_ui_toolkit;
@@ -21,7 +22,7 @@ extern "C" void app_main(void)
     mclog::set_time_format(mclog::time_format_unix_milliseconds);
 
 #ifdef STACKCHAN_COMPANION_BOOT
-    companion::RunBoot(); // Never starts stock launcher, cloud, OTA or wake-word audio.
+    stock_shell::Run(); // Stock launcher with feature-scoped companion/tools/games.
     return;
 #endif
 

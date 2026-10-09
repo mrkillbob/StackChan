@@ -308,6 +308,8 @@ idf_component_register(SRCS ${SOURCES}
                         esp_psram
                         esp_netif
                         esp_driver_gpio
+                        M5Unit-NFC
+                        esp_driver_rmt
                         esp_driver_usb_serial_jtag
                         esp_driver_uart
                         esp_driver_spi

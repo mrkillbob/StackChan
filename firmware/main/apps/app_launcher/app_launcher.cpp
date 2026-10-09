@@ -26,7 +26,13 @@ void AppLauncher::onLauncherOpen()
 
     LvglLockGuard lock;
 
-    if (!_startup_checked && !GetHAL().isAppConfiged()) {
+    if (
+#ifndef STACKCHAN_COMPANION_BOOT
+        !_startup_checked && !GetHAL().isAppConfiged()
+#else
+        false // Safe shell never starts account/network onboarding automatically.
+#endif
+    ) {
         mclog::tagInfo(getAppInfo().name, "app not configured, start startup worker");
         _startup_worker = std::make_unique<setup_workers::StartupWorker>();
     } else {
@@ -59,6 +65,7 @@ void AppLauncher::onLauncherClose()
 
     LvglLockGuard lock;
 
+    _screensaver.reset();
     _view.reset();
 }
 

@@ -9,8 +9,27 @@
 #include <mooncake_log.h>
 #include <assets/assets.h>
 #include <stackchan/stackchan.h>
+#include <atomic>
 #include <apps/common/common.h>
 
+#ifdef STACKCHAN_COMPANION_BOOT
+namespace {
+class LockedFeatureWorker : public setup_workers::WorkerBase {
+    lv_obj_t* root_=nullptr;std::atomic<bool> back_{false};
+public:
+    explicit LockedFeatureWorker(const std::string& feature) {
+        root_=lv_obj_create(lv_screen_active());lv_obj_set_size(root_,320,240);
+        auto text=lv_label_create(root_);lv_obj_set_width(text,280);
+        std::string message=feature+"\nRetained in stock source.\nThis action needs separate feature qualification; camera, motion, credentials and vendor transfer remain inactive.";
+        lv_label_set_text(text,message.c_str());lv_obj_align(text,LV_ALIGN_TOP_MID,0,12);
+        auto button=lv_button_create(root_);lv_obj_align(button,LV_ALIGN_BOTTOM_MID,0,-12);auto label=lv_label_create(button);lv_label_set_text(label,"Back");
+        lv_obj_add_event_cb(button,[](lv_event_t* e){static_cast<LockedFeatureWorker*>(lv_event_get_user_data(e))->back_=true;},LV_EVENT_CLICKED,this);
+    }
+    ~LockedFeatureWorker(){lv_obj_delete(root_);}
+    void update()override{if(back_.load())_is_done=true;}
+};
+}
+#endif
 using namespace mooncake;
 using namespace view;
 using namespace setup_workers;
@@ -139,6 +158,13 @@ void AppSetup::onOpen()
         },
     };
 
+#ifdef STACKCHAN_COMPANION_BOOT
+    for(auto& section:_menu_sections)for(auto& item:section.items) {
+        if(item.label=="Brightness" || item.label=="Volume") { item.label+=" (this boot)";continue; }
+        const auto feature=item.label;
+        item.onClick=[this,feature](){_destroy_menu=true;_worker=std::make_unique<LockedFeatureWorker>(feature);};
+    }
+#endif
     LvglLockGuard lock;
 
     _menu_page = std::make_unique<view::SelectMenuPage>(_menu_sections);
