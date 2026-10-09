@@ -1,6 +1,7 @@
 import asyncio
 import json
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 try:
     import numeric_pairing_worker as w
@@ -110,4 +111,55 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(worker.cleanup_blocked)
         self.assertFalse(any(x['state'] in ('cancelled','closed') for x in self.events))
         with self.assertRaises(Exception):await worker.command('retry')
+    async def test_consumption_failure_denies_before_usb(self):
+        calls=[]
+        def denied():calls.append('consume');raise RuntimeError('already consumed synthetic')
+        worker=self.worker();worker.consume_approval=denied
+        await worker.command('prepare');await worker.wait()
+        self.assertEqual(calls,['consume']);self.assertEqual(self.opened,0);self.assertEqual(self.loaded,0)
+        self.assertEqual(worker.state,'failed')
+
+class ApprovalMetadataTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self.temp=tempfile.TemporaryDirectory(prefix='numeric-approval-fixture-');self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);(self.root/'notes').mkdir();(self.root/'.tools').mkdir()
+        self.patch=patch.object(w,'ROOT',self.root);self.patch.start();self.addCleanup(self.patch.stop)
+    def authorization(self,**changes):
+        import time
+        value={'approved':True,'audio_allowed':False,'valid_until_unix':time.time()+60};value.update(changes)
+        (self.root/'notes/NUMERIC-PAIRING-RUNTIME-AUTHORIZATION.json').write_text(json.dumps(value))
+    def test_consumption_is_once_and_receipt_nonsecret(self):
+        self.authorization();w._consume_approval()
+        path=self.root/'.tools/NUMERIC-PAIRING-CHECK-CONSUMED';receipt=json.loads(path.read_text())
+        self.assertEqual(set(receipt),{'consumed_unix','pid','audio_allowed'});self.assertIs(receipt['audio_allowed'],False)
+        with self.assertRaises(FileExistsError):w._consume_approval()
+    def test_racing_consumers_only_one_succeeds(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        self.authorization();barrier=threading.Barrier(2)
+        def attempt():
+            barrier.wait()
+            try:w._consume_approval();return True
+            except FileExistsError:return False
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results=list(pool.map(lambda _:attempt(),range(2)))
+        self.assertEqual(sorted(results),[False,True])
+    def test_expired_unapproved_or_audio_permission_denied_without_marker(self):
+        for changes in ({'valid_until_unix':0},{'approved':False},{'audio_allowed':True},{'audio_allowed':0}):
+            self.authorization(**changes)
+            with self.assertRaises(Exception):w._consume_approval()
+            self.assertFalse((self.root/'.tools/NUMERIC-PAIRING-CHECK-CONSUMED').exists())
+    def test_metadata_saves_only_fixed_nonsecret_fields(self):
+        payload={'state':'paired','acknowledged':True,'remaining':59,'code':'123456','credential':'synthetic_secret','message':'synthetic_raw','device_nonce':'private_fixture'}
+        with patch.object(w,'_output') as output:w._status_metadata(payload)
+        record=json.loads((self.root/'notes/NUMERIC-PAIRING-LIVE-STATUS.json').read_text())
+        self.assertEqual(set(record),{'state','observed_unix','worker_pid','audio_enabled','acknowledged','remaining'})
+        self.assertIs(record['audio_enabled'],False);self.assertTrue(record['acknowledged']);self.assertEqual(record['remaining'],59)
+        self.assertNotIn('synthetic',json.dumps(record));self.assertNotIn('123456',json.dumps(record));self.assertFalse((self.root/'notes/NUMERIC-PAIRING-LIVE-STATUS.tmp').exists())
+        output.assert_called_once_with(payload)
+    def test_invalid_status_creates_no_metadata(self):
+        with self.assertRaises(Exception):w._status_metadata({'state':'invalid'})
+        self.assertFalse((self.root/'notes/NUMERIC-PAIRING-LIVE-STATUS.json').exists())
 if __name__=='__main__':unittest.main()

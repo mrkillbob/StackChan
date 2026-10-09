@@ -8,6 +8,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import signal
 import ssl
@@ -26,9 +27,9 @@ CERT_BEGIN=1791540049;CERT_END=1791626449
 STATES={'idle','opening','usb_ready','waiting_robot','comparing','waiting_confirmation','staging','paired','cancelled','expired','failed','closed'}
 
 class NumericWorker:
-    def __init__(self,*,approved=False,paused,serial_factory,runtime_loader,emit,clock=time.monotonic,sleep=asyncio.sleep):
+    def __init__(self,*,approved=False,paused,serial_factory,runtime_loader,emit,clock=time.monotonic,sleep=asyncio.sleep,consume_approval=lambda:None):
         self.approved=approved;self.paused=paused;self.serial_factory=serial_factory;self.runtime_loader=runtime_loader
-        self.emit=emit;self.clock=clock;self.sleep=sleep
+        self.emit=emit;self.clock=clock;self.sleep=sleep;self.consume_approval=consume_approval
         self.state='idle';self.port=None;self.pairing=None;self.gateway=None;self.task=None;self._closed=False
         self._deadline=None;self._usb_buffer=b'';self.cleanup_blocked=False;self._terminal_status=None
     def status(self,state,message=None):
@@ -88,6 +89,7 @@ class NumericWorker:
         try:
             if self.approved is not True:raise PairingError('approval_required')
             if self.paused():raise PairingError('paused')
+            self.consume_approval()
             self._deadline=self.clock()+180;self.pairing=None;self.gateway=None;self._usb_buffer=b'';self._terminal_status=None
             self.status('opening','usb_open_may_reset')
             self.port=self.serial_factory()  # Configured closed, DTR/RTS false.
@@ -205,8 +207,28 @@ def _output(value):
     # Only fixed state/message labels, comparison number and boolean/counts.
     print(json.dumps(value,separators=(',',':')),flush=True)
 
+def _consume_approval():
+    # Exactly one human Pair click consumes the approved check, even on failure.
+    approval=json.loads((ROOT/'notes/NUMERIC-PAIRING-RUNTIME-AUTHORIZATION.json').read_text())
+    if approval.get('approved') is not True or approval.get('audio_allowed') is not False or not time.time()<approval.get('valid_until_unix',0):
+        raise PairingError('approval_required')
+    with (ROOT/'.tools/NUMERIC-PAIRING-CHECK-CONSUMED').open('x') as receipt:
+        receipt.write(json.dumps({'consumed_unix':time.time(),'pid':os.getpid(),'audio_allowed':False})+'\n')
+
+def _status_metadata(value):
+    state=value.get('state')
+    if state not in STATES:raise PairingError('invalid_status')
+    metadata={'state':state,'observed_unix':time.time(),'worker_pid':os.getpid(),'audio_enabled':False}
+    if type(value.get('acknowledged')) is bool:metadata['acknowledged']=value['acknowledged']
+    if type(value.get('remaining')) is int and 0<=value['remaining']<=120:metadata['remaining']=value['remaining']
+    # No comparison number, credential, raw message or network payload is saved.
+    path=ROOT/'notes/NUMERIC-PAIRING-LIVE-STATUS.json'
+    temporary=path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(metadata)+'\n');temporary.replace(path)
+    _output(value)
+
 async def _run(args):
-    worker=NumericWorker(approved=args.approved_test,paused=lambda:(ROOT/'.tools/TRANSPORT-PAIRING-PAUSED').exists(),serial_factory=lambda:_serial_factory(args.port),runtime_loader=lambda:_runtime(args),emit=_output)
+    worker=NumericWorker(approved=args.approved_test,paused=lambda:(ROOT/'.tools/TRANSPORT-PAIRING-PAUSED').exists(),serial_factory=lambda:_serial_factory(args.port),runtime_loader=lambda:_runtime(args),emit=_status_metadata,consume_approval=_consume_approval)
     worker.status('idle')
     loop=asyncio.get_running_loop();reader=asyncio.StreamReader(limit=2048);protocol=asyncio.StreamReaderProtocol(reader)
     pipe=None;monitor=None
