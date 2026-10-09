@@ -160,7 +160,7 @@ void Hal::setLaserEnabled(bool enabled)
     static bool laser_enabled = false;
     static bool is_inited     = false;
 
-    if (laser_enabled == enabled) {
+    if (is_inited && laser_enabled == enabled) {
         return;
     }
 
@@ -169,7 +169,7 @@ void Hal::setLaserEnabled(bool enabled)
     if (!is_inited) {
         gpio_reset_pin(laser_pin);
         gpio_set_direction(laser_pin, GPIO_MODE_OUTPUT);
-        gpio_set_pull_mode(laser_pin, GPIO_PULLUP_ONLY);
+        gpio_set_pull_mode(laser_pin, enabled ? GPIO_PULLUP_ONLY : GPIO_PULLDOWN_ONLY);
         is_inited = true;
     }
 
