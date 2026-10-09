@@ -229,11 +229,50 @@ class AudioWorkerTests(unittest.IsolatedAsyncioTestCase):
             worker=w.NumericWorker(approved=True,audio_enabled=True,paused=lambda:False,serial_factory=lambda:opened.append(True),runtime_loader=lambda:None,emit=lambda value:None,consume_approval=lambda:w._consume_approval(audio_enabled=True))
             with patch.object(w,'ROOT',root):await worker.command('prepare');await worker.wait()
             self.assertEqual(opened,[]);self.assertFalse(worker.audio_authorized)
+    async def test_ready_receipt_is_emitted_only_after_correlated_staged_ack(self):
+        import numeric_pairing as n
+        from test_numeric_pairing import Clock,REQ,DN,HN
+        for scope in (False,True):
+            clock=Clock();core=n.NumericPairing(issuer=lambda ttl:'synthetic-noncredential-000000000000',revoke=lambda:None,clock=clock,nonce_factory=lambda:HN,code_factory=lambda:'123456',audio_requested=scope)
+            core.prepare(REQ,91)
+            class Transport:
+                def process_request(self,*args):return None
+            gateway=n.NumericGateway(core,Transport(),audio_enabled=True)
+            class Connection:
+                def respond(self,status,body):return status
+            class AudioRequest:path='/companion/audio'
+            class Socket:
+                request=type('Request',(),{'path':'/companion/pair'})()
+                def __init__(self):
+                    self.queue=asyncio.Queue();self.ready=None
+                    self.queue.put_nowait(json.dumps(dict(type='pair.hello',version=1,request_id=REQ,device=n.DEVICE,device_nonce=DN,boot_nonce=91,capabilities=['microphone','speaker'])))
+                async def recv(self):return await self.queue.get()
+                async def send(self,text):
+                    value=json.loads(text)
+                    if value['type']=='pair.challenge':
+                        self.assert_scope(value)
+                        core.mac_confirm()
+                        self.queue.put_nowait(json.dumps(dict(type='pair.confirm',version=1,request_id=REQ,device_nonce=DN,host_nonce=HN,physical=True)))
+                    elif value['type']=='pair.grant':
+                        assert not core.audio_allowed
+                        self.assert_scope(value)
+                        self.queue.put_nowait(json.dumps(dict(type='pair.staged',version=1,request_id=REQ,device_nonce=DN,host_nonce=HN,staged=True)))
+                    elif value['type']=='pair.ready':
+                        assert core.audio_allowed and core.state=='paired'
+                        assert gateway.process_request(Connection(),AudioRequest())==(None if scope else 403)
+                        self.ready=value;core.cancel('closed','closed')
+                    else:raise AssertionError('unexpected response')
+                def assert_scope(self,value):assert value['audio_requested'] is scope
+                async def close(self):pass
+            socket=Socket()
+            async with asyncio.timeout(1):await gateway.handle(socket)
+            self.assertEqual(socket.ready,dict(type='pair.ready',version=1,request_id=REQ,device_nonce=DN,host_nonce=HN,audio_requested=scope,ready=True))
+
     async def test_opt_in_gateway_requires_both_confirm_and_ack_one_audio_only(self):
         import numeric_pairing as n
         from test_numeric_pairing import Clock,REQ,DN,HN
         revoked=[];clock=Clock();handled=[]
-        core=n.NumericPairing(issuer=lambda ttl:'synthetic-noncredential-000000000000',revoke=lambda:revoked.append(True),clock=clock,nonce_factory=lambda:HN,code_factory=lambda:'123456')
+        core=n.NumericPairing(issuer=lambda ttl:'synthetic-noncredential-000000000000',revoke=lambda:revoked.append(True),clock=clock,nonce_factory=lambda:HN,code_factory=lambda:'123456',audio_requested=True)
         core.prepare(REQ,91)
         class Transport:
             def process_request(self,*args):return None

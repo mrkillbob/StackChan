@@ -49,7 +49,9 @@ def write_numeric_once(port,frame):
 
 class NumericPairing:
     def __init__(self,*,issuer,revoke,emit=lambda value:None,clock=time.monotonic,
-                 nonce_factory=lambda:secrets.token_hex(16),code_factory=lambda:f'{secrets.randbelow(1000000):06d}'):
+                 nonce_factory=lambda:secrets.token_hex(16),code_factory=lambda:f'{secrets.randbelow(1000000):06d}',audio_requested=False):
+        if type(audio_requested) is not bool:raise PairingError('invalid_audio_scope')
+        self._audio_requested=audio_requested
         self.issuer=issuer;self.revoke=revoke;self.emit=emit;self.clock=clock
         self.nonce_factory=nonce_factory;self.code_factory=code_factory
         self.state='idle';self.code=None;self.request=None;self.boot_nonce=None
@@ -57,6 +59,8 @@ class NumericPairing:
         self.deadline=self.challenge_deadline=self.ack_deadline=None
         self.mac=self.robot=False;self._issued=False;self._revoked=False
         self._grant=None;self._sent=False;self.audio_allowed=False;self.revocation_failed=False
+    @property
+    def audio_requested(self):return self._audio_requested
     def status(self,message=None):
         value={'state':self.state,'acknowledged':self.audio_allowed}
         if self.state=='comparing' and self.code is not None:value['code']=self.code
@@ -109,7 +113,7 @@ class NumericPairing:
         if not fresh_hex(self.host_nonce) or type(self.code) is not str or not re.fullmatch('[0-9]{6}',self.code):raise PairingError('invalid_entropy')
         self.challenge_deadline=min(self.deadline,self.clock()+60)
         self.state='comparing';self.status()
-        return dict(type='pair.challenge',version=1,request_id=self.request,device_nonce=self.device_nonce,host_nonce=self.host_nonce,code=self.code,expires_ms=min(60000,math.floor((self.challenge_deadline-self.clock())*1000)))
+        return dict(type='pair.challenge',version=1,request_id=self.request,device_nonce=self.device_nonce,host_nonce=self.host_nonce,code=self.code,audio_requested=self.audio_requested,expires_ms=min(60000,math.floor((self.challenge_deadline-self.clock())*1000)))
     def mac_confirm(self):
         self.tick()
         if self.state not in ('comparing','staging','paired'):raise PairingError('invalid_state')
@@ -134,7 +138,7 @@ class NumericPairing:
                 except Exception:self.revocation_failed=True
                 self.state='failed';self.status('grant_failed')
                 raise PairingError('grant_failed')
-            self._issued=True;self._grant=dict(type='pair.grant',version=1,request_id=self.request,device_nonce=self.device_nonce,host_nonce=self.host_nonce,device=DEVICE,uri=URI,credential=credential,ttl_seconds=ttl)
+            self._issued=True;self._grant=dict(type='pair.grant',version=1,request_id=self.request,device_nonce=self.device_nonce,host_nonce=self.host_nonce,device=DEVICE,uri=URI,credential=credential,ttl_seconds=ttl,audio_requested=self.audio_requested)
             self.ack_deadline=self.clock()+5;self.state='staging';self.status()
     def take_grant(self):
         self.tick()
@@ -154,13 +158,13 @@ class NumericPairing:
         self.state=state;self.status(message)
 
 class NumericGateway:
-    """One pairing socket held through one separately consented audio test."""
+    """One pairing socket held through its explicitly scoped temporary audio test."""
     def __init__(self,pairing,transport,*,audio_enabled=False):
         self.pairing=pairing;self.transport=transport;self.audio_enabled=audio_enabled;self._candidate=False;self._audio=False
         self.sockets=set()
     def process_request(self,connection,request):
         if request.path=='/companion/pair' and not self._candidate and self.pairing.state=='waiting_robot':return None
-        if request.path=='/companion/audio' and self.audio_enabled and self.pairing.audio_allowed and not self._audio:
+        if request.path=='/companion/audio' and self.audio_enabled and self.pairing.audio_requested and self.pairing.audio_allowed and not self._audio:
             return self.transport.process_request(connection,request)
         return connection.respond(403,'Pairing unavailable.\n')
     async def handle(self,socket):
@@ -168,7 +172,7 @@ class NumericGateway:
         pending=None
         try:
             if socket.request.path=='/companion/audio':
-                if not self.audio_enabled or not self.pairing.audio_allowed or self._audio:raise PairingError('audio_denied')
+                if not self.audio_enabled or not self.pairing.audio_requested or not self.pairing.audio_allowed or self._audio:raise PairingError('audio_denied')
                 self._audio=True
                 await self.transport.handle(socket)
                 if self.pairing.state not in ('cancelled','expired','failed','closed'):
@@ -194,7 +198,10 @@ class NumericGateway:
                 if done:
                     value=strict_json(pending.result())
                     if value.get('type')=='pair.confirm':self.pairing.robot_confirm(value)
-                    elif value.get('type')=='pair.staged':self.pairing.staged(value)
+                    elif value.get('type')=='pair.staged':
+                        self.pairing.staged(value)
+                        ready=dict(type='pair.ready',version=1,request_id=self.pairing.request,device_nonce=self.pairing.device_nonce,host_nonce=self.pairing.host_nonce,audio_requested=self.pairing.audio_requested,ready=True)
+                        await asyncio.wait_for(socket.send(json.dumps(ready)),2)
                     else:raise PairingError('invalid_message')
                     pending=asyncio.create_task(socket.recv())
         except asyncio.CancelledError:

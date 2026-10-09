@@ -147,6 +147,54 @@ class CoreTests(unittest.TestCase):
             with self.assertRaises(n.PairingError):self.p.mac_confirm()
             self.assertEqual(self.revoked,[True]);self.assertEqual(self.p.state,'failed')
             self.assertIsNone(self.p.take_grant());self.assertFalse(self.p.audio_allowed)
+class AudioScopeTests(unittest.TestCase):
+    def pair(self,**kwargs):
+        self.clock=Clock();self.revoked=[];self.issued=[]
+        def issue(ttl):self.issued.append(ttl);return 'synthetic-not-a-credential-00000000'
+        core=n.NumericPairing(issuer=issue,revoke=lambda:self.revoked.append(True),clock=self.clock,nonce_factory=lambda:HN,code_factory=lambda:'123456',**kwargs)
+        core.prepare(REQ,91)
+        challenge=core.hello(dict(type='pair.hello',version=1,request_id=REQ,device=n.DEVICE,device_nonce=DN,boot_nonce=91,capabilities=['microphone','speaker']))
+        return core,challenge
+    def confirm(self,core):
+        core.mac_confirm();self.assertEqual(self.issued,[])
+        core.robot_confirm(dict(type='pair.confirm',version=1,request_id=REQ,device_nonce=DN,host_nonce=HN,physical=True))
+        return core.take_grant()
+    def stage(self,core):core.staged(dict(type='pair.staged',version=1,request_id=REQ,device_nonce=DN,host_nonce=HN,staged=True))
+    def test_default_pairing_challenge_and_grant_are_muted(self):
+        core,challenge=self.pair()
+        self.assertIn('audio_requested',challenge);self.assertIs(challenge['audio_requested'],False)
+        grant=self.confirm(core);self.assertIs(grant['audio_requested'],False)
+        self.stage(core);self.assertTrue(core.audio_allowed)
+        self.clock.now=6;core.tick();self.assertEqual(core.state,'paired')
+    def test_audio_scope_stays_bound_until_correlated_ack(self):
+        core,challenge=self.pair(audio_requested=True)
+        self.assertIs(challenge['audio_requested'],True);self.assertFalse(core.audio_allowed)
+        class Transport:
+            def process_request(self,*args):return 200
+        class Connection:
+            def respond(self,status,text):return status
+        class Request:path='/companion/audio'
+        gateway=n.NumericGateway(core,Transport(),audio_enabled=True)
+        self.assertEqual(gateway.process_request(Connection(),Request()),403)
+        with self.assertRaises(AttributeError):core.audio_requested=False
+        grant=self.confirm(core);self.assertIs(grant['audio_requested'],True);self.assertFalse(core.audio_allowed)
+        self.assertEqual(gateway.process_request(Connection(),Request()),403)
+        with self.assertRaises(n.PairingError):core.staged(dict(type='pair.staged',version=1,request_id='ff'*16,device_nonce=DN,host_nonce=HN,staged=True))
+        self.assertFalse(core.audio_allowed);self.stage(core);self.assertTrue(core.audio_allowed)
+        self.assertEqual(gateway.process_request(Connection(),Request()),200)
+        core.cancel();self.assertFalse(core.audio_allowed);self.assertEqual(self.revoked,[True])
+    def test_audio_scope_rejects_truthy_non_boolean(self):
+        for value in (None,0,1,'true',[],{}):
+            with self.subTest(value=value),self.assertRaises(n.PairingError):self.pair(audio_requested=value)
+    def test_muted_scope_cannot_be_escalated_by_gateway_flag(self):
+        core,_=self.pair();self.confirm(core);self.stage(core)
+        class Transport:
+            def process_request(self,*args):raise AssertionError('muted scope entered transport')
+        class Connection:
+            def respond(self,status,text):return status
+        class Request:path='/companion/audio'
+        gateway=n.NumericGateway(core,Transport(),audio_enabled=True)
+        self.assertEqual(gateway.process_request(Connection(),Request()),403)
 class AsyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_gateway_denies_audio_before_grant(self):
         self.assertIsNotNone(n)
@@ -212,7 +260,7 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
         for outcome,complete,expected in [('complete',True,'closed'),('fault',True,'failed'),('complete',False,'failed')]:
             with self.subTest(outcome=outcome,complete=complete):
                 revoked=[];clock=Clock()
-                core=n.NumericPairing(clock=clock,issuer=lambda ttl:'synthetic-not-a-credential-00000000',revoke=lambda:revoked.append(True),nonce_factory=lambda:HN,code_factory=lambda:'123456')
+                core=n.NumericPairing(clock=clock,issuer=lambda ttl:'synthetic-not-a-credential-00000000',revoke=lambda:revoked.append(True),nonce_factory=lambda:HN,code_factory=lambda:'123456',audio_requested=True)
                 core.prepare(REQ,91)
                 core.hello(dict(type='pair.hello',version=1,request_id=REQ,device=n.DEVICE,device_nonce=DN,boot_nonce=91,capabilities=['microphone','speaker']))
                 core.mac_confirm();core.robot_confirm(dict(type='pair.confirm',version=1,request_id=REQ,device_nonce=DN,host_nonce=HN,physical=True));core.take_grant()

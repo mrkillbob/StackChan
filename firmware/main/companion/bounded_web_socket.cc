@@ -4,6 +4,7 @@
 #include "local_tls.h"
 #include "local_tls_policy.hpp"
 #include "local_tls_lifecycle.hpp"
+#include "transport_write.hpp"
 #include <esp_random.h>
 #include <mbedtls/sha1.h>
 #include "websocket_handshake.hpp"
@@ -192,7 +193,7 @@ bool BoundedWebSocket::Connect(const char* uri) {
     }
     request += "\r\n";
 
-    if (tcp_->Send(request) < 0) {
+    if (companion::CompleteTransportWrite(tcp_->Send(request),request.size()) < 0) {
         ESP_LOGE(TAG, "Failed to send BoundedWebSocket handshake request");
         return false;
     }
@@ -273,8 +274,8 @@ bool BoundedWebSocket::Send(const void* data, size_t len, bool binary, bool fin)
         continuation_ = !fin;
 
         // 发送帧
-        return transport.Send(frame);
-    }) >= 0;
+        return companion::CompleteTransportWrite(transport.Send(frame),frame.size());
+    }) > 0;
 }
 
 void BoundedWebSocket::Ping() {
@@ -471,7 +472,7 @@ bool BoundedWebSocket::SendControlFrame(uint8_t opcode, const void* data, size_t
     }
 
     // 发送帧
-    return companion::WithLiveTransport(tcp_,connected_,send_mutex_,[&](Tcp& transport){return transport.Send(frame);}) >= 0;
+    return companion::WithLiveTransport(tcp_,connected_,send_mutex_,[&](Tcp& transport){return companion::CompleteTransportWrite(transport.Send(frame),frame.size());}) > 0;
 }
 void BoundedWebSocket::Fail() {
     failed_=true; connected_=false; receive_buffer_.clear(); current_message_.clear();

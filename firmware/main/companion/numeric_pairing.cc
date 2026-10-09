@@ -43,15 +43,23 @@ bool NumericPairing::Message(const std::string& text,uint64_t now){
  if(!root||!cJSON_IsObject(root.get())||number(root.get(),"version",1)!=1||string(root.get(),"request_id")!=context_.Request()||string(root.get(),"device_nonce")!=context_.DeviceNonce())return false;
  auto type=string(root.get(),"type");
  if(type=="pair.challenge"){
-  if(!keys(root.get(),{"type","version","request_id","device_nonce","host_nonce","code","expires_ms"}))return false;
-  return context_.Challenge(string(root.get(),"host_nonce"),string(root.get(),"code"),number(root.get(),"expires_ms",60000),now);
+  if(!keys(root.get(),{"type","version","request_id","device_nonce","host_nonce","code","expires_ms","audio_requested"}))return false;
+  auto audio=cJSON_GetObjectItemCaseSensitive(root.get(),"audio_requested");if(!cJSON_IsBool(audio))return false;
+  return context_.Challenge(string(root.get(),"host_nonce"),string(root.get(),"code"),number(root.get(),"expires_ms",60000),now,cJSON_IsTrue(audio));
  }
  if(type=="pair.grant"){
-  if(!keys(root.get(),{"type","version","request_id","device_nonce","host_nonce","device","uri","credential","ttl_seconds"})||string(root.get(),"device")!=device||string(root.get(),"uri")!="wss://192.168.1.75:18443/companion/audio")return false;
+  if(!keys(root.get(),{"type","version","request_id","device_nonce","host_nonce","device","uri","credential","ttl_seconds","audio_requested"})||string(root.get(),"device")!=device||string(root.get(),"uri")!="wss://192.168.1.75:18443/companion/audio")return false;
+  auto audio=cJSON_GetObjectItemCaseSensitive(root.get(),"audio_requested");if(!cJSON_IsBool(audio))return false;
   std::string credential=string(root.get(),"credential");bool valid=credential.size()>=32&&credential.size()<=256;
   for(unsigned char c:credential)if(c<33||c>126)valid=false;
-  if(!valid||!context_.Grant(string(root.get(),"request_id"),string(root.get(),"device_nonce"),string(root.get(),"host_nonce"),number(root.get(),"ttl_seconds",120),now)){wipe(credential);return false;}
-  grant_={std::move(credential),context_.Request(),context_.GrantDeadline()};grant_ready_=true;return true;
+  if(!valid||!context_.Grant(string(root.get(),"request_id"),string(root.get(),"device_nonce"),string(root.get(),"host_nonce"),number(root.get(),"ttl_seconds",120),now,cJSON_IsTrue(audio))){wipe(credential);return false;}
+  grant_={std::move(credential),context_.Request(),context_.GrantDeadline(),context_.AudioRequested()};grant_ready_=true;return true;
+ }
+ if(type=="pair.ready"){
+  if(!keys(root.get(),{"type","version","request_id","device_nonce","host_nonce","audio_requested","ready"})||!context_.Granted()||string(root.get(),"host_nonce")!=context_.HostNonce())return false;
+  auto audio=cJSON_GetObjectItemCaseSensitive(root.get(),"audio_requested");auto ready=cJSON_GetObjectItemCaseSensitive(root.get(),"ready");
+  if(!cJSON_IsBool(audio)||cJSON_IsTrue(audio)!=context_.AudioRequested()||!cJSON_IsTrue(ready))return false;
+  host_ready_=true;return true;
  }
  return false; // Unknown control, cancellation and context changes fail closed.
 }
@@ -70,7 +78,7 @@ bool NumericPairing::Active(uint64_t now)const{return started_&&!fault_.load()&&
 bool NumericPairing::TakeGrant(NumericGrant& out){if(!grant_ready_)return false;out=std::move(grant_);grant_ready_=false;return true;}
 bool NumericPairing::Staged(){return Send("{\"type\":\"pair.staged\",\"version\":1,\"request_id\":\""+context_.Request()+"\",\"device_nonce\":\""+context_.DeviceNonce()+"\",\"host_nonce\":\""+context_.HostNonce()+"\",\"staged\":true}");}
 void NumericPairing::Cancel(){
- started_=false;fault_=true;auto socket=std::move(socket_);if(socket)socket->Close(); // Join before callback state is cleared.
+ started_=false;host_ready_=false;fault_=true;auto socket=std::move(socket_);if(socket)socket->Close(); // Join before callback state is cleared.
  {std::lock_guard<std::mutex> lock(queue_mutex_);for(auto& item:queue_)wipe(item);queue_.clear();}
  wipe(grant_.credential);grant_={};grant_ready_=false;context_.Cancel();
 }

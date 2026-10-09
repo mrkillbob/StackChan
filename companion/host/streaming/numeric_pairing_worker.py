@@ -138,7 +138,7 @@ class NumericWorker:
             # Runtime verification/key loading and listener happen only AFTER Ready.
             if self.paused():raise PairingError('paused')
             runtime=self.runtime_loader()
-            self.pairing=NumericPairing(issuer=runtime.issue,revoke=runtime.revoke,emit=self.pairing_status,clock=self.clock)
+            self.pairing=NumericPairing(issuer=runtime.issue,revoke=runtime.revoke,emit=self.pairing_status,clock=self.clock,audio_requested=self.audio_authorized)
             self.pairing.prepare(uuid.uuid4().hex,ready.boot_nonce,started_at=ready_received_at,deadline_budget_seconds=118)
             self.pairing.tick()
             self.gateway=NumericGateway(self.pairing,runtime.transport,audio_enabled=self.audio_authorized)

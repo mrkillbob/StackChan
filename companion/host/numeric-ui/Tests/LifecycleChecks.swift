@@ -31,6 +31,13 @@ for line in sys.stdin:
   a.cancel();assert(a.cleanupPending && !a.canPrimary);pump{a.phase == .cancelled};assert(a.canPrimary)
   a.primary();pump{a.phase == .comparing};assert(!a.confirmationSent)
   var stopped=false;a.shutdown{closed in stopped=closed};pump{stopped}
+  let audio=PairingController(approved:true,root:root,processFactory:{fake(normal)},audioApproved:true)
+  audio.primary();pump{audio.phase == .comparing}
+  assert(audio.primaryTitle == "Confirm & connect")
+  assert(audio.instruction.contains("temporary") && audio.instruction.contains("microphone") && audio.instruction.contains("speaker"))
+  audio.primary();pump{audio.phase == .paired}
+  assert(!audio.instruction.contains("tap Connect") && !audio.instruction.contains("then Allow"))
+  var audioStopped=false;audio.shutdown{closed in audioStopped=closed};pump{audioStopped}
   let single=PairingController(approved:true,root:root,processFactory:{fake(normal)})
   single.primary();pump{single.phase == .comparing};single.cancel();pump{single.phase == .cancelled}
   assert(!single.canPrimary && single.primaryTitle == "New approval needed")

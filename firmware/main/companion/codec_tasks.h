@@ -31,7 +31,7 @@ public:
 private:
     struct Packet { uint32_t epoch; std::vector<uint8_t> payload; };
     AudioSession session_; std::mutex mutex_; std::deque<Packet> incoming_;
-    std::atomic<uint32_t> epoch_{0}; std::atomic<bool> enabled_{false},playing_{false},quit_{false},done_{true};
+    std::atomic<uint32_t> epoch_{0}; std::atomic<bool> enabled_{false},playing_{false},playback_known_{false},quit_{false},done_{true};
     AudioCodec* codec_=nullptr; Send send_; Stopped stopped_; TaskHandle_t task_=nullptr;
     void* encoder_=nullptr; void* decoder_=nullptr; esp_ae_rate_cvt_handle_t resampler_=nullptr;
     std::vector<int16_t> pending_; uint32_t mic_sequence_=0;

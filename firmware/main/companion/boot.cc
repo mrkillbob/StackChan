@@ -3,6 +3,7 @@
 #include "usb_owner.hpp"
 #include "numeric_usb.hpp"
 #include "numeric_pairing.h"
+#include "pair_connection_consent.hpp"
 #include "local_tls.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -125,6 +126,7 @@ struct Runtime {
     CompanionSocket socket{tasks};
     bool wifi_started=false,grant_connected=false;
     ConnectGate connect_gate;
+    PairConnectionConsent matching_consent;
     lv_obj_t* status=nullptr;
     lv_obj_t *pair_button=nullptr,*listen_button=nullptr,*connect_button=nullptr,*mute_button=nullptr,*confirm_button=nullptr,*reject_button=nullptr;
     const char* message="Mira companion\nMuted - pair a trusted host\nCamera and motion inactive";
@@ -160,7 +162,7 @@ void OpenView(lv_obj_t* parent) {
     state.message="Mira companion\nMuted - pair a trusted host\nCamera and motion inactive";
 }
 bool CloseView() {
-    auto& state=runtime();bool usb_closed=state.provisioner.Close();state.numeric_pairing.Cancel();state.numeric_until=0;state.numeric_request={};state.numeric_connected=false;state.connect_gate.Cancel();
+    auto& state=runtime();bool usb_closed=state.provisioner.Close();state.numeric_pairing.Cancel();state.numeric_until=0;state.numeric_request={};state.numeric_connected=false;state.connect_gate.Cancel();state.matching_consent.Cancel();
     pair_requested=false;connect_requested=false;listen_requested=false;mute_requested=false;confirm_requested=false;reject_requested=false;
     {std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant)std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');pending_grant.reset();}
     state.socket.Close();state.grant_connected=false;
@@ -181,7 +183,7 @@ void TickView() {
     }
     {std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant&&pending_grant->expires_at_ms&&now>=pending_grant->expires_at_ms){std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');pending_grant.reset();mute_requested=true;}}
         if(mute_requested.exchange(false)) {
-            provisioner.Close();state.numeric_pairing.Cancel();state.numeric_request={};state.numeric_until=0;state.numeric_connected=false;confirm_requested=false;connect_gate.Cancel();pair_requested=false;connect_requested=false;listen_requested=false;
+            provisioner.Close();state.numeric_pairing.Cancel();state.numeric_request={};state.numeric_until=0;state.numeric_connected=false;state.matching_consent.Cancel();confirm_requested=false;connect_gate.Cancel();pair_requested=false;connect_requested=false;listen_requested=false;
             {std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant)std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');pending_grant.reset();}
             socket.Close();if(tasks.Stop())ReleaseAudio(AudioOwner::Mira);grant_connected=false;message="Mira companion\nMuted - connection closed";}
         if(pair_requested.exchange(false)) {
@@ -189,7 +191,7 @@ void TickView() {
             bool pending=false; {std::lock_guard<std::mutex> lock(grant_mutex);pending=pending_grant.has_value();}
             if(grant_connected || pending) message="Mira companion\nMuted - tap Mute before pairing";
             else {
-                state.numeric_pairing.Cancel();state.numeric_request={};state.numeric_until=0;state.numeric_connected=false;
+                state.numeric_pairing.Cancel();state.numeric_request={};state.numeric_until=0;state.numeric_connected=false;state.matching_consent.Cancel();
                 bool opened=provisioner.Open();
                 if(opened&&provisioner.Numeric())state.numeric_until=now+120000;
                 message=opened?"Mira companion\nPairing ready - keep Mac open":"Mira companion\nMuted - trusted provisioning unavailable";
@@ -219,8 +221,10 @@ void TickView() {
             bool staged=false;
             if(state.numeric_pairing.Active(now))staged=StageAuthorizedGrant(std::move(grant));
             else std::fill(grant.credential.begin(),grant.credential.end(),'\0');
-            if(!staged||!state.numeric_pairing.Staged())mute_requested=true;
-            else message="Mira companion\nPaired - tap Connect when ready";
+            if(!staged||!state.numeric_pairing.Staged()){state.matching_consent.Cancel();mute_requested=true;}
+            else if(state.matching_consent.Arm(numeric_grant.request,numeric_grant.expires_at_ms,numeric_grant.audio_requested,state.numeric_pairing.Confirmed(),now)) {
+                message="Mira companion\nConfirmed - connecting local audio";
+            } else message="Mira companion\nPairing confirmed - muted";
         }
         if(provisioner.Active()&&!provisioner.Numeric()) {
             ProvisioningFields fields; auto result=provisioner.Poll(fields);
@@ -238,10 +242,12 @@ void TickView() {
             } else if(result==ProvisioningRead::Rejected) message="Mira companion\nMuted - pairing expired or rejected";
             fields.Clear();
         }
+        if(state.matching_consent.RequestConnection(state.numeric_pairing.ConnectionReady()))connect_requested=true;
         if(connect_requested.exchange(false)) {
             bool usb_closed=provisioner.Close();
             bool have_grant=false;{std::lock_guard<std::mutex> lock(grant_mutex);have_grant=pending_grant.has_value();}
             connect_gate.Request(usb_closed&&have_grant);
+            if(!usb_closed||!have_grant)state.matching_consent.Cancel();
             if(!usb_closed)message="Mira companion\nMuted - USB cleanup pending; tap Mute";
             else if(!have_grant)message="Mira companion\nMuted - trusted host grant required";
             else if(!wifi_started){wifi_started=StartSavedWifi();message=wifi_started?"Mira companion\nConnecting saved Wi-Fi":"Mira companion\nMuted - Wi-Fi unavailable";}
@@ -258,8 +264,12 @@ void TickView() {
                 if(grant_connected&&((grant->expires_at_ms&&after_connect>=grant->expires_at_ms)||(grant->numeric_pairing&&!state.numeric_pairing.Active(after_connect)))){socket.Close();grant_connected=false;}
                 if(grant_connected)grant_connected=AcquireAudio(AudioOwner::Mira) && tasks.Start(Board::GetInstance().GetAudioCodec(),[&socket](const uint8_t* p,size_t n){return socket.SendAudio(p,n);},[](uint32_t,bool){mute_requested=true;});
                 std::fill(grant->credential.begin(),grant->credential.end(),'\0');
-                if(!grant_connected){socket.Close();if(tasks.Stop())ReleaseAudio(AudioOwner::Mira);message="Mira companion\nMuted - host connection failed";}
+                if(!grant_connected){state.matching_consent.Cancel();socket.Close();if(tasks.Stop())ReleaseAudio(AudioOwner::Mira);message="Mira companion\nMuted - host connection failed";}
             }
+        }
+        if(grant_connected && state.matching_consent.Take(esp_timer_get_time()/1000,socket.GetState()==CompanionSocket::State::ConsentRequired)) {
+            // Consent was explicitly included in the fresh physical code confirmation.
+            if(!socket.PhysicalConsent())mute_requested=true;
         }
         if(listen_requested.exchange(false)) {
             if(!grant_connected || !socket.PhysicalConsent())message="Mira companion\nMuted - host session not ready";
@@ -280,8 +290,13 @@ void TickView() {
             for(auto item:{state.pair_button,state.listen_button,state.connect_button,state.mute_button}){if(compare)lv_obj_add_flag(item,LV_OBJ_FLAG_HIDDEN);else lv_obj_remove_flag(item,LV_OBJ_FLAG_HIDDEN);}
             for(auto item:{state.confirm_button,state.reject_button}){if(compare)lv_obj_remove_flag(item,LV_OBJ_FLAG_HIDDEN);else lv_obj_add_flag(item,LV_OBJ_FLAG_HIDDEN);}
             if(state.numeric_pairing.Confirmed())lv_obj_add_state(state.confirm_button,LV_STATE_DISABLED);else lv_obj_remove_state(state.confirm_button,LV_STATE_DISABLED);
-            lv_obj_set_width(status,compare?290:240);lv_obj_set_height(status,compare?90:54);
-            std::string display=compare?"Compare code: "+state.numeric_pairing.Code()+(state.numeric_pairing.Confirmed()?"\nRobot confirmed - confirm on Mac":"\nConfirm on Mac and robot"):message;lv_label_set_text(status,display.c_str());
+            auto confirm_label=lv_obj_get_child(state.confirm_button,0);
+            lv_label_set_text(confirm_label,state.numeric_pairing.AudioRequested()?"Confirm & connect":"Confirm pairing");
+            if(state.numeric_pairing.AudioRequested() && state.numeric_pairing.Confirmed()) {
+                lv_obj_add_flag(state.connect_button,LV_OBJ_FLAG_HIDDEN);lv_obj_add_flag(state.listen_button,LV_OBJ_FLAG_HIDDEN);
+            }
+            lv_obj_set_width(status,compare?290:240);lv_obj_set_height(status,compare?110:54);
+            std::string display=compare?"Compare code: "+state.numeric_pairing.Code()+(state.numeric_pairing.AudioRequested()?"\nConfirm permits local mic/speaker\nfor this temporary session":"\nPairing only - audio stays muted")+(state.numeric_pairing.Confirmed()?"\nRobot confirmed - confirm on Mac":"\nConfirm on Mac and robot"):message;lv_label_set_text(status,display.c_str());
         }
  }
 [[noreturn]] void RunBoot() {

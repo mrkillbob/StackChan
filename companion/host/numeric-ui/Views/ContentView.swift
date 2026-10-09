@@ -7,11 +7,11 @@ struct ContentView: View {
                 Image(systemName: "desktopcomputer.and.arrow.down").font(.title)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Pair StackChan").font(.title2.weight(.semibold))
-                    Text(controller.audioApproved ? "USB + Wi-Fi · Local microphone and speaker check" : "USB + Wi-Fi · Temporary pairing check").font(.caption).foregroundStyle(.secondary)
+                    Text(controller.audioApproved ? "USB + Wi-Fi · Confirm to connect microphone and speaker" : "USB + Wi-Fi · Temporary pairing check").font(.caption).foregroundStyle(.secondary)
                 }
             }
             if controller.audioApproved {
-                Text("Local check only: microphone frames are counted and discarded. No recording or cloud service. Audio starts only after you tap Connect and Allow on StackChan.")
+                Text("Local check only: microphone frames are counted and discarded. No recording or cloud service. Confirming the matching number on both screens connects and permits microphone and speaker for this temporary session.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             VStack(alignment: .leading, spacing: 12) {
@@ -33,7 +33,7 @@ struct ContentView: View {
                 Spacer()
                 Button(controller.primaryTitle, action: controller.primary).buttonStyle(.borderedProminent).disabled(!controller.canPrimary)
             }
-            Text("Keep USB connected. Use Mute on the robot to stop audio. Nothing is saved as permanent trust.")
+            Text(controller.audioApproved ? "Confirm on both screens to connect and allow one temporary local microphone and speaker session. Use Mute on StackChan to stop. Nothing is saved as permanent trust." : "Pairing keeps StackChan muted. Audio needs separate approval. Nothing is saved as permanent trust.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }.padding(26).frame(width: 470)
     }

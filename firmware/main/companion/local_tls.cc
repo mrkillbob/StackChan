@@ -2,6 +2,7 @@
 #include "local_tls.h"
 #include "local_tls_policy.hpp"
 #include "local_tls_lifecycle.hpp"
+#include "transport_write.hpp"
 #include <esp_timer.h>
 #include <climits>
 #include <exception>
@@ -135,7 +136,7 @@ int LocalTls::Send(const std::string& data) {
 
         if (ret <= 0) {
             ESP_LOGE(TAG, "SSL send failed: ret=%d, errno=%d", ret, errno);
-            return ret;
+            return CompleteTransportWrite(ret,data_size-total_sent);
         }
         
         total_sent += ret;

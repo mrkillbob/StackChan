@@ -33,7 +33,7 @@ bool CodecTasks::Start(AudioCodec* codec,Send send,Stopped stopped){
 }
 bool CodecTasks::ResetStoppedConnection(){
     if(!done_)return false;
-    std::lock_guard<std::mutex> lock(mutex_);session_=AudioSession{};incoming_.clear();epoch_=0;enabled_=false;playing_=false;return true;
+    std::lock_guard<std::mutex> lock(mutex_);session_=AudioSession{};incoming_.clear();epoch_=0;enabled_=false;playing_=false;playback_known_=false;return true;
 }
 bool CodecTasks::Stop(uint32_t timeout_ms){
     enabled_=false;quit_=true;auto until=now_ms()+std::min<uint32_t>(timeout_ms,5000);
@@ -43,15 +43,15 @@ bool CodecTasks::Stop(uint32_t timeout_ms){
 bool CodecTasks::Begin(uint32_t epoch){
     enabled_=false;std::lock_guard<std::mutex> lock(mutex_);
     if(!session_.begin(epoch,now_ms()))return false;
-    incoming_.clear();playing_=false;epoch_.store(epoch);return true;
+    incoming_.clear();playing_=false;playback_known_=false;epoch_.store(epoch);return true;
 }
 bool CodecTasks::Acknowledge(uint32_t epoch){std::lock_guard<std::mutex> lock(mutex_);return session_.acknowledge(epoch);}
 bool CodecTasks::Consent(uint32_t epoch,bool physical){std::lock_guard<std::mutex> lock(mutex_);auto result=session_.arm(epoch,physical);enabled_=result;return result;}
 bool CodecTasks::Heartbeat(uint32_t epoch){std::lock_guard<std::mutex> lock(mutex_);auto result=session_.heartbeat(epoch,now_ms());if(!result)enabled_=false;return result;}
-bool CodecTasks::Playing(uint32_t epoch,bool playing){std::lock_guard<std::mutex> lock(mutex_);auto result=session_.playing(epoch,playing);if(result)playing_=playing;return result;}
+bool CodecTasks::Playing(uint32_t epoch,bool playing){std::lock_guard<std::mutex> lock(mutex_);auto result=session_.playing(epoch,playing);if(result){playing_=playing;playback_known_=true;if(!playing)incoming_.clear();}return result;}
 void CodecTasks::Interrupt(uint32_t epoch){
     if(epoch!=epoch_.load())return;
-    enabled_=false;playing_=false;std::lock_guard<std::mutex> lock(mutex_);session_.interrupt(epoch);incoming_.clear();
+    enabled_=false;playing_=false;playback_known_=false;std::lock_guard<std::mutex> lock(mutex_);session_.interrupt(epoch);incoming_.clear();
 }
 bool CodecTasks::Current(uint32_t epoch){
     if(!enabled_ || epoch!=epoch_.load() || quit_)return false;
@@ -75,19 +75,30 @@ void CodecTasks::Run(){
             vTaskDelay(pdMS_TO_TICKS(10));continue;
         }
         was_active=true;
+        // Arming authorizes the session, but does not choose capture vs playback.
+        // Await the host's first explicit playing value without touching input.
+        if(!playback_known_){
+            codec_->EnableInput(false);codec_->EnableOutput(false);pending_.clear();
+            vTaskDelay(pdMS_TO_TICKS(10));continue;
+        }
+        if(!playing_)codec_->EnableOutput(false);
         if(codec_epoch!=epoch){if(!OpenCodecs()){failed=true;break;}codec_epoch=epoch;}
         Packet packet{};
         {std::lock_guard<std::mutex> lock(mutex_);if(!incoming_.empty()){packet=std::move(incoming_.front());incoming_.pop_front();}}
         if(!packet.payload.empty()){
             codec_->EnableInput(false);pending_.clear();
-            if(packet.epoch!=epoch)continue;
+            if(packet.epoch!=epoch || !playing_)continue;
             esp_audio_dec_in_raw_t raw={};raw.buffer=packet.payload.data();raw.len=packet.payload.size();raw.frame_recover=ESP_AUDIO_DEC_RECOVERY_NONE;
             esp_audio_dec_out_frame_t out={};out.buffer=reinterpret_cast<uint8_t*>(playback.data());out.len=playback.size()*2;
             esp_audio_dec_info_t info={};
             if(esp_opus_dec_decode(decoder_,&raw,&out,&info)!=ESP_AUDIO_ERR_OK || out.decoded_size!=2880 || raw.consumed!=raw.len){failed=true;break;}
+            if(!playing_ || !Current(epoch))continue;
             codec_->EnableOutput(true);
-            for(std::size_t i=0;i<playback.size() && Current(epoch);i+=480){std::copy_n(playback.data()+i,480,slice.data());codec_->OutputData(slice);}
-            codec_->EnableOutput(false);
+            for(std::size_t i=0;i<playback.size() && playing_ && Current(epoch);i+=480){std::copy_n(playback.data()+i,480,slice.data());codec_->OutputData(slice);}
+            // Keep the device open through a continuous speaking interval,
+            // including bounded gaps between Opus packets. Close on direction
+            // change, interruption or worker teardown instead of every packet.
+            if(!playing_)codec_->EnableOutput(false);
             esp_ae_rate_cvt_reset(resampler_);continue;
         }
         if(playing_){codec_->EnableInput(false);pending_.clear();vTaskDelay(pdMS_TO_TICKS(10));continue;}
