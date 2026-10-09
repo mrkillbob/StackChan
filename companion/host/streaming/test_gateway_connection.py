@@ -85,7 +85,15 @@ class ActualSessionTests(unittest.IsolatedAsyncioTestCase):
         from streaming_session import encode_frame
         f=SessionFixture();f.setUp()
         w=Socket(['{"type":"begin","request_id":"synthetic-gateway"}', '{"type":"ack","epoch":1}', '{"type":"consent","epoch":1,"physical":true}', encode_frame(1,0,False,b'x')])
-        with self.assertRaises(TimeoutError):await run_connection(w,f.session,duration=.04)
+        # Expire the synthetic watchdog only after protocol dispatch succeeds;
+        # a 40ms wall-clock race could end before the queued microphone frame.
+        original_receive=f.session.receive
+        def receive_then_expire(frame):
+            original_receive(frame)
+            f.clock[0]=2.
+        f.session.receive=receive_then_expire
+        async with asyncio.timeout(2):
+            with self.assertRaises(TimeoutError):await run_connection(w,f.session,duration=1)
         self.assertEqual(f.arms,[1]);self.assertEqual(f.session.mic_seq,1)
         self.assertEqual(f.bridge.interrupts,[1]);self.assertEqual(f.session.credential,'');self.assertTrue(w.closed)
 if __name__=='__main__':unittest.main()

@@ -14,6 +14,7 @@ import struct
 import time
 from gateway_admission import authorize_audio_request
 from gateway_connection import run_connection
+from transport_diagnostics import TransportDiagnostics
 from streaming_session import StreamingSession, decode_frame
 
 HOST = '192.168.1.75'
@@ -233,6 +234,7 @@ class TransportGateway:
             decoded_mic_packets=0, decoded_mic_frames=0, suppressed_mic_packets=0,
             decoded_mic_peak=0, decoded_mic_energy=0, cue_complete=False, mic_complete=False,
             outcome='no_connection')
+        self.last_result['diagnostics'] = TransportDiagnostics(clock).snapshot()
         self._used = False
 
     def process_request(self, connection, request):
@@ -248,24 +250,44 @@ class TransportGateway:
 
     async def handle(self, socket):
         session = None; started = False; outcome = 'fault'
+        diagnostics = TransportDiagnostics(self.clock)
         try:
+            diagnostics.set_phase('admission')
             grant = authorize_audio_request(self.registry, socket.request.path, list(socket.request.headers.raw_items()))
             if self.transport_approved is not True or self._used:
                 raise PermissionError('human transport approval required')
+            diagnostics.set_phase('session_create')
             session = TransportSession(self.registry, self.sessions, grant.credential, grant.device_id, self.cue,
                 transport_approved=True, mic_duration=self.mic_duration, clock=self.clock)
             self._used = True
             started = True
-            await run_connection(socket, session, duration=MAX_LISTENER_SECONDS)
+            await run_connection(socket, session, duration=MAX_LISTENER_SECONDS, diagnostics=diagnostics)
         except TransportComplete:
+            diagnostics.expected_complete()
             outcome = 'complete'
-        except Exception:
-            if not started:
-                await socket.close(code=1008, reason='Transport test closed')
+        except asyncio.CancelledError as failure:
+            diagnostics.fault(failure)
+            outcome = 'interrupted'
+            raise
+        except Exception as failure:
+            diagnostics.fault(failure)
         finally:
+            # The driver already closed started sessions, preserving its primary
+            # fault. Pre-session cleanup is recorded separately and never raised.
+            if not started:
+                try:
+                    await asyncio.wait_for(socket.close(code=1008, reason='Transport test closed'),.25)
+                except BaseException as failure:
+                    diagnostics.fault(failure,'socket_cleanup',cleanup=True)
+            result = dict(self.last_result)
             if session is not None:
-                session.close()
-                self.last_result = dict(session.statistics(), outcome=outcome)
+                try:result.update(session.statistics())
+                except BaseException as failure:
+                    diagnostics.fault(failure,'statistics',cleanup=True)
+                    outcome = 'fault'
+            if diagnostics.snapshot().get('cleanup_fault_count',0):outcome = 'fault'
+            result.update(outcome=outcome,diagnostics=diagnostics.snapshot())
+            self.last_result = result
 
     def listener(self, *, ssl_context, host=HOST, port=PORT, duration=MAX_LISTENER_SECONDS):
         if self.transport_approved is not True:

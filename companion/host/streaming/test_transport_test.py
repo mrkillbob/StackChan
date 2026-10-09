@@ -205,4 +205,62 @@ class AcceptedSocketTests(unittest.IsolatedAsyncioTestCase):
                 if control['type']=='begin':self.assertFalse(control['fixture']);self.assertTrue(control['transport_only'])
         self.assertEqual(wire_order,['playing_true','cue','playing_false'])
 
+class FaultEvidenceTests(unittest.IsolatedAsyncioTestCase):
+    async def run_fixture(self,heartbeats=False,send_failure=None,close_failure=False):
+        import asyncio,json
+        registry=DeviceRegistry();_,token=registry.redeem_pairing_code(registry.create_pairing_code(),device_id=DEVICE,label='Synthetic diagnostic socket',capabilities=('microphone','speaker'))
+        clock=Clock();cue=struct.pack('<81600h',*([900]*81600))
+        gateway=transport_test.TransportGateway(registry,ConversationSessions(),cue,transport_approved=True,mic_duration=.25,clock=clock)
+        class Headers:
+            def raw_items(self):return [('Authorization','Bearer '+token),('X-Companion-Device',DEVICE)]
+        class Socket:
+            request=type('Request',(),{'path':'/companion/audio','headers':Headers()})()
+            def __init__(self):
+                self.queue=asyncio.Queue();self.attempted=0;self.closed=False
+                for value in ({'type':'begin','request_id':'synthetic-diagnostic'}, {'type':'ack','epoch':1}, {'type':'consent','epoch':1,'physical':True}):self.queue.put_nowait(json.dumps(value))
+            async def recv(self):return await self.queue.get()
+            async def send(self,value):
+                if type(value) is bytes:
+                    self.attempted+=1
+                    if self.attempted==send_failure:raise OSError('synthetic-secret-send-fault')
+                    clock.now+=.31 if self.attempted==57 else .06
+                    if heartbeats and self.attempted%5==0:self.queue.put_nowait(json.dumps({'type':'heartbeat','epoch':1}))
+                else:
+                    control=json.loads(value)
+                    clock.now+=.30 if control.get('type')=='playing' and control.get('value') is False else .01
+            async def close(self,**kwargs):
+                self.closed=True
+                if close_failure:raise RuntimeError('synthetic-secret-close-fault')
+        socket=Socket()
+        async with asyncio.timeout(4):await gateway.handle(socket)
+        self.assertTrue(socket.closed)
+        self.assertNotIn('synthetic-secret',json.dumps(gateway.last_result))
+        return gateway.last_result
+    async def test_no_heartbeat_synthetic_watchdog_around_33_packets(self):
+        result=await self.run_fixture();diag=result['diagnostics']
+        self.assertEqual(result['outcome'],'fault');self.assertEqual(diag['fault']['type'],'TimeoutError');self.assertEqual(diag['fault']['phase'],'authority')
+        self.assertEqual(diag['heartbeat_count'],0);self.assertEqual(diag['heartbeat_remaining_ms'],0)
+        self.assertTrue(diag['ack_received']);self.assertTrue(diag['consent_received']);self.assertEqual(diag['last_control'],'consent')
+        self.assertTrue(32<=result['speaker_packets']<=34);self.assertEqual(diag['sent_speaker_packets'],result['speaker_packets'])
+        self.assertTrue(any(frame['file']=='streaming_session.py' and frame['function']=='_authorized' for frame in diag['fault']['stack']))
+    async def test_valid_heartbeats_complete_same_cue_without_relaxing_watchdog(self):
+        result=await self.run_fixture(heartbeats=True);diag=result['diagnostics']
+        self.assertEqual(result['outcome'],'complete');self.assertEqual(result['speaker_packets'],57);self.assertEqual(diag['sent_speaker_packets'],57)
+        self.assertGreater(diag['heartbeat_count'],0);self.assertNotIn('fault',diag);self.assertEqual(diag['cleanup_fault_count'],0)
+    async def test_send_fault_before_33rd_send_is_not_cleanup_fault(self):
+        result=await self.run_fixture(send_failure=33,close_failure=True);diag=result['diagnostics']
+        self.assertEqual(result['speaker_packets'],33);self.assertEqual(diag['sent_speaker_packets'],32)
+        self.assertEqual(diag['fault']['type'],'OSError');self.assertEqual(diag['fault']['phase'],'audio_send')
+        self.assertEqual(diag['cleanup_fault']['type'],'RuntimeError');self.assertEqual(diag['cleanup_fault']['phase'],'socket_cleanup')
+    async def test_pre_session_admission_fault_survives_close_fault(self):
+        import json
+        registry=DeviceRegistry();gateway=transport_test.TransportGateway(registry,ConversationSessions(),b'\0'*2880,transport_approved=True)
+        class Headers:
+            def raw_items(self):return []
+        class Socket:
+            request=type('Request',(),{'path':'/companion/audio','headers':Headers()})()
+            async def close(self,**kwargs):raise OSError('synthetic-secret-close')
+        await gateway.handle(Socket());diag=gateway.last_result['diagnostics']
+        self.assertEqual(diag['fault']['type'],'PermissionError');self.assertEqual(diag['fault']['phase'],'admission');self.assertEqual(diag['cleanup_fault']['type'],'OSError')
+        self.assertEqual(gateway.last_result['speaker_packets'],0);self.assertNotIn('synthetic-secret',json.dumps(gateway.last_result))
 if __name__=='__main__':unittest.main()

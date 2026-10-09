@@ -188,6 +188,22 @@ class ApprovalMetadataTests(unittest.TestCase):
             record=json.loads((self.root/'notes/NUMERIC-PAIRING-LIVE-STATUS.json').read_text())
             if message=='synthetic_secret_credential':self.assertNotIn('reason',record)
             else:self.assertEqual(record['reason'],message)
+    def test_transport_fault_details_are_projected_without_secret_text_or_stdout(self):
+        diagnostic={'phase':'authorization','heartbeat_count':0,'ack_received':True,
+            'fault':{'type':'TimeoutError','phase':'authorization','stack':[],
+                'message':'synthetic_secret'},'credential':'synthetic_secret'}
+        stats={'outcome':'fault','diagnostics':diagnostic,'raw_pcm':b'synthetic'}
+        payload={'state':'failed','message':'audio_transport_failed'}
+        with patch.object(w,'_output') as output:
+            w._status_metadata(payload,audio_enabled=True,transport_result=stats)
+        record=json.loads((self.root/'notes/NUMERIC-PAIRING-LIVE-STATUS.json').read_text())
+        details=record['transport']['diagnostics']
+        self.assertEqual(details['fault']['type'],'TimeoutError')
+        self.assertNotIn('synthetic_secret',json.dumps(record))
+        output.assert_called_once_with(payload)
+        with patch.object(w,'_output'):w._status_metadata(payload,transport_result=stats)
+        self.assertNotIn('transport',json.loads((self.root/'notes/NUMERIC-PAIRING-LIVE-STATUS.json').read_text()))
+
     def test_transport_projection_only_for_audio_and_not_stdout(self):
         stats={'decoded_mic_frames':960,'raw_pcm':b'synthetic','credential':'synthetic_secret','outcome':'fault'}
         payload={'state':'cancelled'}

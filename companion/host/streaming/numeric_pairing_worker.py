@@ -38,6 +38,9 @@ def _transport_projection(value):
         count=value.get(key)
         if type(count) is int and 0<=count<=0x7fffffffffffffff:result[key]=count
     if value.get('outcome') in ('no_connection','fault','complete','interrupted'):result['outcome']=value['outcome']
+    from transport_diagnostics import project_diagnostics
+    diagnostics=project_diagnostics(value.get('diagnostics'))
+    if diagnostics:result['diagnostics']=diagnostics
     return result
 
 class NumericWorker:

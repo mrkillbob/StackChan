@@ -6,9 +6,10 @@ import asyncio
 import json
 import time
 from streaming_session import parse_control
+from transport_diagnostics import TransportDiagnostics
 
 
-async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25):
+async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, diagnostics=None):
     """Own one receive task, service 20 ms audio ticks, and fail closed on exit.
     Existing session authority/watchdog is checked even when the peer is silent.
     Blocking codec/provider work must be bounded by the supplied adapter.
@@ -18,6 +19,9 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25):
     if type(send_timeout) not in (int, float) or not 0 < send_timeout <= 0.25:
         raise ValueError('bounded send deadline required')
     receive = None
+    diagnostics = diagnostics or TransportDiagnostics(getattr(session,'clock',time.monotonic))
+    diagnostics.observe(session)
+    primary = None
     deadline = time.monotonic() + duration
     next_tick = time.monotonic()
     playback = None
@@ -26,18 +30,28 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25):
         while True:
             now = time.monotonic()
             if now >= deadline:
+                diagnostics.set_phase('duration')
                 raise TimeoutError('connection duration expired')
+            diagnostics.set_phase('authority')
+            diagnostics.observe(session)
             session._authorized()
             ready, _ = await asyncio.wait({receive}, timeout=min(max(0, next_tick-now), deadline-now))
             if ready:
+                diagnostics.set_phase('receive')
                 message = receive.result()
                 if type(message) is str:
-                    answer = session.control(parse_control(message))
+                    diagnostics.set_phase('control')
+                    control = parse_control(message)
+                    diagnostics.control_label(control.get('type'))
+                    answer = session.control(control)
+                    diagnostics.accepted_control(session,control.get('type'))
                     response = json.dumps(answer, separators=(',', ':'), allow_nan=False)
                     if len(response.encode()) > 1024:
                         raise ValueError('bounded control response required')
+                    diagnostics.set_phase('control_send')
                     await asyncio.wait_for(socket.send(response), send_timeout)
                 elif type(message) is bytes and 17 <= len(message) <= 4112:
+                    diagnostics.set_phase('audio_receive')
                     session.receive(message)
                 else:
                     raise ValueError('bounded audio/control message required')
@@ -45,32 +59,55 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25):
             now = time.monotonic()
             if now >= next_tick:
                 if session.armed:
+                    diagnostics.set_phase('playback_state')
                     speaking = session.bridge.adapter.playing
                     if type(speaking) is not bool:
                         raise ValueError('explicit provider playback state required')
                     state = (session.epoch, speaking)
                     if state != playback:
+                        diagnostics.set_phase('playback_state')
                         response = json.dumps(session.playing(speaking), separators=(',', ':'), allow_nan=False)
+                        diagnostics.set_phase('playback_send')
                         await asyncio.wait_for(socket.send(response), send_timeout)
                         playback = state
                     if not speaking:
                         next_tick = now + 0.02
                         continue
                     # 960 mono48k samples = 20 ms. Codec output is bounded per tick.
+                    diagnostics.set_phase('audio_pull')
                     packets = session.outgoing(960)
                     if type(packets) is not list or len(packets) > 2:
                         raise BufferError('outgoing packet bound exceeded')
                     for packet in packets:
                         if type(packet) is not bytes or not 17 <= len(packet) <= 4112:
                             raise ValueError('bounded outgoing audio required')
+                        diagnostics.set_phase('audio_send')
                         await asyncio.wait_for(socket.send(packet), send_timeout)
+                        diagnostics.speaker_sent()
                 next_tick = now + 0.02
+    except BaseException as failure:
+        primary = failure
+        diagnostics.fault(failure)
+        raise
     finally:
-        # Invalidate audio before awaiting socket/task teardown.
+        # Invalidate authority first; cleanup never replaces the original fault.
+        cleanup = None
         try:
             session.close()
-        finally:
-            if receive is not None:
-                receive.cancel()
+        except BaseException as failure:
+            diagnostics.fault(failure,'session_cleanup',cleanup=True)
+            cleanup = failure
+        if receive is not None:
+            receive.cancel()
+            try:
                 await asyncio.gather(receive, return_exceptions=True)
+            except BaseException as failure:
+                diagnostics.fault(failure,'receive_cleanup',cleanup=True)
+                if cleanup is None:cleanup = failure
+        try:
             await asyncio.wait_for(socket.close(), send_timeout)
+        except BaseException as failure:
+            diagnostics.fault(failure,'socket_cleanup',cleanup=True)
+            if cleanup is None:cleanup = failure
+        if primary is None and cleanup is not None:
+            raise cleanup
