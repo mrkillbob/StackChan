@@ -88,6 +88,8 @@ protected:
     std::vector<std::unique_ptr<Toast>> _toast_list;
 };
 
+void reset_toast_runtime();
+
 void pop_a_toast(std::string_view msg, ToastType type = ToastType::Info, uint32_t durationMs = 1600);
 
 }  // namespace view

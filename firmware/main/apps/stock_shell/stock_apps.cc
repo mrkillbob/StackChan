@@ -2,6 +2,7 @@
 #include "stock_apps.h"
 #include "menu_policy.hpp"
 #include "navigation.h"
+#include "shell_teardown.hpp"
 #include "stock_tools_hw.h"
 #include "tools_ui.hpp"
 #include <apps/stock_agent/stock_agent.h>
@@ -611,6 +612,14 @@ public:
         }
     }
 };
+void DestroyShellForTransfer(mooncake::Mooncake& shell)
+{
+    TearDownShell<LvglLockGuard>(shell,[]{
+        view::destroy_home_indicator();
+        view::destroy_status_bar();
+        view::reset_toast_runtime();
+    },[]{mooncake::DestroyMooncake();});
+}
 [[noreturn]] void Run()
 {
     if (!GetHAL().initCompanion())
@@ -654,16 +663,14 @@ public:
     }
     if (!stopped_preview && stock_agent::AutoStartRequested()) {
         stock_agent::AuthorizeAutoStart();
-        shell.uninstallAllApps();
-        mooncake::DestroyMooncake();
+        DestroyShellForTransfer(shell);
         stock_agent::RunStockAgent();
     }
     while (true) {
         GetHAL().feedTheDog();
         shell.update();
         if(auto feature=stock_services::ConsumeRequest()) {
-            shell.uninstallAllApps();
-            mooncake::DestroyMooncake();
+            DestroyShellForTransfer(shell);
             companion::SetSettingsScope((*feature==Feature::Servo || *feature==Feature::Onboarding) ? companion::SettingsScope::Calibration :
                 *feature==Feature::Account ? companion::SettingsScope::Account :
                 (*feature==Feature::Avatar || *feature==Feature::EzData || *feature==Feature::AppCenter || *feature==Feature::FirmwareCheck) ? companion::SettingsScope::RemoteService : companion::SettingsScope::None);
@@ -671,8 +678,7 @@ public:
             stock_services::RunFeature(*feature);
         }
         if (stock_agent::ConsumeStartRequest()) {
-            shell.uninstallAllApps();
-            mooncake::DestroyMooncake();
+            DestroyShellForTransfer(shell);
             stock_agent::RunStockAgent();
         }
         GetHAL().delay(20);

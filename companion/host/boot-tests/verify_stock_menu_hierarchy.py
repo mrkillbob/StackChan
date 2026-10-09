@@ -14,7 +14,13 @@ setup="firmware/main/apps/app_setup/app_setup.cpp"
 assert menu_labels((repo/setup).read_text())==menu_labels(original(setup).decode())
 for directory in ["firmware/main/apps/app_setup/view","firmware/main/apps/app_launcher/view","firmware/main/apps/common"]:
  for name in subprocess.check_output(["git","-C",str(repo),"ls-tree","-r","--name-only",base,"--",directory],text=True).splitlines():
-  assert (repo/name).read_bytes()==original(name),name
+  data=(repo/name).read_bytes()
+  # The transfer repair adds only a nonvisual toast registration reset.
+  if name.endswith("/toast/toast.cpp"):
+   data=data.split(b"// BEGIN STACKCHAN toast runtime reset")[0]
+  if name.endswith("/toast/toast.h"):
+   data=data.replace(b"void reset_toast_runtime();\n\n",b"")
+  assert data==original(name),name
 shell=(repo/"firmware/main/apps/stock_shell/stock_apps.cc").read_text()
 registration=shell[shell.index("[[noreturn]] void Run()") :]
 assert registration.count("std::make_unique<ToolsApp>()")==1

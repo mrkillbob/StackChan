@@ -16,7 +16,9 @@ with tempfile.TemporaryDirectory(prefix="stackchan-stock-tests-") as temporary:
     temp = Path(temporary)
     generated = temp / "backend"
     subprocess.run(["python3", str(main / "apps/stock_agent/generate_backend.py"), "--xiaozhi", str(repo / "firmware/xiaozhi-esp32/main"), "--wifi", str(repo / "firmware/managed_components/78__esp-wifi-connect"), "--output", str(generated)], check=True)
+    mooncake=repo / "firmware/components/mooncake/src"
     cases = [
+        ("shell_teardown", [tests / "test_shell_teardown.cpp"] + sorted(mooncake.rglob("*.cpp")), [main, mooncake]),
         ("menu_navigation", [tests / "test_menu_navigation.cpp", main / "apps/stock_shell/navigation.cc"], [tests / "menu-fixture", main]),
         ("advanced_config", [repo / "firmware/tests/advanced_config_test.cpp"], [main]),
         ("firmware_policy", [repo / "firmware/tests/firmware_install_policy_test.cpp"], [main]),
@@ -31,7 +33,8 @@ with tempfile.TemporaryDirectory(prefix="stackchan-stock-tests-") as temporary:
         binary = temp / name
         command = [args.compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror"]
         # Match ESP-IDF's existing vendor signed-index comparison exemption.
-        if name in ("wifi_store", "firmware_migration"): command.append("-Wno-sign-compare")
+        if name in ("wifi_store", "firmware_migration", "shell_teardown"): command.append("-Wno-sign-compare")
+        if name == "shell_teardown": command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
         command += ["-I" + str(path) for path in includes]
         command += [str(path) for path in sources] + ["-o", str(binary)]
         subprocess.run(command, check=True)
