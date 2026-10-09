@@ -10,3 +10,10 @@ void TickView();
 bool CloseView(); // false: retain app/UI while codec worker stops
 [[noreturn]] void RunBoot();
 }
+
+namespace companion {
+// Explicit saved-Wi-Fi connection for a user-requested catalog browse, no cloud/audio.
+bool EnsureSavedNetwork();
+bool IsWifiConnected();
+bool NetworkWasStarted();
+}

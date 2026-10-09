@@ -299,6 +299,34 @@ else()
     list(REMOVE_ITEM SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/companion/readonly_settings.cc" "${CMAKE_CURRENT_SOURCE_DIR}/companion/readonly_board.cc")
 endif()
 
+# Exact-source variants retain official activation/protocol logic without updating
+# ignored fetched trees. A changed upstream hash fails configuration for re-review.
+# The early dependency scan has no populated component targets or SDK configuration.
+if(STACKCHAN_COMPANION_BOOT AND NOT CMAKE_BUILD_EARLY_EXPANSION)
+    if(CONFIG_USE_ACOUSTIC_WIFI_PROVISIONING OR CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
+        message(FATAL_ERROR "Selectable Stock AI supports hotspot/browser provisioning only")
+    endif()
+    find_component_by_pattern("78__esp-wifi-connect" STOCK_WIFI_COMPONENT STOCK_WIFI_DIR)
+    if(NOT STOCK_WIFI_DIR)
+        message(FATAL_ERROR "Pinned Wi-Fi component is required for Stock AI")
+    endif()
+    set(STOCK_BACKEND_DIR "${CMAKE_CURRENT_BINARY_DIR}/stock_agent_backend")
+    execute_process(
+        COMMAND ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/apps/stock_agent/generate_backend.py"
+            --xiaozhi "${XIAOZHI_MAIN_DIR}"
+            --wifi "${STOCK_WIFI_DIR}"
+            --output "${STOCK_BACKEND_DIR}"
+        RESULT_VARIABLE STOCK_BACKEND_RESULT
+    )
+    if(NOT STOCK_BACKEND_RESULT EQUAL 0)
+        message(FATAL_ERROR "Stock AI pinned backend adaptation failed")
+    endif()
+    list(REMOVE_ITEM SOURCES "${XIAOZHI_MAIN_DIR}/application.cc"
+        "${XIAOZHI_MAIN_DIR}/ota.cc" "${XIAOZHI_MAIN_DIR}/boards/common/wifi_board.cc")
+    list(APPEND SOURCES "${STOCK_BACKEND_DIR}/stock_application.cc"
+        "${STOCK_BACKEND_DIR}/stock_ota.cc" "${STOCK_BACKEND_DIR}/stock_wifi_board.cc")
+endif()
+
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
@@ -330,6 +358,28 @@ idf_component_register(SRCS ${SOURCES}
                         mooncake_log
                         smooth_ui_toolkit
                     )
+
+# Replace only reviewed Wi-Fi manager / SSID units in the existing managed target.
+# Its remaining sources, headers and embedded hotspot pages remain untouched.
+if(STACKCHAN_COMPANION_BOOT AND NOT CMAKE_BUILD_EARLY_EXPANSION)
+    idf_component_get_property(STOCK_WIFI_LIB ${STOCK_WIFI_COMPONENT} COMPONENT_LIB)
+    get_target_property(STOCK_WIFI_SOURCES ${STOCK_WIFI_LIB} SOURCES)
+    list(FILTER STOCK_WIFI_SOURCES EXCLUDE REGEX "(^|/)(wifi_manager|ssid_manager|wifi_configuration_ap)\\.cc$")
+    get_target_property(STOCK_WIFI_SOURCE_DIR ${STOCK_WIFI_LIB} SOURCE_DIR)
+    set(STOCK_WIFI_ABSOLUTE_SOURCES "")
+    foreach(STOCK_WIFI_SOURCE IN LISTS STOCK_WIFI_SOURCES)
+        if(IS_ABSOLUTE "${STOCK_WIFI_SOURCE}" OR STOCK_WIFI_SOURCE MATCHES "^\\$<")
+            list(APPEND STOCK_WIFI_ABSOLUTE_SOURCES "${STOCK_WIFI_SOURCE}")
+        else()
+            list(APPEND STOCK_WIFI_ABSOLUTE_SOURCES "${STOCK_WIFI_SOURCE_DIR}/${STOCK_WIFI_SOURCE}")
+        endif()
+    endforeach()
+    set(STOCK_WIFI_SOURCES ${STOCK_WIFI_ABSOLUTE_SOURCES})
+    list(APPEND STOCK_WIFI_SOURCES "${STOCK_BACKEND_DIR}/stock_wifi_manager.cc"
+        "${STOCK_BACKEND_DIR}/stock_ssid_manager.cc"
+        "${STOCK_BACKEND_DIR}/stock_wifi_configuration_ap.cc")
+    set_property(TARGET ${STOCK_WIFI_LIB} PROPERTY SOURCES "${STOCK_WIFI_SOURCES}")
+endif()
 
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME
 # If BOARD_NAME is empty, use BOARD_TYPE

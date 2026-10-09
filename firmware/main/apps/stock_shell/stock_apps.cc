@@ -1,6 +1,10 @@
 // Stock Mooncake shell, original native Tools and game implementations.
 #include "stock_apps.h"
 #include "stock_tools_hw.h"
+#include "tools_ui.hpp"
+#include <apps/stock_agent/stock_agent.h>
+#include <apps/stock_app_center/stock_app_center.h>
+#include <optional>
 #include <apps/apps.h>
 #include <apps/common/common.h>
 #include <assets/assets.h>
@@ -51,7 +55,7 @@ protected:
         lv_obj_set_width(label, width);
         return label;
     }
-    void Button(const char* name, int x, int y, int w, int h, int id)
+    lv_obj_t* Button(const char* name, int x, int y, int w, int h, int id)
     {
         auto button = lv_button_create(root_);
         lv_obj_set_pos(button, x, y);
@@ -70,6 +74,14 @@ protected:
             },
             LV_EVENT_CLICKED, ctx.get());
         callbacks_.push_back(std::move(ctx));
+        return button;
+    }
+    void ClearPanel()
+    {
+        LvglLockGuard lock;
+        lv_obj_clean(root_);
+        callbacks_.clear();
+        action_ = 0;
     }
     virtual bool StopResources()
     {
@@ -174,20 +186,257 @@ public:
     }
 };
 class ToolsApp : public Page {
+    using Screen = stock_tools::ui::Screen;
     stock_tools::Infrared ir_;
     stock_tools::NfcUrl nfc_;
-    lv_obj_t* status_   = nullptr;
-    lv_obj_t* url_      = nullptr;
-    lv_obj_t* keyboard_ = nullptr;
+    Screen screen_ = Screen::Home;
+    std::optional<Screen> pending_screen_;
+    lv_obj_t *title_ = nullptr, *summary_ = nullptr, *detail_ = nullptr, *status_ = nullptr, *primary_ = nullptr,
+             *url_input_ = nullptr;
+    std::string url_, draft_, notice_;
+    lv_obj_t* graphic_ = nullptr;
+    int cursor_        = 0;
+    size_t key_page_   = 0;
+    uint64_t deadline_ = 0, next_stop_retry_ = 0;
+    bool captured_ = false, stop_failed_ = false;
     bool StopResources() override
     {
         ir_.Stop();
-        return nfc_.Stop();
+        stop_failed_ = !nfc_.Stop();
+        return !stop_failed_;
     }
-    void Status(const char* text)
+    lv_obj_t* Label(const char* text, int y, int height, const lv_font_t* font = &lv_font_montserrat_20)
     {
+        auto label = Text(text, 8, y, 304);
+        lv_obj_set_height(label, height);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_font(label, font, 0);
+        return label;
+    }
+    lv_obj_t* TouchButton(const char* name, stock_tools::ui::Rect rect, int action)
+    {
+        auto button = Button(name, rect.x, rect.y, rect.w, rect.h, action);
+        lv_obj_set_style_radius(button, 10, 0);
+        lv_obj_set_style_bg_color(button, lv_color_hex(0x22596d), 0);
+        lv_obj_set_style_border_width(button, 0, 0);
+        lv_obj_set_style_text_font(button, &lv_font_montserrat_20, 0);
+        return button;
+    }
+    lv_obj_t* Graphic(lv_obj_t* parent, int x, int y, bool tag, bool small = false)
+    {
+        auto graphic = lv_obj_create(parent);
+        lv_obj_set_pos(graphic, x, y);
+        lv_obj_set_size(graphic, tag ? (small ? 32 : 52) : (small ? 28 : 36), small ? 40 : 56);
+        lv_obj_set_style_pad_all(graphic, 0, 0);
+        lv_obj_set_style_radius(graphic, tag ? 10 : 6, 0);
+        lv_obj_set_style_bg_opa(graphic, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(graphic, 2, 0);
+        lv_obj_set_style_border_color(graphic, lv_color_hex(0x53d4d4), 0);
+        lv_obj_remove_flag(graphic, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        auto piece = [&](int px, int py, int w, int h) {
+            auto child = lv_obj_create(graphic);
+            lv_obj_set_pos(child, px, py);
+            lv_obj_set_size(child, w, h);
+            lv_obj_set_style_pad_all(child, 0, 0);
+            lv_obj_set_style_border_width(child, 0, 0);
+            lv_obj_set_style_radius(child, 2, 0);
+            lv_obj_set_style_bg_color(child, lv_color_hex(0x53d4d4), 0);
+            lv_obj_remove_flag(child, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        };
+        if (tag) {
+            piece(5, 5, 6, 6);
+            piece(12, small ? 16 : 20, small ? 12 : 28, 3);
+            piece(12, small ? 23 : 28, small ? 12 : 22, 3);
+        } else {
+            piece(5, 5, small ? 14 : 22, 8);
+            for (int i = 0; i < 6; ++i)
+                piece(5 + (i % 2) * (small ? 10 : 14), 19 + (i / 2) * (small ? 6 : 9), small ? 6 : 8, 4);
+        }
+        return graphic;
+    }
+    void ButtonText(lv_obj_t* button, const char* text)
+    {
+        lv_label_set_text(lv_obj_get_child(button, 0), text);
+    }
+    bool ValidUrl() const
+    {
+        std::array<uint8_t, 180> memory{};
+        std::array<uint8_t, 7> uid{};
+        return stock_tools::UrlTag(url_, uid, memory);
+    }
+    std::string SignalSummary() const
+    {
+        if (ir_.learned.empty()) return "No signal captured";
+        uint32_t value = 0;
+        char text[80];
+        if (stock_tools::NecDecode(ir_.learned, value))
+            std::snprintf(text, sizeof(text), "NEC %08lX\n%u timings", static_cast<unsigned long>(value),
+                          static_cast<unsigned>(ir_.learned.size()));
+        else
+            std::snprintf(text, sizeof(text), "Raw IR signal\n%u timings", static_cast<unsigned>(ir_.learned.size()));
+        return text;
+    }
+    void Header(const char* title)
+    {
+        ClearPanel();
+        summary_ = detail_ = status_ = primary_ = url_input_ = graphic_ = nullptr;
+        lv_obj_set_style_text_font(root_, &lv_font_montserrat_20, 0);
+        TouchButton("Back", stock_tools::ui::BackButton, screen_ == Screen::Home ? 999 : stock_tools::ui::Back);
+        title_ = Text(title, 104, 12, 208);
+        lv_obj_set_height(title_, 32);
+        lv_obj_set_style_text_font(title_, &lv_font_montserrat_24, 0);
+        lv_label_set_long_mode(title_, LV_LABEL_LONG_DOT);
+    }
+    void Render()
+    {
+        using namespace stock_tools::ui;
         LvglLockGuard lock;
-        lv_label_set_text(status_, text);
+        switch (screen_) {
+            case Screen::Home:
+                Header("Tools");
+                {
+                    auto b = TouchButton("Infrared", RowOne, OpenInfrared);
+                    lv_obj_align(lv_obj_get_child(b, 0), LV_ALIGN_LEFT_MID, 16, 0);
+                    Graphic(b, 260, 10, false, true);
+                }
+                {
+                    auto b = TouchButton("NFC URL", RowTwo, OpenNfc);
+                    lv_obj_align(lv_obj_get_child(b, 0), LV_ALIGN_LEFT_MID, 16, 0);
+                    Graphic(b, 254, 10, true, true);
+                }
+                Label("Actions start only when tapped", 212, 24, &lv_font_montserrat_16);
+                break;
+            case Screen::Infrared:
+                Header("Infrared");
+                TouchButton("Learn a signal", RowOne, OpenLearn);
+                TouchButton("Review & send", RowTwo, OpenSend);
+                Label("One signal stays in RAM only", 212, 24, &lv_font_montserrat_16);
+                break;
+            case Screen::Learn:
+                Header("Learn IR");
+                summary_ = Label("Ready to learn", 60, 48);
+                lv_obj_set_width(summary_, 232);
+                graphic_ = Graphic(root_, 270, 60, false);
+                detail_  = Label("Aim the remote at the IR sensor.\nPress its button after starting.", 108, 38,
+                                 &lv_font_montserrat_16);
+                status_  = Label("IR off", 148, 24);
+                primary_ = TouchButton("Start 10s scan", Primary, StartLearn);
+                break;
+            case Screen::Send:
+                Header("Send IR");
+                summary_ = Label(SignalSummary().c_str(), 60, 52);
+                lv_obj_set_width(summary_, 232);
+                graphic_ = Graphic(root_, 270, 60, false);
+                detail_  = Label("Aim at device. 38kHz, once.", 120, 24, &lv_font_montserrat_16);
+                status_  = Label("Nothing sent yet", 148, 24, &lv_font_montserrat_16);
+                primary_ = TouchButton("Send once", Primary, SendOnce);
+                if (ir_.learned.empty()) lv_obj_add_state(primary_, LV_STATE_DISABLED);
+                break;
+            case Screen::Nfc:
+                Header("NFC URL");
+                summary_ = Label(url_.empty() ? "No URL - tap Edit" : url_.c_str(), 56, 40);
+                lv_obj_set_width(summary_, 248);
+                graphic_ = Graphic(root_, 276, 54, true, true);
+                TouchButton("Edit URL", EditButton, OpenEdit);
+                primary_ = TouchButton("Emulate 60s", EmulateButton, StartEmulate);
+                if (!ValidUrl()) lv_obj_add_state(primary_, LV_STATE_DISABLED);
+                break;
+            case Screen::Edit: {
+                Header("Edit URL");
+                url_input_ = lv_textarea_create(root_);
+                lv_obj_set_pos(url_input_, UrlInput.x, UrlInput.y);
+                lv_obj_set_size(url_input_, UrlInput.w, UrlInput.h);
+                lv_textarea_set_one_line(url_input_, true);
+                lv_textarea_set_max_length(url_input_, 96);
+                lv_textarea_set_placeholder_text(url_input_, "https://");
+                lv_textarea_set_text(url_input_, draft_.c_str());
+                lv_textarea_set_cursor_pos(url_input_, cursor_);
+                for (size_t i = 0; i < KeyPages[key_page_].size(); ++i) {
+                    char text[2] = {KeyPages[key_page_][i], 0};
+                    TouchButton(text, KeyRect(static_cast<int>(i)), Character + static_cast<unsigned char>(text[0]));
+                }
+                char page[20];
+                std::snprintf(page, sizeof(page), "Keys %u/8", static_cast<unsigned>(key_page_ + 1));
+                auto next = TouchButton(page, EditorFooter[0], NextKeys);
+                lv_obj_set_style_text_font(next, &lv_font_montserrat_16, 0);
+                TouchButton("<--", EditorFooter[1], Erase);
+                TouchButton("Save", EditorFooter[2], Save);
+                break;
+            }
+            case Screen::Emulate:
+                Header("Emulate");
+                summary_ = Label("Hold a reader near\nthe NFC antenna.", 60, 52);
+                lv_obj_set_width(summary_, 232);
+                graphic_ = Graphic(root_, 254, 60, true);
+                status_  = Label("NFC off", 120, 32, &lv_font_montserrat_24);
+                detail_  = Label("Stops automatically after 60s", 152, 20, &lv_font_montserrat_16);
+                primary_ = TouchButton("Emulate 60s", Primary, StartEmulate);
+                break;
+        }
+        if (!notice_.empty() && status_) lv_label_set_text(status_, notice_.c_str());
+    }
+    bool Go(Screen target, uint64_t now)
+    {
+        pending_screen_ = target;
+        if (!StopResources()) {
+            next_stop_retry_ = now + 500;
+            notice_          = "Stop failed - retry Back";
+            Refresh(now);
+            return false;
+        }
+        pending_screen_.reset();
+        screen_ = target;
+        notice_.clear();
+        deadline_ = 0;
+        Render();
+        return true;
+    }
+    void Refresh(uint64_t now)
+    {
+        using namespace stock_tools::ui;
+        LvglLockGuard lock;
+        if (graphic_)
+            lv_obj_set_style_border_color(graphic_, lv_color_hex((ir_.Active() || nfc_.Active()) ? 0x69e3a7 : 0x53d4d4),
+                                          0);
+        if (!status_) return;
+        if (stop_failed_) {
+            lv_label_set_text(status_, "Stop failed - retry Back");
+            if (primary_) {
+                ButtonText(primary_, "Retry Stop");
+                lv_obj_remove_state(primary_, LV_STATE_DISABLED);
+            }
+            return;
+        }
+        if (screen_ == Screen::Learn) {
+            if (ir_.Active()) {
+                char text[40];
+                auto remaining = deadline_ > now ? (deadline_ - now + 999) / 1000 : 0;
+                std::snprintf(text, sizeof(text), "Listening - %lus left", static_cast<unsigned long>(remaining));
+                lv_label_set_text(summary_, "Press the remote button");
+                lv_label_set_text(status_, text);
+                ButtonText(primary_, "Stop scan");
+            } else if (captured_) {
+                lv_label_set_text(summary_, SignalSummary().c_str());
+                lv_label_set_text(detail_, "Captured. Review before sending.");
+                lv_label_set_text(status_, "IR off");
+                ButtonText(primary_, "Review & send");
+            } else {
+                lv_label_set_text(status_, notice_.empty() ? "IR off" : notice_.c_str());
+                ButtonText(primary_, "Start 10s scan");
+            }
+        } else if (screen_ == Screen::Emulate) {
+            if (nfc_.Active()) {
+                char text[40];
+                auto remaining = deadline_ > now ? (deadline_ - now + 999) / 1000 : 0;
+                std::snprintf(text, sizeof(text), "NFC active - %lus", static_cast<unsigned long>(remaining));
+                lv_label_set_text(status_, text);
+                ButtonText(primary_, "Stop emulation");
+            } else {
+                lv_label_set_text(status_, notice_.empty() ? "NFC off" : notice_.c_str());
+                ButtonText(primary_, "Emulate 60s");
+            }
+        } else if (!notice_.empty())
+            lv_label_set_text(status_, notice_.c_str());
     }
 
 public:
@@ -199,95 +448,146 @@ public:
     }
     void onOpen() override
     {
-        Panel("Tools - inactive");
-        LvglLockGuard lock;
-        Button("Learn IR 10s", 8, 36, 146, 36, 1);
-        Button("Send learned once", 164, 36, 146, 36, 2);
-        url_ = lv_textarea_create(root_);
-        lv_obj_set_pos(url_, 8, 82);
-        lv_obj_set_size(url_, 302, 38);
-        lv_textarea_set_one_line(url_, true);
-        lv_textarea_set_max_length(url_, 96);
-        lv_textarea_set_placeholder_text(url_, "https://your-url");
-        Button("Edit URL", 8, 128, 94, 34, 3);
-        Button("Emit NFC 60s", 108, 128, 142, 34, 4);
-        Button("Stop", 256, 128, 56, 34, 5);
-        status_ = Text("IR and NFC off. Actions require a tap.\nURL and learned IR stay in RAM.", 10, 176, 300);
+        screen_ = Screen::Home;
+        url_.clear();
+        draft_.clear();
+        notice_.clear();
+        pending_screen_.reset();
+        captured_ = stop_failed_ = false;
+        Panel("");
+        Render();
     }
     void onRunning() override
     {
+        using namespace stock_tools::ui;
         auto action = action_.exchange(0);
-        if (Back(action)) return;
-        auto now = static_cast<uint64_t>(esp_timer_get_time() / 1000);
-        if (action == 1) {
-            if (!nfc_.Stop()) {
-                Status("NFC stop failed; retry Stop");
-                return;
-            }
-            Status(ir_.Learn(now) ? "IR learning for 10s - camera/motion off" : "IR start failed");
+        auto now    = static_cast<uint64_t>(esp_timer_get_time() / 1000);
+        if (screen_ == Screen::Home && Page::Back(action == stock_tools::ui::Back ? 999 : action)) return;
+        if (pending_screen_) {
+            if (now >= next_stop_retry_) Go(*pending_screen_, now);
+            return;
         }
-        if (action == 2) {
-            if (!nfc_.Stop()) {
-                Status("NFC stop failed; retry Stop");
-                return;
-            }
-            Status(ir_.SendOnce() ? "One IR transmission completed" : "No bounded learned frame / send failed");
+        if (action && !Allowed(screen_, action)) action = 0;
+        if (action == stock_tools::ui::Back) {
+            Go(Parent(screen_), now);
+            return;
         }
-        if (action == 3 && !keyboard_) {
-            LvglLockGuard lock;
-            keyboard_ = lv_keyboard_create(root_);
-            lv_obj_set_size(keyboard_, 320, 118);
-            lv_keyboard_set_textarea(keyboard_, url_);
-            lv_obj_add_event_cb(
-                keyboard_,
-                [](lv_event_t* e) {
-                    auto code = lv_event_get_code(e);
-                    if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL)
-                        static_cast<ToolsApp*>(lv_event_get_user_data(e))->action_ = 6;
-                },
-                LV_EVENT_ALL, this);
+        if (action == OpenInfrared) {
+            Go(Screen::Infrared, now);
+            return;
         }
-        if (action == 6 && keyboard_) {
-            LvglLockGuard lock;
-            lv_obj_delete(keyboard_);
-            keyboard_ = nullptr;
+        if (action == OpenNfc) {
+            Go(Screen::Nfc, now);
+            return;
         }
-        if (action == 4) {
-            ir_.Stop();
-            std::string url;
-            {
+        if (action == OpenLearn) {
+            captured_ = false;
+            Go(Screen::Learn, now);
+            return;
+        }
+        if (action == OpenSend) {
+            Go(Screen::Send, now);
+            return;
+        }
+        if (action == OpenEdit) {
+            draft_    = url_;
+            key_page_ = 0;
+            cursor_   = static_cast<int>(draft_.size());
+            Go(Screen::Edit, now);
+            return;
+        }
+        if (screen_ == Screen::Edit) {
+            if (action >= Character + 33 && action <= Character + 126) {
                 LvglLockGuard lock;
-                url = lv_textarea_get_text(url_);
+                lv_textarea_add_char(url_input_, static_cast<uint32_t>(action - Character));
             }
-            Status(nfc_.Start(url, now) ? "NFC URL emulation active for 60s"
-                                        : "URL invalid / NFC start failed; tap Stop");
+            if (action == Erase) {
+                LvglLockGuard lock;
+                lv_textarea_delete_char(url_input_);
+            }
+            if (action == NextKeys) {
+                {
+                    LvglLockGuard lock;
+                    draft_  = lv_textarea_get_text(url_input_);
+                    cursor_ = lv_textarea_get_cursor_pos(url_input_);
+                }
+                key_page_ = (key_page_ + 1) % KeyPages.size();
+                Render();
+            }
+            if (action == Save) {
+                std::string candidate;
+                {
+                    LvglLockGuard lock;
+                    candidate = lv_textarea_get_text(url_input_);
+                }
+                std::array<uint8_t, 180> memory{};
+                std::array<uint8_t, 7> uid{};
+                if (stock_tools::UrlTag(candidate, uid, memory)) {
+                    url_ = candidate;
+                    Go(Screen::Nfc, now);
+                } else {
+                    LvglLockGuard lock;
+                    lv_label_set_text(title_, "Use http(s) URL");
+                    lv_obj_set_style_text_font(title_, &lv_font_montserrat_20, 0);
+                }
+            }
+            return;
         }
-        if (action == 5) Status(StopResources() ? "IR and NFC stopped" : "NFC stop failed; retry Stop before leaving");
+        if (action == StartLearn && screen_ == Screen::Learn) {
+            if (stop_failed_) {
+                StopResources();
+                notice_ = "IR off";
+            } else if (ir_.Active()) {
+                ir_.Stop();
+                notice_ = "Scan stopped";
+            } else if (captured_) {
+                Go(Screen::Send, now);
+                return;
+            } else {
+                captured_ = false;
+                notice_   = ir_.Learn(now) ? "" : "IR start failed";
+                deadline_ = now + 10000;
+            }
+        }
+        if (action == SendOnce && screen_ == Screen::Send)
+            notice_ = ir_.SendOnce() ? "Sent once" : "Send failed / no signal";
+        if (action == StartEmulate) {
+            if (stop_failed_) {
+                StopResources();
+                notice_ = "NFC off";
+            } else if (nfc_.Active()) {
+                notice_ = StopResources() ? "NFC stopped" : "Stop failed";
+            } else if (screen_ == Screen::Nfc || screen_ == Screen::Emulate) {
+                if (screen_ == Screen::Nfc && !Go(Screen::Emulate, now)) return;
+                bool started = nfc_.Start(url_, now);
+                notice_      = started ? "" : "NFC start failed";
+                if (!started) StopResources();
+                deadline_ = now + 60000;
+            }
+        }
+        if (action == Stop) notice_ = StopResources() ? "Stopped" : "Stop failed";
         bool learning = ir_.Active();
         if (ir_.Poll(now)) {
-            char message[120];
-            uint32_t value = 0;
-            if (stock_tools::NecDecode(ir_.learned, value))
-                std::snprintf(message, sizeof(message), "Learned NEC %08lx. Tap Send for one replay.",
-                              static_cast<unsigned long>(value));
-            else
-                std::snprintf(message, sizeof(message), "Learned %u raw timings. Replay at38kHz only.",
-                              static_cast<unsigned>(ir_.learned.size()));
-            Status(message);
+            captured_ = true;
+            notice_   = "Captured";
         } else if (learning && !ir_.Active())
-            Status("IR window closed; no valid bounded frame");
+            notice_ = "No signal - try again";
         bool emitting = nfc_.Active();
         nfc_.Poll(now);
-        if (emitting && !nfc_.Active())
-            Status(nfc_.Stop() ? "NFC window expired; stopped" : "NFC stop failed; retry Stop");
+        if (emitting && !nfc_.Active()) {
+            stop_failed_ = !nfc_.Stop();
+            notice_      = stop_failed_ ? "Stop failed" : "Window ended - NFC off";
+        }
+        Refresh(now);
     }
     void onClose() override
     {
         Page::onClose();
         ir_.learned.clear();
-        status_   = nullptr;
-        url_      = nullptr;
-        keyboard_ = nullptr;
+        url_.clear();
+        draft_.clear();
+        pending_screen_.reset();
+        title_ = summary_ = detail_ = status_ = primary_ = url_input_ = graphic_ = nullptr;
     }
 };
 class GamesApp : public Page {
@@ -362,22 +662,22 @@ public:
     smooth_ui_toolkit::ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
     smooth_ui_toolkit::ui_hal::on_get_tick([]() { return GetHAL().millis(); });
     auto& shell = mooncake::GetMooncake();
-    shell.installApp(std::make_unique<AppLauncher>());
-    shell.installApp(std::make_unique<CompanionApp>());
-    AppAiAgent ai;
-    shell.installApp(
-        std::make_unique<GatedApp>(ai.getAppInfo(),
-                                   "Vendor AI is retained in source.\nThis build opens Companion instead of activating "
-                                   "vendor cloud or wake-word audio.\nReturn and choose COMPANION."));
-    shell.installApp(std::make_unique<AvatarApp>());
+    auto launcher_owned = std::make_unique<AppLauncher>();
+    auto* launcher = launcher_owned.get();
+    shell.installApp(std::move(launcher_owned));
+    std::vector<stock_app_center::InstalledApp> installed;
+    auto install = [&](std::unique_ptr<mooncake::AppAbility> app, const char* name, const char* description) {
+        int id = shell.installApp(std::move(app));
+        installed.push_back({id, name, description});
+        return id;
+    };
+    install(std::make_unique<CompanionApp>(), "Mira Companion", "Connect a trusted Mira host and allow this conversation.");
+    int stock_agent_id = install(stock_agent::MakeApp(), "Stock AI", "Start the original AI service with saved Wi-Fi or its setup flow.");
+    install(std::make_unique<AvatarApp>(), "Avatar", "Show the local avatar with camera and motion inactive.");
     AppEspnowControl remote;
     shell.installApp(std::make_unique<GatedApp>(remote.getAppInfo(),
                                                 "Stock ESP-NOW control is retained.\nRadio pairing and remote motor "
                                                 "control remain inactive pending separate feature qualification."));
-    AppAppCenter center;
-    shell.installApp(std::make_unique<GatedApp>(center.getAppInfo(),
-                                                "Stock App Center is retained.\nOnline downloads and executable app "
-                                                "activation require a separately qualified route."));
     AppEzdata data;
     shell.installApp(std::make_unique<GatedApp>(
         data.getAppInfo(), "Stock EzData is retained.\nAccount binding and vendor data transfer remain inactive."));
@@ -385,12 +685,21 @@ public:
     shell.installApp(std::make_unique<GatedApp>(dance.getAppInfo(),
                                                 "Stock Dance is retained.\nMotors and BLE control remain inactive. "
                                                 "Motion requires separate per-feature qualification and consent."));
-    shell.installApp(std::make_unique<AppSetup>());
-    shell.installApp(std::make_unique<ToolsApp>());
-    shell.installApp(std::make_unique<GamesApp>());
+    install(std::make_unique<AppSetup>(), "Setup", "Adjust this boot's brightness and volume.");
+    install(std::make_unique<ToolsApp>(), "Tools", "Learn and send an IR signal or emulate an NFC URL.");
+    install(std::make_unique<GamesApp>(), "Games", "Play touch-controlled 2048.");
+    shell.installApp(stock_app_center::MakeApp(std::move(installed)));
+    if (stock_agent::ConsumePreviewRequest()) launcher->openApp(stock_agent_id);
     while (true) {
         GetHAL().feedTheDog();
         shell.update();
+        int requested = stock_app_center::ConsumeRequestedAppId();
+        if (requested >= 0) launcher->openApp(requested);
+        if (stock_agent::ConsumeStartRequest()) {
+            shell.uninstallAllApps();
+            mooncake::DestroyMooncake();
+            stock_agent::RunStockAgent();
+        }
         GetHAL().delay(20);
     }
 }

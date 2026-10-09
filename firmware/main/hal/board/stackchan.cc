@@ -18,6 +18,7 @@
 #include <esp_timer.h>
 #include <algorithm>
 #include "stackchan_camera.h"
+#include <companion/audio_owner.hpp>
 #include "hal_bridge.h"
 
 #define TAG "M5Stack-StackChan-Board"
@@ -608,6 +609,14 @@ public:
 #endif
         StartTouchpadTimer();
         GetBacklight()->RestoreBrightness();
+    }
+
+    virtual std::string GetUuid() override
+    {
+        if (uuid_.empty() && companion::CurrentAudioOwner() == companion::AudioOwner::Stock) {
+            uuid_ = GenerateUuid(); // RAM only after explicit Start
+        }
+        return uuid_;
     }
 
     virtual AudioCodec* GetAudioCodec() override

@@ -3,6 +3,20 @@
 
 #include <esp_log.h>
 #include <nvs_flash.h>
+#include <companion/audio_owner.hpp>
+#include <map>
+#include <mutex>
+
+namespace {
+std::mutex overlay_mutex;
+std::map<std::string, std::string> session_strings;
+std::map<std::string, int32_t> session_ints;
+std::string overlay_key(const std::string& ns, const std::string& key) { return ns + ":" + key; }
+bool protocol_namespace(const std::string& ns) { return ns == "mqtt" || ns == "websocket"; }
+bool protocol_write(const std::string& ns) {
+    return protocol_namespace(ns) && companion::CurrentAudioOwner() == companion::AudioOwner::Stock;
+}
+}
 
 #define TAG "Settings"
 
@@ -20,6 +34,11 @@ Settings::~Settings() {
 }
 
 std::string Settings::GetString(const std::string& key, const std::string& default_value) {
+    if (protocol_namespace(ns_)) {
+        std::lock_guard<std::mutex> lock(overlay_mutex);
+        auto found = session_strings.find(overlay_key(ns_, key));
+        if (found != session_strings.end()) return found->second;
+    }
     if (nvs_handle_ == 0) {
         return default_value;
     }
@@ -39,6 +58,11 @@ std::string Settings::GetString(const std::string& key, const std::string& defau
 }
 
 void Settings::SetString(const std::string& key, const std::string& value) {
+    if (protocol_write(ns_)) {
+        std::lock_guard<std::mutex> lock(overlay_mutex);
+        session_strings[overlay_key(ns_, key)] = value;
+        return;
+    }
     if (read_write_) {
         ESP_ERROR_CHECK(nvs_set_str(nvs_handle_, key.c_str(), value.c_str()));
         dirty_ = true;
@@ -48,6 +72,11 @@ void Settings::SetString(const std::string& key, const std::string& value) {
 }
 
 int32_t Settings::GetInt(const std::string& key, int32_t default_value) {
+    if (protocol_namespace(ns_)) {
+        std::lock_guard<std::mutex> lock(overlay_mutex);
+        auto found = session_ints.find(overlay_key(ns_, key));
+        if (found != session_ints.end()) return found->second;
+    }
     if (nvs_handle_ == 0) {
         return default_value;
     }
@@ -60,6 +89,11 @@ int32_t Settings::GetInt(const std::string& key, int32_t default_value) {
 }
 
 void Settings::SetInt(const std::string& key, int32_t value) {
+    if (protocol_write(ns_)) {
+        std::lock_guard<std::mutex> lock(overlay_mutex);
+        session_ints[overlay_key(ns_, key)] = value;
+        return;
+    }
     if (read_write_) {
         ESP_ERROR_CHECK(nvs_set_i32(nvs_handle_, key.c_str(), value));
         dirty_ = true;

@@ -1,4 +1,5 @@
 #include "boot.h"
+#include "audio_owner.hpp"
 #include "provisioning_receiver.hpp"
 #include "connect_gate.hpp"
 #include <driver/usb_serial_jtag.h>
@@ -26,6 +27,7 @@ namespace companion {
 namespace {
 std::mutex grant_mutex;
 std::optional<AuthorizedGrant> pending_grant;
+std::atomic<bool> wifi_initialized{false};
 std::atomic<bool> pair_requested{false}, connect_requested{false}, listen_requested{false}, mute_requested{false}, connected{false};
 // Called only by the pinned boot task. Never take over another installed driver.
 class UsbProvisioner {
@@ -60,6 +62,7 @@ void wifi_event(void*, esp_event_base_t base, int32_t id, void*) {
     if(base==WIFI_EVENT && id==WIFI_EVENT_STA_DISCONNECTED) {connected=false;mute_requested=true;}
 }
 bool StartSavedWifi() {
+    if(wifi_initialized.load())return false;
     // Read only the existing preferred SSID. Never provisioning/AP or NVS erase.
     nvs_handle_t handle=0; wifi_config_t wifi={};
     if(nvs_open("wifi",NVS_READONLY,&handle)!=ESP_OK)return false;
@@ -73,6 +76,7 @@ bool StartSavedWifi() {
     if(!esp_netif_create_default_wifi_sta())return false;
     wifi_init_config_t config=WIFI_INIT_CONFIG_DEFAULT();config.nvs_enable=false;
     if(esp_wifi_init(&config)!=ESP_OK)return false;
+    wifi_initialized=true;
     if(esp_event_handler_register(WIFI_EVENT,ESP_EVENT_ANY_ID,wifi_event,nullptr)!=ESP_OK || esp_event_handler_register(IP_EVENT,IP_EVENT_STA_GOT_IP,wifi_event,nullptr)!=ESP_OK)return false;
     bool ok=esp_wifi_set_storage(WIFI_STORAGE_RAM)==ESP_OK && esp_wifi_set_mode(WIFI_MODE_STA)==ESP_OK && esp_wifi_set_config(WIFI_IF_STA,&wifi)==ESP_OK && esp_wifi_start()==ESP_OK && esp_wifi_connect()==ESP_OK;
     std::memset(&wifi,0,sizeof(wifi));return ok;
@@ -101,6 +105,14 @@ struct Runtime {
 };
 Runtime& runtime() { static auto* value=new Runtime;return *value; }
 }
+bool EnsureSavedNetwork() {
+    auto& state=runtime();
+    if(state.wifi_started)return true;
+    state.wifi_started=StartSavedWifi();
+    return state.wifi_started;
+}
+bool IsWifiConnected(){return connected.load();}
+bool NetworkWasStarted(){return wifi_initialized.load();}
 void OpenView(lv_obj_t* parent) {
     auto& state=runtime();auto& status=state.status;
     pair_requested=false;connect_requested=false;listen_requested=false;mute_requested=false;
@@ -125,7 +137,7 @@ bool CloseView() {
     {std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant)std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');pending_grant.reset();}
     state.socket.Close();state.grant_connected=false;
     bool stopped=state.tasks.Stop();
-    if(stopped)state.status=nullptr;
+    if(stopped){ReleaseAudio(AudioOwner::Mira);state.status=nullptr;}
     return stopped;
 }
 void TickView() {
@@ -136,7 +148,7 @@ void TickView() {
         if(mute_requested.exchange(false)) {
             provisioner.Close();connect_gate.Cancel();pair_requested=false;connect_requested=false;listen_requested=false;
             {std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant)std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');pending_grant.reset();}
-            socket.Close();tasks.Stop();grant_connected=false;message="Mira companion\nMuted - connection closed";}
+            socket.Close();if(tasks.Stop())ReleaseAudio(AudioOwner::Mira);grant_connected=false;message="Mira companion\nMuted - connection closed";}
         if(pair_requested.exchange(false)) {
             connect_gate.Cancel();
             bool pending=false; {std::lock_guard<std::mutex> lock(grant_mutex);pending=pending_grant.has_value();}
@@ -166,9 +178,9 @@ void TickView() {
                 connect_gate.Cancel();
                 auto network=Board::GetInstance().GetNetwork();
                 grant_connected=network && socket.Connect(*network,grant->uri,grant->device,grant->credential,grant->request);
-                if(grant_connected)grant_connected=tasks.Start(Board::GetInstance().GetAudioCodec(),[&socket](const uint8_t* p,size_t n){return socket.SendAudio(p,n);},[](uint32_t,bool){mute_requested=true;});
+                if(grant_connected)grant_connected=AcquireAudio(AudioOwner::Mira) && tasks.Start(Board::GetInstance().GetAudioCodec(),[&socket](const uint8_t* p,size_t n){return socket.SendAudio(p,n);},[](uint32_t,bool){mute_requested=true;});
                 std::fill(grant->credential.begin(),grant->credential.end(),'\0');
-                if(!grant_connected){socket.Close();tasks.Stop();message="Mira companion\nMuted - host connection failed";}
+                if(!grant_connected){socket.Close();if(tasks.Stop())ReleaseAudio(AudioOwner::Mira);message="Mira companion\nMuted - host connection failed";}
             }
         }
         if(listen_requested.exchange(false)) {
