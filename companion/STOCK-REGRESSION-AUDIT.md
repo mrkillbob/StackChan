@@ -51,3 +51,7 @@ No replacement image is flashed merely because it builds. Device acceptance requ
 ## Reviewed build
 
 Source `c04acc3c63fefc3c81614d5de88ea2686df71f51` passed independent source review and eight host-check groups. ESP-IDF build exited 0 with one nice-20 worker, network denied, and every tracked source hash unchanged during compilation. Image `a9e360e003dd8f0349a33ab0271e41f0f2250951ec17fd8a0b862d5165fde785`, 3,966,176 bytes, leaves 23% of the app partition free. Offline esptool checksum/image validation passed. Archive: `.tools/restoration-build-a9e360e003dd` at the project root. This image has not been flashed; all physical acceptance remains pending.
+
+## Menu correction after physical feedback
+
+The prior a9e360e003dd image was flashed and verified, but Michael reported its expanded launcher/Setup hierarchy as a regression. It is not fully accepted. The correction is documented in [MENU-RESTORATION-REPORT.md](MENU-RESTORATION-REPORT.md): original seven-app order, one original Setup list, nested Tools pages and reset-safe return routing. Corrected source/image/build/visual evidence supersede the earlier menu acceptance claims. New image 06026c2ab598d0e5d0db40656f500737c6c95f6775b5dc934720659c6baf2c77 has not been flashed; physical Wi-Fi and other acceptance remain pending.
