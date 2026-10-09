@@ -12,6 +12,7 @@
 #include <memory>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
+#include <freertos/task.h>
 
 #include "tcp.h"
 
@@ -43,7 +44,8 @@ private:
     NetworkInterface* network_;
     int connect_id_;
     std::unique_ptr<Tcp> tcp_;
-    bool continuation_ = false;
+    std::atomic<TaskHandle_t> callback_task_{nullptr};
+    bool continuation_ = false; // Accessed only inside the writer lock.
     size_t receive_buffer_size_ = 2048;
     std::string receive_buffer_;
     std::string expected_accept_;

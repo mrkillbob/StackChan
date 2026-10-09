@@ -19,6 +19,7 @@ with tempfile.TemporaryDirectory(prefix="stackchan-stock-tests-") as temporary:
     mooncake=repo / "firmware/components/mooncake/src"
     cases = [
         ("shell_teardown", [tests / "test_shell_teardown.cpp"] + sorted(mooncake.rglob("*.cpp")), [main, mooncake]),
+        ("usb_owner", [tests / "test_usb_owner.cpp"], [main]),
         ("menu_navigation", [tests / "test_menu_navigation.cpp", main / "apps/stock_shell/navigation.cc"], [tests / "menu-fixture", main]),
         ("advanced_config", [repo / "firmware/tests/advanced_config_test.cpp"], [main]),
         ("firmware_policy", [repo / "firmware/tests/firmware_install_policy_test.cpp"], [main]),
@@ -34,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix="stackchan-stock-tests-") as temporary:
         command = [args.compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror"]
         # Match ESP-IDF's existing vendor signed-index comparison exemption.
         if name in ("wifi_store", "firmware_migration", "shell_teardown"): command.append("-Wno-sign-compare")
-        if name == "shell_teardown": command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+        if name in ("shell_teardown", "usb_owner"): command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
         command += ["-I" + str(path) for path in includes]
         command += [str(path) for path in sources] + ["-o", str(binary)]
         subprocess.run(command, check=True)

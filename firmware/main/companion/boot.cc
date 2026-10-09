@@ -1,6 +1,8 @@
 #include "boot.h"
 #include "audio_owner.hpp"
-#include "provisioning_receiver.hpp"
+#include "usb_owner.hpp"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "connect_gate.hpp"
 #include <driver/usb_serial_jtag.h>
 #include <esp_mac.h>
@@ -31,33 +33,35 @@ std::mutex grant_mutex;
 std::optional<AuthorizedGrant> pending_grant;
 std::atomic<bool> wifi_initialized{false};
 std::atomic<bool> pair_requested{false}, connect_requested{false}, listen_requested{false}, mute_requested{false}, connected{false};
-// Called only by the pinned boot task. Never take over another installed driver.
+// ESP-IDF requires interrupt install/uninstall on the same core. The shell
+// task is pinned to CPU0; the helper also enforces that contract at runtime.
+struct UsbSdkDriver {
+    bool OnOwnerCore() const { return xPortGetCoreID()==0; }
+    bool Installed() const { return usb_serial_jtag_is_driver_installed(); }
+    bool Install() {
+        usb_serial_jtag_driver_config_t config={};config.rx_buffer_size=1024;config.tx_buffer_size=64;
+        return usb_serial_jtag_driver_install(&config)==ESP_OK;
+    }
+    bool Uninstall() { return usb_serial_jtag_driver_uninstall()==ESP_OK; }
+    int Read(uint8_t* bytes,size_t capacity) { return usb_serial_jtag_read_bytes(bytes,capacity,0); }
+};
 class UsbProvisioner {
-    ProvisioningReceiver receiver_;
-    bool installed_=false;
+    UsbSdkDriver driver_;
+    UsbProvisioningOwner<UsbSdkDriver> owner_{driver_};
 public:
-    void Close() { receiver_.Close(); if(installed_) { usb_serial_jtag_driver_uninstall(); installed_=false; } }
-    bool Active() const { return receiver_.Active(); }
+    bool Close() {
+        bool closed=owner_.Close();
+        if(!closed) ESP_LOGW("CompanionUSB","USB owner cleanup failed (%d)",static_cast<int>(owner_.LastError()));
+        return closed;
+    }
+    bool Active() const { return owner_.Active(); }
     bool Open() {
-        Close();
-        if(!STACKCHAN_COMPANION_TRUSTED_USB_PROVISIONING || usb_serial_jtag_is_driver_installed()) return false;
-        uint8_t mac[6]; if(esp_read_mac(mac,ESP_MAC_WIFI_STA)!=ESP_OK) return false;
-        char device[32]; std::snprintf(device,sizeof(device),"stackchan-%02x%02x%02x%02x%02x%02x",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
-        usb_serial_jtag_driver_config_t config={}; config.rx_buffer_size=1024; config.tx_buffer_size=64;
-        if(usb_serial_jtag_driver_install(&config)!=ESP_OK) return false;
-        installed_=true;
-        uint8_t stale[128]; // Discard a bounded amount queued before physical consent.
-        for(int i=0;i<8;++i) { int n=usb_serial_jtag_read_bytes(stale,sizeof(stale),0); std::fill(std::begin(stale),std::end(stale),0); if(n<=0) break; }
-        if(!receiver_.Open(esp_timer_get_time()/1000,device,true)) { Close(); return false; }
-        return true;
+        if(!STACKCHAN_COMPANION_TRUSTED_USB_PROVISIONING)return false;
+        uint8_t mac[6];if(esp_read_mac(mac,ESP_MAC_WIFI_STA)!=ESP_OK)return false;
+        char device[32];std::snprintf(device,sizeof(device),"stackchan-%02x%02x%02x%02x%02x%02x",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+        return owner_.Open(esp_timer_get_time()/1000,device,true);
     }
-    ProvisioningRead Poll(ProvisioningFields& fields) {
-        uint8_t bytes[128]; int n=usb_serial_jtag_read_bytes(bytes,sizeof(bytes),0);
-        auto result=receiver_.Feed(bytes,n>0?static_cast<size_t>(n):0,esp_timer_get_time()/1000,fields);
-        std::fill(std::begin(bytes),std::end(bytes),0);
-        if(result!=ProvisioningRead::Waiting) Close();
-        return result;
-    }
+    ProvisioningRead Poll(ProvisioningFields& fields) { return owner_.Poll(esp_timer_get_time()/1000,fields); }
 };
 void wifi_event(void*, esp_event_base_t base, int32_t id, void*) {
     if(base==IP_EVENT && id==IP_EVENT_STA_GOT_IP) connected=true;
@@ -87,8 +91,8 @@ void button(lv_obj_t* screen,const char* text,int x,std::atomic<bool>& action) {
 }
 }
 bool StageAuthorizedGrant(AuthorizedGrant grant) {
-    if(!grant.host_audio_qualified || grant.credential.empty() || grant.credential.size()>256 || grant.uri.rfind("wss://",0)!=0 || grant.device.empty() || grant.request.empty())return false;
-    std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant)return false;
+    if(!grant.host_audio_qualified || grant.credential.empty() || grant.credential.size()>256 || grant.uri.rfind("wss://",0)!=0 || grant.device.empty() || grant.request.empty()){std::fill(grant.credential.begin(),grant.credential.end(),'\0');return false;}
+    std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant){std::fill(grant.credential.begin(),grant.credential.end(),'\0');return false;}
     pending_grant=std::move(grant);return true;
 }
 namespace {
@@ -131,13 +135,13 @@ void OpenView(lv_obj_t* parent) {
     state.message="Mira companion\nMuted - pair a trusted host\nCamera and motion inactive";
 }
 bool CloseView() {
-    auto& state=runtime();state.provisioner.Close();state.connect_gate.Cancel();
+    auto& state=runtime();bool usb_closed=state.provisioner.Close();state.connect_gate.Cancel();
     pair_requested=false;connect_requested=false;listen_requested=false;mute_requested=false;
     {std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant)std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');pending_grant.reset();}
     state.socket.Close();state.grant_connected=false;
     bool stopped=state.tasks.Stop();
     if(stopped){ReleaseAudio(AudioOwner::Mira);state.status=nullptr;}
-    return stopped;
+    return stopped && usb_closed;
 }
 void TickView() {
     auto& state=runtime();if(!state.status)return;

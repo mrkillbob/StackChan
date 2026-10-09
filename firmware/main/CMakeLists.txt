@@ -292,6 +292,19 @@ endif()
 
 # Custom companion is the default; fetched vendor sources remain unchanged.
 option(STACKCHAN_COMPANION_TRUSTED_USB_PROVISIONING "Enable reviewed trusted USB grant receiver" OFF)
+set(STACKCHAN_COMPANION_LOCAL_CA_FILE "" CACHE FILEPATH "Reviewed public CA for the finite LAN Companion test")
+set(STACKCHAN_COMPANION_LOCAL_TLS_HOST "" CACHE STRING "Exact approved RFC1918 TLS peer")
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+  include("${CMAKE_CURRENT_LIST_DIR}/../../companion/validate_local_profile.cmake")
+  set(COMPANION_TRUST_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/companion_local_trust.cc")
+  execute_process(COMMAND "${PYTHON}" "${CMAKE_CURRENT_LIST_DIR}/../../companion/configure_local_tls.py"
+    --ca "${STACKCHAN_COMPANION_LOCAL_CA_FILE}" --host "${STACKCHAN_COMPANION_LOCAL_TLS_HOST}"
+    --output "${COMPANION_TRUST_SOURCE}" RESULT_VARIABLE COMPANION_TRUST_RESULT)
+  if(NOT COMPANION_TRUST_RESULT EQUAL 0)
+    message(FATAL_ERROR "Companion public trust generation failed")
+  endif()
+  list(APPEND SOURCES "${COMPANION_TRUST_SOURCE}")
+endif()
 option(STACKCHAN_COMPANION_BOOT "Boot the muted custom companion" ON)
 if(STACKCHAN_COMPANION_BOOT)
     list(REMOVE_ITEM SOURCES "${XIAOZHI_MAIN_DIR}/settings.cc" "${XIAOZHI_MAIN_DIR}/boards/common/board.cc")
