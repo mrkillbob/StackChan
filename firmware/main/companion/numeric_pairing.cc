@@ -1,0 +1,77 @@
+#include "numeric_pairing.h"
+#include "bounded_web_socket.h"
+extern "C" const char* companion_local_ca_pem();
+extern "C" const char* companion_local_tls_host();
+#include <cJSON.h>
+#include <esp_random.h>
+#include <algorithm>
+#include <cstring>
+#include <cmath>
+#include <set>
+namespace companion {
+namespace {
+constexpr const char* device="stackchan-80456b561404";
+std::string fresh_nonce(){uint8_t bytes[16];esp_fill_random(bytes,sizeof(bytes));const char* hex="0123456789abcdef";std::string s;for(auto b:bytes){s.push_back(hex[b>>4]);s.push_back(hex[b&15]);}return s;}
+void wipe(std::string& s){volatile char* p=s.empty()?nullptr:&s[0];for(size_t i=0;i<s.size();++i)p[i]=0;s.clear();}
+void delete_json(cJSON* root){if(!root)return;auto credential=cJSON_GetObjectItemCaseSensitive(root,"credential");if(cJSON_IsString(credential)&&credential->valuestring){volatile char* p=credential->valuestring;size_t length=std::strlen(credential->valuestring);for(size_t i=0;i<length;++i)p[i]=0;}cJSON_Delete(root);}
+bool keys(cJSON* root,std::initializer_list<const char*> expected){std::set<std::string> actual;for(auto item=root->child;item;item=item->next){if(!item->string||!actual.insert(item->string).second)return false;}std::set<std::string> wanted;for(auto key:expected)wanted.insert(key);return actual==wanted;}
+std::string string(cJSON* root,const char* key){auto p=cJSON_GetObjectItemCaseSensitive(root,key);return cJSON_IsString(p)&&p->valuestring?p->valuestring:"";}
+uint32_t number(cJSON* root,const char* key,uint32_t limit){auto p=cJSON_GetObjectItemCaseSensitive(root,key);if(!cJSON_IsNumber(p)||!std::isfinite(p->valuedouble)||p->valuedouble<1||p->valuedouble>limit)return 0;auto n=static_cast<uint32_t>(p->valuedouble);return p->valuedouble==n?n:0;}
+}
+NumericPairing::~NumericPairing(){Cancel();}
+bool NumericPairing::Send(const std::string& text){return socket_&&socket_->IsConnected()&&socket_->Send(text);}
+bool NumericPairing::Start(NetworkInterface& network,const std::string& request,uint32_t boot,uint64_t now){
+ Cancel();const char* ca=companion_local_ca_pem();const char* host=companion_local_tls_host();
+ if(!ca||!*ca||!host||std::strcmp(host,"192.168.1.75")!=0||!context_.Start(request,fresh_nonce(),boot,now))return false;
+ fault_=false;started_=true;socket_=std::make_shared<BoundedWebSocket>(&network,3);
+ socket_->SetReceiveBufferSize(2048);
+ socket_->OnData([this](const char* bytes,size_t n,bool binary){
+  if(binary||!bytes||!n||n>2048){fault_=true;return;}
+  std::lock_guard<std::mutex> lock(queue_mutex_);if(queue_.size()>=2){fault_=true;return;}queue_.emplace_back(bytes,n);
+ });
+ socket_->OnDisconnected([this]{fault_=true;});socket_->OnError([this](int){fault_=true;});
+ if(!socket_->Connect("wss://192.168.1.75:18443/companion/pair")){Cancel();return false;}
+ auto hello="{\"type\":\"pair.hello\",\"version\":1,\"request_id\":\""+context_.Request()+"\",\"device\":\""+device+"\",\"device_nonce\":\""+context_.DeviceNonce()+"\",\"boot_nonce\":"+std::to_string(boot)+",\"capabilities\":[\"microphone\",\"speaker\"]}";
+ if(!Send(hello)){Cancel();return false;}return true;
+}
+bool NumericPairing::Message(const std::string& text,uint64_t now){
+ if(text.find('\0')!=std::string::npos||text.find("\\u0000")!=std::string::npos)return false;
+ bool quoted=false,escaped=false;unsigned depth=0;
+ for(char c:text){if(quoted){if(escaped)escaped=false;else if(c=='\\')escaped=true;else if(c=='\"')quoted=false;}else if(c=='\"')quoted=true;else if(c=='[')return false;else if(c=='{'){if(++depth>1)return false;}else if(c=='}'){if(!depth)return false;--depth;}}
+ if(quoted||depth)return false;
+ std::unique_ptr<cJSON,decltype(&delete_json)> root(cJSON_ParseWithLengthOpts(text.c_str(),text.size()+1,nullptr,true),delete_json);
+ if(!root||!cJSON_IsObject(root.get())||number(root.get(),"version",1)!=1||string(root.get(),"request_id")!=context_.Request()||string(root.get(),"device_nonce")!=context_.DeviceNonce())return false;
+ auto type=string(root.get(),"type");
+ if(type=="pair.challenge"){
+  if(!keys(root.get(),{"type","version","request_id","device_nonce","host_nonce","code","expires_ms"}))return false;
+  return context_.Challenge(string(root.get(),"host_nonce"),string(root.get(),"code"),number(root.get(),"expires_ms",60000),now);
+ }
+ if(type=="pair.grant"){
+  if(!keys(root.get(),{"type","version","request_id","device_nonce","host_nonce","device","uri","credential","ttl_seconds"})||string(root.get(),"device")!=device||string(root.get(),"uri")!="wss://192.168.1.75:18443/companion/audio")return false;
+  std::string credential=string(root.get(),"credential");bool valid=credential.size()>=32&&credential.size()<=256;
+  for(unsigned char c:credential)if(c<33||c>126)valid=false;
+  if(!valid||!context_.Grant(string(root.get(),"request_id"),string(root.get(),"device_nonce"),string(root.get(),"host_nonce"),number(root.get(),"ttl_seconds",120),now)){wipe(credential);return false;}
+  grant_={std::move(credential),context_.Request(),context_.GrantDeadline()};grant_ready_=true;return true;
+ }
+ return false; // Unknown control, cancellation and context changes fail closed.
+}
+void NumericPairing::Tick(uint64_t now){
+ if(!started_)return;
+ if(fault_.load()||!context_.Active(now)||context_.ChallengeExpired(now)){Cancel();return;}
+ for(unsigned i=0;i<2;++i){std::string message;{std::lock_guard<std::mutex> lock(queue_mutex_);if(queue_.empty())break;message=std::move(queue_.front());queue_.pop_front();}bool ok=Message(message,now);wipe(message);if(!ok){Cancel();return;}}
+}
+bool NumericPairing::Confirm(uint64_t now){
+ if(!Active(now))return false;
+ if(context_.Confirmed())return true; // A queued duplicate tap cannot replay authorization.
+ if(!context_.Confirm(now))return false;
+ return Send("{\"type\":\"pair.confirm\",\"version\":1,\"request_id\":\""+context_.Request()+"\",\"device_nonce\":\""+context_.DeviceNonce()+"\",\"host_nonce\":\""+context_.HostNonce()+"\",\"physical\":true}");
+}
+bool NumericPairing::Active(uint64_t now)const{return started_&&!fault_.load()&&context_.Active(now)&&!context_.ChallengeExpired(now);}
+bool NumericPairing::TakeGrant(NumericGrant& out){if(!grant_ready_)return false;out=std::move(grant_);grant_ready_=false;return true;}
+bool NumericPairing::Staged(){return Send("{\"type\":\"pair.staged\",\"version\":1,\"request_id\":\""+context_.Request()+"\",\"device_nonce\":\""+context_.DeviceNonce()+"\",\"host_nonce\":\""+context_.HostNonce()+"\",\"staged\":true}");}
+void NumericPairing::Cancel(){
+ started_=false;fault_=true;auto socket=std::move(socket_);if(socket)socket->Close(); // Join before callback state is cleared.
+ {std::lock_guard<std::mutex> lock(queue_mutex_);for(auto& item:queue_)wipe(item);queue_.clear();}
+ wipe(grant_.credential);grant_={};grant_ready_=false;context_.Cancel();
+}
+}

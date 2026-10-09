@@ -1,8 +1,9 @@
 #pragma once
 #include <string>
+#include <cstdint>
 #include <lvgl.h>
 namespace companion {
-struct AuthorizedGrant { std::string uri, device, credential, request; bool host_audio_qualified=false; };
+struct AuthorizedGrant { std::string uri, device, credential, request; bool host_audio_qualified=false; uint64_t expires_at_ms=0; bool numeric_pairing=false; };
 // Explicit trusted caller only. No network/serial provisioning listener, token issuance or NVS.
 bool StageAuthorizedGrant(AuthorizedGrant grant);
 void OpenView(lv_obj_t* parent);
