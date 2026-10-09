@@ -1,3 +1,5 @@
+**Later acceptance:** Michael reports the exact muted custom screen (Sentinel_3fc76a3036e08191857785f0813b27c4). Display boot acceptance is now user-confirmed; touch, pairing and audio remain unverified. Earlier execution observations below are historical.
+
 # Limited flash execution result
 
 Michael approved the previously specified app/OTA write, verification and one reboot. Approval question Sentinel_e078488362608191964b0b7cb15a2465; verified owner response Sentinel_635aba1cc38c819193341e47b895b7d9: “Approval for all that you still need”.

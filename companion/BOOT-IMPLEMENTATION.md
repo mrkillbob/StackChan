@@ -1,3 +1,5 @@
+**Later acceptance:** Michael reports the exact muted custom screen (Sentinel_3fc76a3036e08191857785f0813b27c4). Display boot acceptance is now user-confirmed; touch, pairing and audio remain unverified. Earlier execution observations below are historical.
+
 # Custom boot implementation — 8 October 2026
 
 The default build now enters the custom companion boot/UI instead of stock launcher or vendor application. It starts muted. NVS initialization errors halt without erase/retry; Settings namespaces remain read-only, preserving existing identity rather than creating a new board UUID. Camera, MCP, servo initialization, vendor network/OTA and wake-word startup are skipped in this path. The physical board/display/touch driver is reused, including its panel selection logic; actual display acceptance is still pending.
