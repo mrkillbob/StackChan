@@ -1,16 +1,15 @@
-# Custom boot verification
+# Local firmware checks
 
-The actual companion Settings variant is tested against NVS API stubs: even a requested read/write namespace opens read-only, and no setter, erase or commit reaches NVS. The handshake parser tests an RFC acceptance example plus invalid/missing/duplicate headers and unsupported extensions. These tests do not execute firmware or physical IO.
-
-From the fork root, compile the two test programs with the existing C++17 compiler. On this Mac use the explicit Xcode SDK libc++ include path if its default header search is unavailable:
+Run from the fork root:
 
 ```sh
-xcrun clang++ -std=c++17 -isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1 -I firmware/main/companion companion/host/boot-tests/test_handshake.cpp -o /tmp/stackchan-handshake-test
-/tmp/stackchan-handshake-test
-xcrun clang++ -std=c++17 -isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1 -I companion/host/boot-tests -I firmware/xiaozhi-esp32/main companion/host/boot-tests/test_readonly.cpp firmware/main/companion/readonly_settings.cc -o /tmp/stackchan-readonly-test
-/tmp/stackchan-readonly-test
+python3 companion/host/boot-tests/run_stock_restoration_checks.py
 ```
 
-Firmware: source the existing pinned ESP-IDF 5.5.4 export script, then run `cmake --build build --target lang_header --parallel 1` and `cmake --build build --parallel 1` in `firmware`. `STACKCHAN_COMPANION_BOOT` defaults ON and selects companion-owned read-only variants without editing fetched upstream sources. The retained `boot_compile.py` records the one-worker network-denied invocation and owned-process cleanup; adjust its receipt output location deliberately before reuse. No flash is part of these commands.
+The runner generates the pinned vendor adapter in a temporary directory, compiles five C++17 programs with the existing compiler and runs credential bounds/CRC/truncation tests, NVS save/failure/legacy-key preservation fixtures, scoped Settings writes, audio ownership/Tools layout and 2048/NEC/NFC model checks. It creates no network service and accesses no device. Temporary executables are removed on exit. A narrow sign-compare exemption matches ESP-IDF for unchanged vendor index guards.
 
-The first bounded recompilation timed out, then the cached remainder passed, followed by a final incremental build for the exact final status source. All receipts are retained. `COREAUDIO-METADATA.json` is read-only: endpoints present at 48 kHz and 512 frames, no IO or routing acceptance. The final image has not been flashed.
+Settings are read-only by default, with explicit feature/key scopes permitting the original Confirm paths. Phone provisioning has a separate explicit-session gate. MQTT/WebSocket activation remains a Stock-owned RAM overlay.
+
+The separate provisioning integration runner and its JSON receipt cover 39 Python tests plus cross-language receiver/window checks. Those tests do not establish live transport or hardware acceptance.
+
+Firmware builds use the project BUILD.md pinned ESP-IDF 5.5.4 export/configuration commands, one low-priority worker, and the reviewed generated source adapter. Compilation establishes compilation/linking only. See companion/STOCK-REGRESSION-AUDIT.md for every required device acceptance check and the deliberate stock-parity differences.

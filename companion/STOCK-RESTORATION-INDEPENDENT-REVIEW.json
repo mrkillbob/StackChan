@@ -1,0 +1,23 @@
+{
+  "result": "no_blocking_source_findings",
+  "reviewer": "/root/receiver_review",
+  "source_revision": "919d39b021ffe67b6acc7b1cb312f051f150211c",
+  "image_sha256": "eadb038ae0064b3a9d3d371453be75680a15abc0a0b361fd5625d1d060e0259b",
+  "receipt_hashes_independently_checked": 264,
+  "hash_mismatches": 0,
+  "findings_fixed": [
+    "scoped native settings persistence",
+    "failed credential save completion reporting",
+    "speaking motion restoration",
+    "distinct App Center names",
+    "motor power off before restart and at stopped boot",
+    "first laser false initializes GPIO2 low"
+  ],
+  "boundaries": [
+    "Source review and successful build only",
+    "No device/network/account/hardware acceptance performed",
+    "Advanced browser settings remain disabled",
+    "Replacement firmware updates remain metadata-only",
+    "Automatic onboarding remains replaced by manual setup"
+  ]
+}
