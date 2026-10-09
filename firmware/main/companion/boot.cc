@@ -106,7 +106,7 @@ void OpenView(lv_obj_t* parent) {
     pair_requested=false;connect_requested=false;listen_requested=false;mute_requested=false;
     {LvglLockGuard lock;auto screen=parent;
      lv_obj_set_style_bg_color(screen,lv_color_hex(0x10232d),0);
-     status=lv_label_create(screen);lv_obj_set_width(status,240);lv_obj_align(status,LV_ALIGN_TOP_LEFT,8,34);
+     status=lv_label_create(screen);lv_obj_set_width(status,240);lv_obj_set_height(status,54);lv_label_set_long_mode(status,LV_LABEL_LONG_DOT);lv_obj_align(status,LV_ALIGN_TOP_LEFT,8,34);
      lv_obj_set_style_text_color(status,lv_color_hex(0xffffff),0);
      lv_label_set_text(status,"Mira companion\nMuted - pair a trusted host\nCamera and motion inactive");
      auto pair=lv_button_create(screen);lv_obj_set_size(pair,290,32);lv_obj_align(pair,LV_ALIGN_CENTER,0,-12);
