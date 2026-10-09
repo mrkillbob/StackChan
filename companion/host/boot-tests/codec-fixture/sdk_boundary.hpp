@@ -9,6 +9,10 @@ inline uint64_t clock_ms=100;
 inline void (*entry)(void*)=nullptr;
 inline void* argument=nullptr;
 inline std::function<void()> delay;
+inline int decode_result=0;
+inline std::size_t decoded_bytes=2880;
+inline bool consume_all=true;
+inline unsigned decode_calls=0;
 }
 using TaskHandle_t=void*;
 constexpr int pdPASS=1;
@@ -42,7 +46,7 @@ inline int esp_opus_enc_open(const esp_opus_enc_config_t*,std::size_t,void** p){
 inline int esp_opus_dec_open(const esp_opus_dec_cfg_t*,std::size_t,void** p){*p=reinterpret_cast<void*>(1);return 0;}
 inline int esp_ae_rate_cvt_open(const esp_ae_rate_cvt_cfg_t*,void** p){*p=reinterpret_cast<void*>(1);return 0;}
 inline void esp_opus_enc_close(void*){} inline void esp_opus_dec_close(void*){} inline void esp_ae_rate_cvt_close(void*){} inline void esp_ae_rate_cvt_reset(void*){}
-inline int esp_opus_dec_decode(void*,esp_audio_dec_in_raw_t* in,esp_audio_dec_out_frame_t* out,esp_audio_dec_info_t*){in->consumed=in->len;out->decoded_size=2880;return 0;}
+inline int esp_opus_dec_decode(void*,esp_audio_dec_in_raw_t* in,esp_audio_dec_out_frame_t* out,esp_audio_dec_info_t*){++codec_fixture::decode_calls;in->consumed=codec_fixture::consume_all?in->len:0;out->decoded_size=codec_fixture::decoded_bytes;return codec_fixture::decode_result;}
 inline int esp_ae_rate_cvt_get_max_out_sample_num(void*,int,uint32_t* n){*n=0;return 0;}
 inline int esp_ae_rate_cvt_process(void*,const int16_t*,int,int16_t*,uint32_t* n){*n=0;return 0;}
 inline int esp_opus_enc_process(void*,esp_audio_enc_in_frame_t*,esp_audio_enc_out_frame_t* out){out->encoded_bytes=1;return 0;}
