@@ -291,6 +291,7 @@ if(CONFIG_IDF_TARGET_ESP32S3)
 endif()
 
 # Custom companion is the default; fetched vendor sources remain unchanged.
+option(STACKCHAN_COMPANION_TRUSTED_USB_PROVISIONING "Enable reviewed trusted USB grant receiver" OFF)
 option(STACKCHAN_COMPANION_BOOT "Boot the muted custom companion" ON)
 if(STACKCHAN_COMPANION_BOOT)
     list(REMOVE_ITEM SOURCES "${XIAOZHI_MAIN_DIR}/settings.cc" "${XIAOZHI_MAIN_DIR}/boards/common/board.cc")
@@ -307,6 +308,7 @@ idf_component_register(SRCS ${SOURCES}
                         esp_psram
                         esp_netif
                         esp_driver_gpio
+                        esp_driver_usb_serial_jtag
                         esp_driver_uart
                         esp_driver_spi
                         esp_driver_i2c
@@ -544,4 +546,10 @@ endif()
 
 if(STACKCHAN_COMPANION_BOOT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE STACKCHAN_COMPANION_BOOT=1)
+endif()
+
+if(STACKCHAN_COMPANION_TRUSTED_USB_PROVISIONING)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE STACKCHAN_COMPANION_TRUSTED_USB_PROVISIONING=1)
+else()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE STACKCHAN_COMPANION_TRUSTED_USB_PROVISIONING=0)
 endif()
