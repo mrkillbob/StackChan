@@ -111,6 +111,7 @@ def main(argv=None):
     try:
         parser = _Parser(description='Interactive USB pairing; never pass a token in arguments.')
         parser.add_argument('--port', required=True, help='Verified robot port; no discovery or automatic reopen.')
+        parser.add_argument('--open-approved-usb', action='store_true', help='Already authorized opener: skip OPEN only; STABLE/token/PAIR remain human controlled.')
         try:
             args = parser.parse_args(argv)
         except SystemExit as request:
@@ -124,10 +125,11 @@ def main(argv=None):
         print(f'Pinned device: {DEVICE}\nPinned endpoint: {ENDPOINT}')
         print('Opening or closing native USB MAY reset the robot despite DTR/RTS=False. The cause of a reboot cannot be inferred from a write.')
         print('Do NOT tap Pair trusted host yet. Open once first; no token or frame is sent during stabilization.')
-        print('The entire session is limited to 180 seconds. Keep this terminal open through your test and physically Mute before closing.')
-        with _session_deadline():
+        print('After opening is authorized, the session is limited to 180 seconds. Keep this terminal open through your test and physically Mute before closing.')
+        if not args.open_approved_usb:
             if input('Type OPEN to authorize opening, or Enter to cancel: ') != 'OPEN':
                 raise PairingFailure('cancelled')
+        with _session_deadline():
             import serial
             connection = serial.Serial(port=None, baudrate=115200, timeout=0, write_timeout=2)
             connection.dtr = False

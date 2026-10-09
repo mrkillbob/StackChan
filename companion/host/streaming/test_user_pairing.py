@@ -143,6 +143,30 @@ class CliTests(unittest.TestCase):
         self.assertNotEqual(result,0);self.assertIn('session_expired',out);self.assertEqual(events.count(('close',)),1);self.assertFalse(port.frames)
         self.assertEqual(timer.call_args_list[-1].args,(user_pairing.signal.ITIMER_REAL,0))
         self.assertEqual(handler.call_args_list[-1].args,(user_pairing.signal.SIGALRM,'prior'))
+    def test_authorized_opener_skips_only_open_prompt(self):
+        result,events,port,_,_=self.run_cli(argv=['--port','/dev/offline-fixture','--open-approved-usb'],answers=['STABLE','PAIR','MUTED'])
+        self.assertEqual(result,0);self.assertNotIn(('confirm','OPEN'),events)
+        self.assertLess(events.index(('open',)),events.index(('confirm','STABLE')))
+        self.assertLess(events.index(('confirm','STABLE')),events.index(('masked',)))
+        self.assertLess(events.index(('confirm','PAIR')),events.index(('write',)))
+        self.assertEqual(len(port.frames),1)
+    def test_authorized_opener_stable_denial_no_credential_or_write(self):
+        result,events,port,_,elapsed=self.run_cli(argv=['--port','/dev/offline-fixture','--open-approved-usb'],answers=[''])
+        self.assertNotEqual(result,0);self.assertIn(('open',),events);self.assertGreaterEqual(elapsed,2)
+        self.assertNotIn(('masked',),events);self.assertFalse(port.frames)
+    def test_authorized_opener_does_not_bypass_pause(self):
+        result,events,_,out,_=self.run_cli(argv=['--port','/dev/offline-fixture','--open-approved-usb'],paused=True)
+        self.assertNotEqual(result,0);self.assertEqual(events,[]);self.assertIn('paused',out)
+    def test_default_open_prompt_precedes_deadline_start(self):
+        events=[]
+        with patch.object(user_pairing.signal,'setitimer',side_effect=lambda *a:events.append(a)):
+            def prompt(text):
+                self.assertEqual(events,[])
+                return ''
+            streams=[Terminal() for _ in range(3)]
+            with patch.object(sys,'stdin',streams[0]),patch.object(sys,'stdout',streams[1]),patch.object(sys,'stderr',streams[2]),patch.object(user_pairing,'_pairing_paused',return_value=False),patch('builtins.input',prompt):
+                self.assertNotEqual(user_pairing.main(['--port','/dev/offline-fixture']),0)
+        self.assertEqual(events,[])
     def test_masking_warning_never_falls_back(self):
         import getpass,warnings
         def warning(text):warnings.warn('synthetic',getpass.GetPassWarning)
