@@ -1,7 +1,7 @@
 # Define xiaozhi source directory
 set(XIAOZHI_MAIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../xiaozhi-esp32/main")
 
-file(GLOB_RECURSE STACK_CHAN_SOURCES CONFIGURE_DEPENDS
+file(GLOB_RECURSE STACK_CHAN_SOURCES
     "apps/*.c"
     "apps/*.cc"
     "apps/*.cpp"
@@ -19,7 +19,10 @@ file(GLOB_RECURSE STACK_CHAN_SOURCES CONFIGURE_DEPENDS
 set(STACK_CHAN_INCLUDE_DIRS 
     "."
 )
-list(APPEND STACK_CHAN_SOURCES main.cpp)
+# ESP-IDF scans this file in script mode, where CONFIGURE_DEPENDS is invalid.
+# Explicitly name the new source so a stale source list cannot omit it.
+list(APPEND STACK_CHAN_SOURCES main.cpp companion/numeric_pairing.cc)
+list(REMOVE_DUPLICATES STACK_CHAN_SOURCES)
 
 # Define source files
 set(SOURCES "audio/audio_codec.cc"
