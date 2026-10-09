@@ -14,6 +14,10 @@ template <std::size_t Capacity = 7680> class PcmRing {
 public:
     static_assert(std::atomic<uint64_t>::is_always_lock_free);
     std::atomic<uint64_t> dropped{0}, stale{0}, underrun{0};
+    std::size_t queued() const noexcept {
+        auto r=read_.load(std::memory_order_acquire),w=write_.load(std::memory_order_acquire);
+        auto n=w>=r?w-r:0;return n<Capacity?static_cast<std::size_t>(n):Capacity;
+    }
     std::size_t push(uint32_t epoch, const int16_t* pcm, std::size_t frames) noexcept {
         auto w=write_.load(std::memory_order_relaxed);
         auto r=read_.load(std::memory_order_acquire);

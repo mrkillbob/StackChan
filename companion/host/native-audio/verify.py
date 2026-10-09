@@ -21,6 +21,8 @@ with tempfile.TemporaryDirectory(prefix='stackchan-native-') as temp:
         [compiler,'-std=c++17','-Wall','-Wextra','-Werror',str(root/'test_ring.cpp'),'-o',str(out/'test_ring')],
         [compiler,'-std=c++17','-Wall','-Wextra','-Werror',str(root/'test_session.cpp'),'-o',str(out/'test_session')],
         [compiler,'-std=c++17','-Wall','-Wextra','-Werror',str(root/'test_native.cpp'),'-framework','AudioUnit','-framework','CoreAudio','-framework','CoreFoundation','-o',str(out/'test_native')],
+        [compiler,'-std=c++17','-Wall','-Wextra','-Werror',str(root/'test_native_diagnostics.cpp'),'-framework','AudioUnit','-framework','CoreAudio','-framework','CoreFoundation','-o',str(out/'test_diagnostics')],
+        [str(out/'test_diagnostics')],
         [str(out/'test_ring')], [str(out/'test_session')],
         [str(out/'test_native')],
     ]

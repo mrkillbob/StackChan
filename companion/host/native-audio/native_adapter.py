@@ -23,6 +23,7 @@ class NativeHostAdapter:
             'sc_pull':([C.c_void_p,C.c_uint32,C.POINTER(C.c_int16),C.c_uint32],C.c_int),
             'sc_error':([C.c_void_p],C.c_int),
             'sc_counter':([C.c_void_p,C.c_int,C.c_int],C.c_uint64),
+            'sc_diagnostic':([C.c_void_p,C.c_int],C.c_uint64),
             'sc_close':([C.c_void_p],None),
         }
         for name,(args,result) in specs.items():
@@ -50,6 +51,27 @@ class NativeHostAdapter:
         if type(playing) is not bool: raise ValueError('playing flag')
         if epoch!=self.epoch: return False
         self._check(self.lib.sc_playing(self.handle,epoch,int(playing))); self.playing=playing; return True
+    def push_pcm(self,epoch,pcm):
+        self._require()
+        if type(pcm) is not bytes or not pcm or len(pcm)%2 or len(pcm)>4096:raise ValueError('bounded PCM16 chunk <=2048 frames')
+        if epoch!=self.epoch or self.muted or self.playing:raise RuntimeError('uplink authority unavailable')
+        samples=(C.c_int16*(len(pcm)//2)).from_buffer_copy(pcm)
+        count=self.lib.sc_push(self.handle,epoch,samples,len(samples))
+        if count<0 or count>len(samples):raise RuntimeError('native uplink rejected')
+        return count
+    def pull_pcm(self,epoch,frames):
+        self._require()
+        if type(frames) is not int or not 1<=frames<=2048:raise ValueError('frame bound')
+        if epoch!=self.epoch or self.muted:raise RuntimeError('downlink authority unavailable')
+        samples=(C.c_int16*frames)();count=self.lib.sc_pull(self.handle,epoch,samples,frames)
+        if count<0 or count>frames:raise RuntimeError('native downlink rejected')
+        return bytes(samples)[:count*2]
+    def diagnostics(self):
+        self._require()
+        keys={'output_callbacks':0,'output_frames':1,'output_consumed_frames':2,'input_callbacks':3,'input_frames':4,'output_queue_frames':5,'input_queue_frames':6}
+        result={key:self.lib.sc_diagnostic(self.handle,value) for key,value in keys.items()}
+        result.update(error=self.lib.sc_error(self.handle),output_dropped=self.lib.sc_counter(self.handle,0,0),input_dropped=self.lib.sc_counter(self.handle,1,0),output_underruns=self.lib.sc_counter(self.handle,0,2),input_underruns=self.lib.sc_counter(self.handle,1,2))
+        return result
     def robot_pcm(self,epoch,pcm):
         self._require()
         if type(pcm) is not bytes or not pcm or len(pcm)%2 or len(pcm)>11520: raise ValueError('bounded PCM16 chunk <=120ms')

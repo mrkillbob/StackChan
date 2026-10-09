@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 
+#define COMPANION_NATIVE_DIAGNOSTICS 1
 namespace {
 constexpr UInt32 max_frames=2048;
 struct Bridge {
@@ -18,6 +19,7 @@ struct Bridge {
     bool arm_allowed=false; // serialized control thread only
     std::atomic<OSStatus> callback_error{noErr};
     std::array<int16_t,max_frames> capture{};
+    std::atomic<uint64_t> output_callbacks{0},output_frames{0},output_consumed{0},input_callbacks{0},input_frames{0};
     bool started=false;
     ~Bridge() {
         armed.store(false);
@@ -27,19 +29,22 @@ struct Bridge {
 };
 OSStatus render(void* ref, AudioUnitRenderActionFlags*, const AudioTimeStamp*, UInt32, UInt32 n, AudioBufferList* io) {
     auto& b=*static_cast<Bridge*>(ref);
+    b.output_callbacks.fetch_add(1,std::memory_order_relaxed);b.output_frames.fetch_add(n,std::memory_order_relaxed);
     if(!io || n>max_frames) { b.armed.store(false); b.callback_error.store(kAudio_ParamError); return kAudio_ParamError; }
     // Silence every buffer first; an interruption never exposes prior callback contents.
     for(UInt32 i=0;i<io->mNumberBuffers;++i) if(io->mBuffers[i].mData) std::memset(io->mBuffers[i].mData,0,io->mBuffers[i].mDataByteSize);
-    if(io->mNumberBuffers!=1 || !io->mBuffers[0].mData || io->mBuffers[0].mDataByteSize<n*sizeof(int16_t)) return kAudio_ParamError;
+    if(io->mNumberBuffers!=1 || !io->mBuffers[0].mData || io->mBuffers[0].mDataByteSize<n*sizeof(int16_t)) {b.armed.store(false);b.callback_error.store(kAudio_ParamError);return kAudio_ParamError;}
     auto e=b.epoch.load(std::memory_order_acquire);
     if(b.armed.load(std::memory_order_acquire) && !b.playing.load()) {
-        b.robot_to_voice.pull(b.capture_generation.load(),static_cast<int16_t*>(io->mBuffers[0].mData),n);
+        auto consumed=b.robot_to_voice.pull(b.capture_generation.load(),static_cast<int16_t*>(io->mBuffers[0].mData),n);
+        b.output_consumed.fetch_add(consumed,std::memory_order_relaxed);
         if(!b.armed.load() || e!=b.epoch.load()) std::memset(io->mBuffers[0].mData,0,n*sizeof(int16_t));
     }
     return noErr;
 }
 OSStatus capture(void* ref, AudioUnitRenderActionFlags* flags, const AudioTimeStamp* time, UInt32, UInt32 n, AudioBufferList*) {
     auto& b=*static_cast<Bridge*>(ref);
+    b.input_callbacks.fetch_add(1,std::memory_order_relaxed);
     if(n>max_frames) { b.armed.store(false); b.callback_error.store(kAudio_ParamError); return kAudio_ParamError; }
     AudioBufferList list{}; list.mNumberBuffers=1;
     list.mBuffers[0]={1,n*static_cast<UInt32>(sizeof(int16_t)),b.capture.data()};
@@ -47,6 +52,7 @@ OSStatus capture(void* ref, AudioUnitRenderActionFlags* flags, const AudioTimeSt
     auto armed=b.armed.load(std::memory_order_acquire);
     auto status=AudioUnitRender(b.input,flags,time,1,n,&list);
     if(status) { b.armed.store(false); b.callback_error.store(status); return status; }
+    b.input_frames.fetch_add(n,std::memory_order_relaxed);
     if(armed && b.armed.load(std::memory_order_acquire) && e==b.epoch.load()) b.voice_to_robot.push(e,b.capture.data(),n);
     return noErr;
 }
@@ -161,6 +167,16 @@ uint64_t sc_counter(void* ptr,int direction,int metric) {
     if(metric==1) return ring.stale.load();
     if(metric==2) return ring.underrun.load();
     return UINT64_MAX;
+}
+// Observational counters only. Queue lengths are bounded snapshots.
+uint64_t sc_diagnostic(void* ptr,int metric) {
+    if(!ptr)return UINT64_MAX;auto& b=*static_cast<Bridge*>(ptr);
+    switch(metric){
+      case 0:return b.output_callbacks.load();case 1:return b.output_frames.load();
+      case 2:return b.output_consumed.load();case 3:return b.input_callbacks.load();
+      case 4:return b.input_frames.load();case 5:return b.robot_to_voice.queued();
+      case 6:return b.voice_to_robot.queued();default:return UINT64_MAX;
+    }
 }
 void sc_close(void* ptr) { delete static_cast<Bridge*>(ptr); }
 }
