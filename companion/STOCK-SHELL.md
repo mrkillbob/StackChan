@@ -75,3 +75,12 @@ The Mac deny-auth finite backend smoke test passed health 200 and diagnostics
 401 and then closed its listener. No ongoing service or audio provider was
 activated. Robot-to-Mac trusted TLS routing and a supported same-conversation
 Mira provider remain unresolved. This firmware has not been flashed.
+
+## Executed build result
+
+Full ESP-IDF build passed for source `d8af2e19bdd6e47c806e7408855a6881cea6dfbe`,
+with one nice20 worker and network denied. Image: 3,745,952 bytes, SHA256
+`e9399ffbc92d776aecdc53b8bbc77edb4c227d87aa79a6062e6c2bcc91ab0031`.
+Esptool 4.12 validated its checksum and validation hash. Exact source hashes,
+artifact archive and test summary: `STOCK-SHELL-FIRMWARE-BUILD.json`.
+No flash, physical IR/NFC/controller acceptance or ongoing bridge service.
