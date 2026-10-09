@@ -127,7 +127,7 @@ def main(argv=None):
         print('Do NOT tap Pair trusted host yet. Open once first; no token or frame is sent during stabilization.')
         print('After opening is authorized, the session is limited to 180 seconds. Keep this terminal open through your test and physically Mute before closing.')
         if not args.open_approved_usb:
-            if input('Type OPEN to authorize opening, or Enter to cancel: ') != 'OPEN':
+            if input('Type OPEN to authorize opening, or Enter to cancel: ').strip().casefold() != 'open':
                 raise PairingFailure('cancelled')
         with _session_deadline():
             import serial
@@ -143,7 +143,7 @@ def main(argv=None):
                 raise PairingFailure('transport_lost') from None
             _stabilize(connection)
             print('Check the robot is stable. If it restarted, reopen Companion on its screen before continuing; this program never reopens USB.')
-            if input('Type STABLE after verifying the screen, or Enter to cancel: ') != 'STABLE':
+            if input('Type STABLE after verifying the screen, or Enter to cancel: ').strip().casefold() != 'stable':
                 raise PairingFailure('cancelled')
             print('Enter the current token from the protected local sheet or transport-test terminal; never paste it into chat.')
             with warnings.catch_warnings():
@@ -154,7 +154,7 @@ def main(argv=None):
             if len(frame) > MAX_FRAME:
                 raise PairingFailure('frame_limit')
             print('Now physically tap Pair trusted host on the robot (60-second window).')
-            if input('Type PAIR to authorize one write after Ready, or Enter to cancel: ') != 'PAIR':
+            if input('Type PAIR to authorize one write after Ready, or Enter to cancel: ').strip().casefold() != 'pair':
                 raise PairingFailure('cancelled')
             receipts = _ReceiptReader(connection)
             ready = receipts.receive('ready_missing_legacy_or_unsupported')
@@ -182,7 +182,7 @@ def main(argv=None):
                 raise PairingFailure('request_mismatch')
             print('Grant staged receipt confirmed. This is not gateway authentication or audio connection. No NVS settings were saved.')
             print('Keep this port open. Use Connect separately on the robot only when ready; after your test physically tap Mute.')
-            while input('Type MUTED only after physically tapping Mute; the port stays open until then: ') != 'MUTED':
+            while input('Type MUTED only after physically tapping Mute; the port stays open until then: ').strip().casefold() != 'muted':
                 print('Port remains open. Physically tap Mute before confirming MUTED.')
             print('Closing USB after your Mute confirmation. Closing may reset the robot.')
         return 0

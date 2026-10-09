@@ -72,7 +72,7 @@ class CliTests(unittest.TestCase):
         choices=iter(answers if answers is not None else ['OPEN','STABLE','PAIR','MUTED'])
         def prompt(text):
             answer=next(choices);events.append(('confirm',answer))
-            if answer=='PAIR':port.phase='pair'
+            if answer.strip().casefold()=='pair':port.phase='pair'
             return answer
         def masked(text):events.append(('masked',));return token
         def factory(**kw):events.append(('construct',kw));return port
@@ -87,7 +87,7 @@ class CliTests(unittest.TestCase):
     def test_non_tty_denied(self):
         result,events,_,_,_=self.run_cli(tty=False);self.assertNotEqual(result,0);self.assertEqual(events,[])
     def test_open_default_denies_before_serial_and_token(self):
-        for answer in ('','yes','open',' OPEN '):
+        for answer in ('','yes','opne','OPEN NOW'):
             result,events,_,_,_=self.run_cli(answers=[answer]);self.assertNotEqual(result,0)
             self.assertEqual(events,[('confirm',answer)])
     def test_stable_denial_never_requests_token_or_writes(self):
@@ -127,7 +127,7 @@ class CliTests(unittest.TestCase):
     def test_pair_denial_never_writes(self):
         result,_,port,_,_=self.run_cli(answers=['OPEN','STABLE','']);self.assertNotEqual(result,0);self.assertFalse(port.frames)
     def test_keep_open_until_exact_muted(self):
-        result,events,_,_,_=self.run_cli(answers=['OPEN','STABLE','PAIR','','muted','MUTED']);self.assertEqual(result,0);self.assertEqual(events[-2:],[('confirm','MUTED'),('close',)])
+        result,events,_,_,_=self.run_cli(answers=['OPEN','STABLE','PAIR','','mte','MUTED']);self.assertEqual(result,0);self.assertEqual(events[-2:],[('confirm','MUTED'),('close',)])
     def test_argv_secret_never_echoed(self):
         result,events,_,_,_=self.run_cli(argv=['--token',TOKEN]);self.assertNotEqual(result,0);self.assertEqual(events,[])
     def test_alarm_lifecycle_no_prior_alarm_overwrite(self):
@@ -167,6 +167,18 @@ class CliTests(unittest.TestCase):
             with patch.object(sys,'stdin',streams[0]),patch.object(sys,'stdout',streams[1]),patch.object(sys,'stderr',streams[2]),patch.object(user_pairing,'_pairing_paused',return_value=False),patch('builtins.input',prompt):
                 self.assertNotEqual(user_pairing.main(['--port','/dev/offline-fixture']),0)
         self.assertEqual(events,[])
+    def test_checkpoints_accept_case_and_surrounding_whitespace(self):
+        result,events,port,_,_=self.run_cli(answers=['  open  ','\tStable\t',' pair ',' MuTeD '])
+        self.assertEqual(result,0);self.assertEqual(len(port.frames),1)
+        self.assertEqual(events[-1],('close',))
+    def test_checkpoint_typos_do_not_authorize(self):
+        for answers in (['opne'],['OPEN','stabel'],['OPEN','STABLE','piar']):
+            result,_,port,_,_=self.run_cli(answers=answers)
+            self.assertNotEqual(result,0);self.assertFalse(port.frames)
+    def test_muted_typo_keeps_descriptor_open(self):
+        result,events,_,_,_=self.run_cli(answers=['OPEN','STABLE','PAIR','mutde',' muted '])
+        self.assertEqual(result,0)
+        self.assertEqual(events[-2:],[('confirm',' muted '),('close',)])
     def test_masking_warning_never_falls_back(self):
         import getpass,warnings
         def warning(text):warnings.warn('synthetic',getpass.GetPassWarning)
