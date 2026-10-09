@@ -17,6 +17,7 @@ public:
     using Send=std::function<bool(const uint8_t*,std::size_t)>;
     using Stopped=std::function<void(uint32_t,bool)>;
     bool IsActive() const { return enabled_.load() && !done_.load(); }
+    bool IsStopped() const { return done_.load(); }
     ~CodecTasks();
     bool Start(AudioCodec* codec,Send send,Stopped stopped);
     bool ResetStoppedConnection();

@@ -1,4 +1,18 @@
 #include "cores3_audio_codec.h"
+#include <companion/diagnostics.h>
+#include <companion/audio_owner.hpp>
+namespace {
+void companion_codec_stage(companion::diagnostic::StageCode stage){
+    if(companion::CurrentAudioOwner()==companion::AudioOwner::Mira)
+        companion::diagnostic::Stage(companion::diagnostic::Task::Codec,stage);
+}
+void companion_codec_fault(companion::diagnostic::FaultCode fault,int32_t status){
+    if(status!=0 && companion::CurrentAudioOwner()==companion::AudioOwner::Mira){
+        companion::diagnostic::Fault(companion::diagnostic::Task::Codec,fault,status);
+        companion::diagnostic::Sample(companion::diagnostic::Task::Codec);
+    }
+}
+}
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -202,10 +216,24 @@ void CoreS3AudioCodec::EnableInput(bool enable) {
         if (input_reference_) {
             fs.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
         }
-        ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
-        ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_));
+        companion_codec_stage(companion::diagnostic::StageCode::DriverInputOpen);
+        {
+            auto status=esp_codec_dev_open(input_dev_, &fs);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverInputOpen,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK(status);
+        }
+        {
+            auto status=esp_codec_dev_set_in_channel_gain(input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverInputGain,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK(status);
+        }
     } else {
-        ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
+        companion_codec_stage(companion::diagnostic::StageCode::DriverInputClose);
+        {
+            auto status=esp_codec_dev_close(input_dev_);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverInputClose,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK(status);
+        }
     }
     AudioCodec::EnableInput(enable);
 }
@@ -223,24 +251,48 @@ void CoreS3AudioCodec::EnableOutput(bool enable) {
             .sample_rate = (uint32_t)output_sample_rate_,
             .mclk_multiple = 0,
         };
-        ESP_ERROR_CHECK(esp_codec_dev_open(output_dev_, &fs));
-        ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
+        companion_codec_stage(companion::diagnostic::StageCode::DriverOutputOpen);
+        {
+            auto status=esp_codec_dev_open(output_dev_, &fs);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverOutputOpen,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK(status);
+        }
+        {
+            auto status=esp_codec_dev_set_out_vol(output_dev_, output_volume_);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverOutputVolume,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK(status);
+        }
     } else {
-        ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
+        companion_codec_stage(companion::diagnostic::StageCode::DriverOutputClose);
+        {
+            auto status=esp_codec_dev_close(output_dev_);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverOutputClose,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK(status);
+        }
     }
     AudioCodec::EnableOutput(enable);
 }
 
 int CoreS3AudioCodec::Read(int16_t* dest, int samples) {
     if (input_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t)));
+        companion_codec_stage(companion::diagnostic::StageCode::DriverRead);
+        {
+            auto status=esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t));
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverRead,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK_WITHOUT_ABORT(status);
+        }
     }
     return samples;
 }
 
 int CoreS3AudioCodec::Write(const int16_t* data, int samples) {
     if (output_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
+        companion_codec_stage(companion::diagnostic::StageCode::DriverWrite);
+        {
+            auto status=esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t));
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverWrite,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK_WITHOUT_ABORT(status);
+        }
     }
     return samples;
 }

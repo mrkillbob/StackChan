@@ -16,6 +16,8 @@ class HeartbeatSendTests(unittest.TestCase):
 #include <atomic>
 #include <string>
 #include "transport_write.hpp"
+#include "diagnostics.h"
+namespace companion::diagnostic {void Stage(Task,StageCode){}void Fault(Task,FaultCode,int32_t){}void CountHeartbeat(bool){}}
 namespace companion {
 static uint64_t ms(){return 500;}
 struct Tasks { bool interrupted=false; bool IsActive(){return true;} void Interrupt(uint32_t){interrupted=true;} };

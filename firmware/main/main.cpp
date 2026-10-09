@@ -10,6 +10,9 @@
 #include <apps/apps.h>
 #include <hal/hal.h>
 #include "companion/boot.h"
+#include "companion/diagnostics.h"
+#include <esp_random.h>
+#include <esp_system.h>
 #include "apps/stock_shell/stock_apps.h"
 
 using namespace mooncake;
@@ -22,6 +25,8 @@ extern "C" void app_main(void)
     mclog::set_time_format(mclog::time_format_unix_milliseconds);
 
 #ifdef STACKCHAN_COMPANION_BOOT
+    uint32_t diagnostic_boot=esp_random();
+    companion::diagnostic::Init(diagnostic_boot?diagnostic_boot:1,static_cast<uint32_t>(esp_reset_reason()));
     stock_shell::Run(); // Stock launcher with feature-scoped companion/tools/games.
     return;
 #endif

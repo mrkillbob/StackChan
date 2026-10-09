@@ -1,4 +1,5 @@
 #include "codec_tasks.h"
+#include "diagnostics.h"
 #include <esp_opus_enc.h>
 #include <esp_opus_dec.h>
 #include <esp_timer.h>
@@ -6,18 +7,25 @@
 #include <array>
 namespace companion {
 static uint64_t now_ms(){return esp_timer_get_time()/1000;}
+static void codec_fault(diagnostic::FaultCode code,int32_t detail=0,diagnostic::Task caller=diagnostic::Task::Codec){
+    diagnostic::Fault(caller,code,detail);diagnostic::Sample(caller);
+}
 CodecTasks::~CodecTasks(){configASSERT(done_.load());CloseCodecs();}
 bool CodecTasks::OpenCodecs(){
+    diagnostic::Stage(diagnostic::Task::Codec,diagnostic::StageCode::CodecOpen);
     CloseCodecs();
     esp_opus_enc_config_t enc={};enc.sample_rate=16000;enc.channel=ESP_AUDIO_MONO;enc.bits_per_sample=ESP_AUDIO_BIT16;
     enc.bitrate=24000;enc.frame_duration=ESP_OPUS_ENC_FRAME_DURATION_60_MS;enc.application_mode=ESP_OPUS_ENC_APPLICATION_VOIP;
     enc.complexity=0;enc.enable_dtx=false;enc.enable_vbr=true;
-    if(esp_opus_enc_open(&enc,sizeof(enc),&encoder_)!=ESP_AUDIO_ERR_OK)return false;
+    auto enc_status=esp_opus_enc_open(&enc,sizeof(enc),&encoder_);
+    if(enc_status!=ESP_AUDIO_ERR_OK){codec_fault(diagnostic::FaultCode::EncoderOpen,static_cast<int32_t>(enc_status));return false;}
     esp_opus_dec_cfg_t dec={};dec.sample_rate=24000;dec.channel=ESP_AUDIO_MONO;dec.frame_duration=ESP_OPUS_DEC_FRAME_DURATION_60_MS;
-    if(esp_opus_dec_open(&dec,sizeof(dec),&decoder_)!=ESP_AUDIO_ERR_OK)return false;
+    auto dec_status=esp_opus_dec_open(&dec,sizeof(dec),&decoder_);
+    if(dec_status!=ESP_AUDIO_ERR_OK){codec_fault(diagnostic::FaultCode::DecoderOpen,static_cast<int32_t>(dec_status));return false;}
     esp_ae_rate_cvt_cfg_t rate={};rate.src_rate=24000;rate.dest_rate=16000;rate.channel=1;rate.bits_per_sample=16;
     rate.complexity=2;rate.perf_type=ESP_AE_RATE_CVT_PERF_TYPE_SPEED;
-    if(esp_ae_rate_cvt_open(&rate,&resampler_)!=ESP_AE_ERR_OK)return false;
+    auto rate_status=esp_ae_rate_cvt_open(&rate,&resampler_);
+    if(rate_status!=ESP_AE_ERR_OK){codec_fault(diagnostic::FaultCode::ResamplerOpen,static_cast<int32_t>(rate_status));return false;}
     pending_.clear();pending_.reserve(1440);mic_sequence_=0;return true;
 }
 void CodecTasks::CloseCodecs(){
@@ -58,20 +66,25 @@ bool CodecTasks::Current(uint32_t epoch){
     std::lock_guard<std::mutex> lock(mutex_);auto active=session_.tick(now_ms());if(!active)enabled_=false;return active;
 }
 bool CodecTasks::Receive(const uint8_t* data,std::size_t bytes){
-    WireFrame frame{};if(!decode_wire(data,bytes,frame) || !frame.speaker)return false;
+    WireFrame frame{};if(!decode_wire(data,bytes,frame) || !frame.speaker){codec_fault(diagnostic::FaultCode::PacketRejected,0,diagnostic::Task::AudioTls);return false;}
     std::lock_guard<std::mutex> lock(mutex_);
-    if(!enabled_ || incoming_.size()>=2 || !session_.packet(frame.epoch,frame.sequence,frame.size,true,now_ms())){enabled_=false;session_.mute();incoming_.clear();return false;}
+    if(!enabled_ || incoming_.size()>=2 || !session_.packet(frame.epoch,frame.sequence,frame.size,true,now_ms())){
+        if(enabled_ && incoming_.size()>=2)codec_fault(diagnostic::FaultCode::QueueFull,static_cast<int32_t>(incoming_.size()),diagnostic::Task::AudioTls);
+        else codec_fault(diagnostic::FaultCode::PacketRejected,0,diagnostic::Task::AudioTls);
+        enabled_=false;session_.mute();incoming_.clear();return false;
+    }
     incoming_.push_back({frame.epoch,std::vector<uint8_t>(frame.payload,frame.payload+frame.size)});return true;
 }
 void CodecTasks::Run(){
-    uint32_t codec_epoch=0;bool was_active=false;bool failed=false;
+    diagnostic::Stage(diagnostic::Task::Codec,diagnostic::StageCode::WorkerStart);diagnostic::Sample(diagnostic::Task::Codec);
+    uint32_t codec_epoch=0;bool was_active=false;bool failed=false,first_decode=true,first_encode=true;
     std::vector<int16_t> hardware(480*codec_->input_channels()),mono(480),converted(512),playback(1440),slice(480);
     std::array<uint8_t,opus_max> opus{};std::array<uint8_t,wire_header+opus_max> wire{};
     while(!quit_){
         auto epoch=epoch_.load();
         if(!Current(epoch)){
             codec_->EnableInput(false);codec_->EnableOutput(false);pending_.clear();
-            if(was_active){CloseCodecs();codec_epoch=0;stopped_(epoch,false);was_active=false;} // false: physical silence not attested
+            if(was_active){diagnostic::Stage(diagnostic::Task::Codec,diagnostic::StageCode::WorkerStop);diagnostic::Sample(diagnostic::Task::Codec);CloseCodecs();codec_epoch=0;stopped_(epoch,false);was_active=false;} // false: physical silence not attested
             vTaskDelay(pdMS_TO_TICKS(10));continue;
         }
         was_active=true;
@@ -91,8 +104,14 @@ void CodecTasks::Run(){
             esp_audio_dec_in_raw_t raw={};raw.buffer=packet.payload.data();raw.len=packet.payload.size();raw.frame_recover=ESP_AUDIO_DEC_RECOVERY_NONE;
             esp_audio_dec_out_frame_t out={};out.buffer=reinterpret_cast<uint8_t*>(playback.data());out.len=playback.size()*2;
             esp_audio_dec_info_t info={};
-            if(esp_opus_dec_decode(decoder_,&raw,&out,&info)!=ESP_AUDIO_ERR_OK || out.decoded_size!=2880 || raw.consumed!=raw.len){failed=true;break;}
+            if(first_decode){diagnostic::Stage(diagnostic::Task::Codec,diagnostic::StageCode::FirstDecode);diagnostic::Sample(diagnostic::Task::Codec);first_decode=false;}
+            diagnostic::Stage(diagnostic::Task::Codec,diagnostic::StageCode::CodecDecode);
+            auto decode_status=esp_opus_dec_decode(decoder_,&raw,&out,&info);
+            if(decode_status!=ESP_AUDIO_ERR_OK){codec_fault(diagnostic::FaultCode::DecodeError,static_cast<int32_t>(decode_status));failed=true;break;}
+            if(out.decoded_size!=2880){codec_fault(diagnostic::FaultCode::DecodedSize,static_cast<int32_t>(out.decoded_size));failed=true;break;}
+            if(raw.consumed!=raw.len){codec_fault(diagnostic::FaultCode::PartialConsumption,static_cast<int32_t>(raw.consumed));failed=true;break;}
             if(!playing_ || !Current(epoch))continue;
+            diagnostic::Stage(diagnostic::Task::Codec,diagnostic::StageCode::CodecOutput);
             codec_->EnableOutput(true);
             for(std::size_t i=0;i<playback.size() && playing_ && Current(epoch);i+=480){std::copy_n(playback.data()+i,480,slice.data());codec_->OutputData(slice);}
             // Keep the device open through a continuous speaking interval,
@@ -103,24 +122,31 @@ void CodecTasks::Run(){
         }
         if(playing_){codec_->EnableInput(false);pending_.clear();vTaskDelay(pdMS_TO_TICKS(10));continue;}
         codec_->EnableInput(true);
-        if(!codec_->InputData(hardware)){failed=true;break;}
+        if(!codec_->InputData(hardware)){codec_fault(diagnostic::FaultCode::InputRead);failed=true;break;}
         if(!Current(epoch) || playing_)continue;
         for(std::size_t i=0;i<480;++i)mono[i]=hardware[i*codec_->input_channels()];
         uint32_t size=0;
-        if(esp_ae_rate_cvt_get_max_out_sample_num(resampler_,480,&size)!=ESP_AE_ERR_OK || size>converted.size()){failed=true;break;}
-        if(esp_ae_rate_cvt_process(resampler_,mono.data(),480,converted.data(),&size)!=ESP_AE_ERR_OK || pending_.size()+size>1440){failed=true;break;}
+        auto bound_status=esp_ae_rate_cvt_get_max_out_sample_num(resampler_,480,&size);
+        if(bound_status!=ESP_AE_ERR_OK || size>converted.size()){codec_fault(diagnostic::FaultCode::ResamplerBound,bound_status!=ESP_AE_ERR_OK?static_cast<int32_t>(bound_status):static_cast<int32_t>(size));failed=true;break;}
+        auto convert_status=esp_ae_rate_cvt_process(resampler_,mono.data(),480,converted.data(),&size);
+        if(convert_status!=ESP_AE_ERR_OK || pending_.size()+size>1440){codec_fault(diagnostic::FaultCode::ResamplerProcess,convert_status!=ESP_AE_ERR_OK?static_cast<int32_t>(convert_status):static_cast<int32_t>(size));failed=true;break;}
         pending_.insert(pending_.end(),converted.begin(),converted.begin()+size);
         if(pending_.size()>=960){
             esp_audio_enc_in_frame_t in={};in.buffer=reinterpret_cast<uint8_t*>(pending_.data());in.len=1920;
             esp_audio_enc_out_frame_t out={};out.buffer=opus.data();out.len=opus.size();
-            if(esp_opus_enc_process(encoder_,&in,&out)!=ESP_AUDIO_ERR_OK || !out.encoded_bytes || out.encoded_bytes>opus.size()){failed=true;break;}
+            if(first_encode){diagnostic::Stage(diagnostic::Task::Codec,diagnostic::StageCode::FirstEncode);diagnostic::Sample(diagnostic::Task::Codec);first_encode=false;}
+            diagnostic::Stage(diagnostic::Task::Codec,diagnostic::StageCode::CodecEncodeEnter);
+            auto encode_status=esp_opus_enc_process(encoder_,&in,&out);
+            diagnostic::Stage(diagnostic::Task::Codec,diagnostic::StageCode::CodecEncodeExit);
+            if(encode_status!=ESP_AUDIO_ERR_OK || !out.encoded_bytes || out.encoded_bytes>opus.size()){codec_fault(diagnostic::FaultCode::EncodeError,encode_status!=ESP_AUDIO_ERR_OK?static_cast<int32_t>(encode_status):static_cast<int32_t>(out.encoded_bytes));failed=true;break;}
             pending_.erase(pending_.begin(),pending_.begin()+960);
             bool allowed=false;{std::lock_guard<std::mutex> lock(mutex_);allowed=session_.packet(epoch,mic_sequence_,out.encoded_bytes,false,now_ms());}
             if(!allowed || !Current(epoch))continue;
             auto bytes=encode_wire({epoch,mic_sequence_++,false,opus.data(),out.encoded_bytes},wire.data(),wire.size());
-            if(!bytes || !send_(wire.data(),bytes)){failed=true;break;}
+            if(!bytes || !send_(wire.data(),bytes)){codec_fault(diagnostic::FaultCode::AudioSend);failed=true;break;}
         }
     }
+    diagnostic::Stage(diagnostic::Task::Codec,diagnostic::StageCode::WorkerStop);diagnostic::Sample(diagnostic::Task::Codec);
     enabled_=false;codec_->EnableInput(false);codec_->EnableOutput(false);CloseCodecs();
     {std::lock_guard<std::mutex> lock(mutex_);incoming_.clear();session_.mute();}
     stopped_(epoch_.load(),false);(void)failed;

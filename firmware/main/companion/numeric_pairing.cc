@@ -1,4 +1,5 @@
 #include "numeric_pairing.h"
+#include "diagnostics.h"
 #include "bounded_web_socket.h"
 extern "C" const char* companion_local_ca_pem();
 extern "C" const char* companion_local_tls_host();
@@ -78,8 +79,10 @@ bool NumericPairing::Active(uint64_t now)const{return started_&&!fault_.load()&&
 bool NumericPairing::TakeGrant(NumericGrant& out){if(!grant_ready_)return false;out=std::move(grant_);grant_ready_=false;return true;}
 bool NumericPairing::Staged(){return Send("{\"type\":\"pair.staged\",\"version\":1,\"request_id\":\""+context_.Request()+"\",\"device_nonce\":\""+context_.DeviceNonce()+"\",\"host_nonce\":\""+context_.HostNonce()+"\",\"staged\":true}");}
 void NumericPairing::Cancel(){
+ diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::NumericCloseEnter);
  started_=false;host_ready_=false;fault_=true;auto socket=std::move(socket_);if(socket)socket->Close(); // Join before callback state is cleared.
  {std::lock_guard<std::mutex> lock(queue_mutex_);for(auto& item:queue_)wipe(item);queue_.clear();}
  wipe(grant_.credential);grant_={};grant_ready_=false;context_.Cancel();
+ diagnostic::Sample(diagnostic::Task::Main);diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::NumericCloseExit);
 }
 }

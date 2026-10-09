@@ -34,7 +34,7 @@ class TickCleanupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='stackchan-tick-stall-offline-') as folder:
             source=pathlib.Path(folder)/'fixture.cpp';binary=pathlib.Path(folder)/'fixture'
             source.write_text(code)
-            build=subprocess.run(['clang++','-std=c++17','-pthread','-Wall','-Wextra',str(source),'-o',str(binary)],capture_output=True,text=True)
+            build=subprocess.run(['clang++','-std=c++17','-pthread','-Wall','-Wextra','-I',str(ROOT/'firmware/main'),str(source),'-o',str(binary)],capture_output=True,text=True)
             self.assertEqual(build.returncode,0,build.stderr)
             subprocess.run([str(binary)],check=True,timeout=5,capture_output=True)
 if __name__=='__main__':unittest.main()

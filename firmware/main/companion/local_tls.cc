@@ -17,7 +17,7 @@
 namespace companion {
 static const char *TAG = "CompanionLocalTls";
 
-LocalTls::LocalTls() {
+LocalTls::LocalTls(diagnostic::Task role):diagnostic_role_(role) {
     owner_task_ = xTaskGetCurrentTaskHandle();
     event_group_ = xEventGroupCreate();
 }
@@ -110,10 +110,20 @@ void LocalTls::Disconnect() {
 /* CONFIG_MBEDTLS_SSL_RENEGOTIATION should be disabled in sdkconfig.
  * Otherwise, invalid memory access may be triggered.
  */
+diagnostic::Task LocalTls::CallerRole() const {
+    auto caller=xTaskGetCurrentTaskHandle();
+    if(caller==diagnostic_receive_task_.load())return diagnostic_role_;
+    return caller==owner_task_?diagnostic::Task::Main:diagnostic::Task::Codec;
+}
 int LocalTls::Send(const std::string& data) {
+    const auto diagnostic_task=CallerRole();
+    diagnostic::Stage(diagnostic_task,diagnostic::StageCode::TlsWriteEnter);
+    // Trace includes writer-lock wait; high-water samples use this caller only.
+    struct TraceExit {diagnostic::Task task;~TraceExit(){diagnostic::Stage(task,diagnostic::StageCode::TlsWriteExit);}} trace_exit{diagnostic_task};
     std::lock_guard<std::mutex> writers(send_mutex_);
     if (!active_.load()) {
         ESP_LOGE(TAG, "Not connected");
+        diagnostic::Fault(diagnostic_task,diagnostic::FaultCode::TlsWrite,-1);
         return -1;
     }
 
@@ -126,7 +136,7 @@ int LocalTls::Send(const std::string& data) {
     const char* data_ptr = data.data();
     
     while (total_sent < data_size) {
-        if(!WriteMayContinue(active_.load(),started_us,esp_timer_get_time()))return -1;
+        if(!WriteMayContinue(active_.load(),started_us,esp_timer_get_time())){diagnostic::Fault(diagnostic_task,diagnostic::FaultCode::TlsWrite,-2);return -1;}
         int ret = esp_tls_conn_write(tls_client_, data_ptr + total_sent, data_size - total_sent);
 
         if (ret == ESP_TLS_ERR_SSL_WANT_WRITE || ret == ESP_TLS_ERR_SSL_WANT_READ) {
@@ -136,6 +146,7 @@ int LocalTls::Send(const std::string& data) {
 
         if (ret <= 0) {
             ESP_LOGE(TAG, "SSL send failed: ret=%d, errno=%d", ret, errno);
+            diagnostic::Fault(diagnostic_task,diagnostic::FaultCode::TlsWrite,ret);
             return CompleteTransportWrite(ret,data_size-total_sent);
         }
         
@@ -146,10 +157,14 @@ int LocalTls::Send(const std::string& data) {
 }
 
 void LocalTls::ReceiveTask() {
+    diagnostic_receive_task_.store(xTaskGetCurrentTaskHandle());
+    diagnostic::Sample(diagnostic_role_);
     std::string data;
     while (active_.load()) {
         data.resize(1500);
+        diagnostic::Stage(diagnostic_role_,diagnostic::StageCode::TlsReadEnter);
         int ret = esp_tls_conn_read(tls_client_, data.data(), data.size());
+        diagnostic::Stage(diagnostic_role_,diagnostic::StageCode::TlsReadReturn);
 
         if (ret == ESP_TLS_ERR_SSL_WANT_READ) {
             continue;
@@ -159,6 +174,7 @@ void LocalTls::ReceiveTask() {
             if (ret < 0) {
                 ESP_LOGE(TAG, "SSL receive failed: %d", ret);
             }
+            if(active_.load())diagnostic::Fault(diagnostic_role_,diagnostic::FaultCode::TlsRead,ret);
             bool notify=active_.exchange(false);
             if (notify && disconnect_callback_) {
                 disconnect_callback_();
@@ -168,9 +184,12 @@ void LocalTls::ReceiveTask() {
         
         if (active_.load() && stream_callback_) {
             data.resize(ret);
+            diagnostic::Stage(diagnostic_role_,diagnostic::StageCode::TlsDispatch);
             stream_callback_(data);
         }
     }
+    diagnostic::Sample(diagnostic_role_);
+    diagnostic_receive_task_.store(nullptr);
 }
 
 int LocalTls::GetLastError() {

@@ -150,7 +150,7 @@ bool BoundedWebSocket::Connect(const char* uri) {
         const char* expected=companion_local_tls_host();
         auto route=companion::SelectTlsRoute(ca?ca:"",expected?expected:"",host);
         if(route==companion::TlsRoute::Reject)return false;
-        if(route==companion::TlsRoute::Local)tcp_=std::make_unique<companion::LocalTls>();
+        if(route==companion::TlsRoute::Local)tcp_=std::make_unique<companion::LocalTls>(connect_id_==3?companion::diagnostic::Task::PairTls:companion::diagnostic::Task::AudioTls);
         else tcp_=network_->CreateSsl(connect_id_);
     } else {
         tcp_ = network_->CreateTcp(connect_id_);

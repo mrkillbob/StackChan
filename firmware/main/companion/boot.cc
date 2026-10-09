@@ -1,4 +1,6 @@
 #include "boot.h"
+#include "diagnostics.h"
+#include "diagnostic_usb_export.hpp"
 #include "audio_owner.hpp"
 #include "usb_owner.hpp"
 #include "numeric_usb.hpp"
@@ -37,7 +39,7 @@ namespace companion {
 namespace {
 std::mutex grant_mutex;
 std::optional<AuthorizedGrant> pending_grant;
-std::atomic<bool> confirm_requested{false},reject_requested{false};
+std::atomic<bool> confirm_requested{false},reject_requested{false},diagnostic_requested{false};
 std::atomic<bool> wifi_initialized{false};
 std::atomic<bool> pair_requested{false}, connect_requested{false}, listen_requested{false}, mute_requested{false}, connected{false};
 // ESP-IDF requires interrupt install/uninstall on the same core. The shell
@@ -56,17 +58,19 @@ struct UsbSdkDriver {
 };
 class UsbProvisioner {
     UsbSdkDriver driver_;
-    const uint32_t boot_nonce_=esp_random();
+    const uint32_t boot_nonce_=diagnostic::BootNonce();
     UsbProvisioningOwner<UsbSdkDriver> owner_{driver_};
     NumericUsbOwner<UsbSdkDriver> numeric_owner_{driver_};
     bool numeric_=false;
+    DiagnosticUsbExport<UsbSdkDriver> diagnostics_{driver_};
 public:
     bool Close() {
-        bool closed=numeric_owner_.Close()&&owner_.Close();
+        bool closed=diagnostics_.Close()&&numeric_owner_.Close()&&owner_.Close();
         if(!closed) ESP_LOGW("CompanionUSB","USB owner cleanup failed (%d)",static_cast<int>(owner_.LastError()));
         return closed;
     }
-    bool Active() const { return numeric_?numeric_owner_.Active():owner_.Active(); }
+    bool Active() const { return diagnostics_.OwnsDriver()||(numeric_?numeric_owner_.Active():owner_.Active()); }
+    bool ExportDiagnostics(bool eligible){if(!eligible)return false;auto frame=diagnostic::Snapshot();return diagnostics_.Export(true,frame.bytes.data(),frame.size);}
     bool Numeric()const{return numeric_;}
     uint32_t BootNonce()const{return boot_nonce_?boot_nonce_:1;}
     NumericUsbRead PollNumeric(NumericUsbRequest& request){return numeric_owner_.Poll(esp_timer_get_time()/1000,request);}
@@ -128,6 +132,7 @@ struct Runtime {
     ConnectGate connect_gate;
     PairConnectionConsent matching_consent;
     lv_obj_t* status=nullptr;
+    lv_obj_t* diagnostic_button=nullptr;
     lv_obj_t *pair_button=nullptr,*listen_button=nullptr,*connect_button=nullptr,*mute_button=nullptr,*confirm_button=nullptr,*reject_button=nullptr;
     const char* message="Mira companion\nMuted - pair a trusted host\nCamera and motion inactive";
 };
@@ -142,6 +147,7 @@ bool EnsureSavedNetwork() {
 bool IsWifiConnected(){return connected.load();}
 bool NetworkWasStarted(){return wifi_initialized.load();}
 void OpenView(lv_obj_t* parent) {
+    diagnostic_requested=false;
     auto& state=runtime();auto& status=state.status;
     pair_requested=false;connect_requested=false;listen_requested=false;mute_requested=false;confirm_requested=false;reject_requested=false;
     {LvglLockGuard lock;auto screen=parent;
@@ -149,6 +155,9 @@ void OpenView(lv_obj_t* parent) {
      status=lv_label_create(screen);lv_obj_set_width(status,240);lv_obj_set_height(status,54);lv_label_set_long_mode(status,LV_LABEL_LONG_DOT);lv_obj_align(status,LV_ALIGN_TOP_LEFT,8,34);
      lv_obj_set_style_text_color(status,lv_color_hex(0xffffff),0);
      lv_label_set_text(status,"Mira companion\nMuted - pair a trusted host\nCamera and motion inactive");
+     auto diagnostics=lv_button_create(screen);state.diagnostic_button=diagnostics;lv_obj_set_size(diagnostics,180,28);lv_obj_set_pos(diagnostics,8,2);
+     auto diagnostic_label=lv_label_create(diagnostics);lv_label_set_text(diagnostic_label,"Export diagnostics");lv_obj_center(diagnostic_label);
+     lv_obj_add_event_cb(diagnostics,[](lv_event_t*){diagnostic_requested=true;},LV_EVENT_CLICKED,nullptr);
      auto pair=lv_button_create(screen);state.pair_button=pair;lv_obj_set_size(pair,290,32);lv_obj_align(pair,LV_ALIGN_CENTER,0,-12);
      auto pair_label=lv_label_create(pair);lv_label_set_text(pair_label,"Pair trusted host");lv_obj_center(pair_label);
      lv_obj_add_event_cb(pair,[](lv_event_t*){pair_requested=true;},LV_EVENT_CLICKED,nullptr);
@@ -162,16 +171,20 @@ void OpenView(lv_obj_t* parent) {
     state.message="Mira companion\nMuted - pair a trusted host\nCamera and motion inactive";
 }
 bool CloseView() {
-    auto& state=runtime();bool usb_closed=state.provisioner.Close();state.numeric_pairing.Cancel();state.numeric_until=0;state.numeric_request={};state.numeric_connected=false;state.connect_gate.Cancel();state.matching_consent.Cancel();
+    diagnostic_requested=false;
+    auto& state=runtime();bool usb_closed=state.provisioner.Close();
+    diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::NumericCloseEnter);state.numeric_pairing.Cancel();diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::NumericCloseExit);state.numeric_until=0;state.numeric_request={};state.numeric_connected=false;state.connect_gate.Cancel();state.matching_consent.Cancel();
     pair_requested=false;connect_requested=false;listen_requested=false;mute_requested=false;confirm_requested=false;reject_requested=false;
     {std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant)std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');pending_grant.reset();}
-    state.socket.Close();state.grant_connected=false;
-    bool stopped=state.tasks.Stop();
+    diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::AudioCloseEnter);state.socket.Close();diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::AudioCloseExit);state.grant_connected=false;
+    diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::TasksStopEnter);bool stopped=state.tasks.Stop();diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::TasksStopExit);diagnostic::Sample(diagnostic::Task::Main);
     if(stopped){ReleaseAudio(AudioOwner::Mira);state.status=nullptr;}
     return stopped && usb_closed;
 }
 void TickView() {
     auto& state=runtime();if(!state.status)return;
+    diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::TickEnter);diagnostic::CountTick();
+    struct TickEnd{~TickEnd(){diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::TickExit);}} tick_end;
     auto& provisioner=state.provisioner;auto& tasks=state.tasks;auto& socket=state.socket;
     auto& wifi_started=state.wifi_started;auto& grant_connected=state.grant_connected;
     auto& connect_gate=state.connect_gate;auto& message=state.message;auto status=state.status;
@@ -183,9 +196,15 @@ void TickView() {
     }
     {std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant&&pending_grant->expires_at_ms&&now>=pending_grant->expires_at_ms){std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');pending_grant.reset();mute_requested=true;}}
         if(mute_requested.exchange(false)) {
-            provisioner.Close();state.numeric_pairing.Cancel();state.numeric_request={};state.numeric_until=0;state.numeric_connected=false;state.matching_consent.Cancel();confirm_requested=false;connect_gate.Cancel();pair_requested=false;connect_requested=false;listen_requested=false;
+            provisioner.Close();diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::NumericCloseEnter);state.numeric_pairing.Cancel();diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::NumericCloseExit);state.numeric_request={};state.numeric_until=0;state.numeric_connected=false;state.matching_consent.Cancel();confirm_requested=false;connect_gate.Cancel();pair_requested=false;connect_requested=false;listen_requested=false;
             {std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant)std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');pending_grant.reset();}
-            socket.Close();if(tasks.Stop())ReleaseAudio(AudioOwner::Mira);grant_connected=false;message="Mira companion\nMuted - connection closed";}
+            diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::AudioCloseEnter);socket.Close();diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::AudioCloseExit);
+            diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::TasksStopEnter);if(tasks.Stop())ReleaseAudio(AudioOwner::Mira);diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::TasksStopExit);diagnostic::Sample(diagnostic::Task::Main);grant_connected=false;message="Mira companion\nMuted - connection closed";}
+        if(diagnostic_requested.exchange(false)) {
+            bool pending=false;{std::lock_guard<std::mutex> lock(grant_mutex);pending=pending_grant.has_value();}
+            bool eligible=!grant_connected&&!state.numeric_until&&!pending&&!provisioner.Active()&&tasks.IsStopped()&&CurrentAudioOwner()==AudioOwner::None;
+            message=provisioner.ExportDiagnostics(eligible)?"Diagnostics exported - no audio":"Diagnostics need fully stopped audio and USB";
+        }
         if(pair_requested.exchange(false)) {
             connect_gate.Cancel();
             bool pending=false; {std::lock_guard<std::mutex> lock(grant_mutex);pending=pending_grant.has_value();}
@@ -285,7 +304,11 @@ void TickView() {
                 case S::Muted:case S::Fault:case S::Disconnected:mute_requested=true;break;
             }
         }
-        {LvglLockGuard lock;
+        bool diagnostic_pending=false;{std::lock_guard<std::mutex> lock(grant_mutex);diagnostic_pending=pending_grant.has_value();}
+        bool export_ready=!grant_connected&&!state.numeric_until&&!diagnostic_pending&&!provisioner.Active()&&tasks.IsStopped()&&CurrentAudioOwner()==AudioOwner::None;
+        diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::LvglWait);
+        {LvglLockGuard lock;diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::LvglAcquired);
+            if(export_ready)lv_obj_remove_state(state.diagnostic_button,LV_STATE_DISABLED);else lv_obj_add_state(state.diagnostic_button,LV_STATE_DISABLED);
             bool compare=!state.numeric_pairing.Code().empty();
             for(auto item:{state.pair_button,state.listen_button,state.connect_button,state.mute_button}){if(compare)lv_obj_add_flag(item,LV_OBJ_FLAG_HIDDEN);else lv_obj_remove_flag(item,LV_OBJ_FLAG_HIDDEN);}
             for(auto item:{state.confirm_button,state.reject_button}){if(compare)lv_obj_remove_flag(item,LV_OBJ_FLAG_HIDDEN);else lv_obj_add_flag(item,LV_OBJ_FLAG_HIDDEN);}
@@ -298,6 +321,7 @@ void TickView() {
             lv_obj_set_width(status,compare?290:240);lv_obj_set_height(status,compare?110:54);
             std::string display=compare?"Compare code: "+state.numeric_pairing.Code()+(state.numeric_pairing.AudioRequested()?"\nConfirm permits local mic/speaker\nfor this temporary session":"\nPairing only - audio stays muted")+(state.numeric_pairing.Confirmed()?"\nRobot confirmed - confirm on Mac":"\nConfirm on Mac and robot"):message;lv_label_set_text(status,display.c_str());
         }
+        diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::LvglReleased);
  }
 [[noreturn]] void RunBoot() {
     if(!GetHAL().initCompanion())while(true)GetHAL().delay(1000);

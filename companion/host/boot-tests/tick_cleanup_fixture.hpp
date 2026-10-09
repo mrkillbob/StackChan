@@ -9,6 +9,8 @@
 #include <string>
 #include <thread>
 #include <algorithm>
+#include "companion/diagnostics.h"
+namespace companion::diagnostic {void Stage(Task,StageCode){}void Sample(Task){}void Fault(Task,FaultCode,int32_t){}void CountTick(){}void CountHeartbeat(bool){}}
 struct lv_obj_t{};
 constexpr int LV_OBJ_FLAG_HIDDEN=1,LV_STATE_DISABLED=2;
 void lv_obj_add_flag(lv_obj_t*,int){} void lv_obj_remove_flag(lv_obj_t*,int){}
@@ -21,15 +23,16 @@ std::atomic<uint64_t> clock_ms{500};long long esp_timer_get_time(){return clock_
 struct NetworkInterface{};struct Board{static Board& GetInstance(){static Board b;return b;}NetworkInterface* GetNetwork(){return nullptr;}void* GetAudioCodec(){return nullptr;}};
 void esp_wifi_connect(){}
 namespace companion {
-enum class AudioOwner{Mira};bool AcquireAudio(AudioOwner){return true;}void ReleaseAudio(AudioOwner){}
+enum class AudioOwner{None,Mira};AudioOwner CurrentAudioOwner(){return AudioOwner::None;}bool AcquireAudio(AudioOwner){return true;}void ReleaseAudio(AudioOwner){}
 struct AuthorizedGrant{std::string uri,device,credential,request;bool host_audio_qualified=false;uint64_t expires_at_ms=0;bool numeric_pairing=false;};
 std::mutex grant_mutex;std::optional<AuthorizedGrant> pending_grant;
+std::atomic<bool> diagnostic_requested{false};
 std::atomic<bool> confirm_requested{false},reject_requested{false},pair_requested{false},connect_requested{false},listen_requested{false},mute_requested{false},connected{true};
 bool StartSavedWifi(){return false;}bool StageAuthorizedGrant(AuthorizedGrant){return false;}
 struct NumericUsbRequest{std::string request;uint32_t boot_nonce=1;};
 enum class NumericUsbRead{None,Accepted,Rejected};enum class ProvisioningRead{None,Accepted,Rejected};
 struct ProvisioningFields{std::string uri,device,credential,request;void Clear(){}};
-struct Provisioner{bool Close(){return true;}bool Active(){return false;}bool Numeric(){return true;}bool Open(){return false;}NumericUsbRead PollNumeric(NumericUsbRequest&){return NumericUsbRead::None;}ProvisioningRead Poll(ProvisioningFields&){return ProvisioningRead::None;}bool CompleteAccepted(bool,const std::string&){return false;}};
+struct Provisioner{bool ExportDiagnostics(bool){return false;}bool Close(){return true;}bool Active(){return false;}bool Numeric(){return true;}bool Open(){return false;}NumericUsbRead PollNumeric(NumericUsbRequest&){return NumericUsbRead::None;}ProvisioningRead Poll(ProvisioningFields&){return ProvisioningRead::None;}bool CompleteAccepted(bool,const std::string&){return false;}};
 struct NumericGrant{std::string request,credential;uint64_t expires_at_ms=0;bool audio_requested=false;};
 struct NumericPairing{
  std::mutex mutex;std::condition_variable condition;bool block=false,entered=false,released=false;
@@ -39,7 +42,7 @@ struct NumericPairing{
 };
 struct ConnectGate{void Cancel(){}void Request(bool){}bool Ready(bool){return false;}};
 struct Consent{void Cancel(){}bool Arm(const std::string&,uint64_t,bool,bool,uint64_t){return false;}bool RequestConnection(bool){return false;}bool Take(uint64_t,bool){return false;}};
-struct Tasks{std::atomic<bool> active{true};unsigned interrupted=0,stops=0;bool IsActive(){return active;}void Interrupt(uint32_t){++interrupted;}bool Stop(){++stops;return true;}template<class A,class B>bool Start(void*,A,B){return false;}};
+struct Tasks{std::atomic<bool> active{true};unsigned interrupted=0,stops=0;bool IsActive(){return active;}bool IsStopped(){return stops>0;}void Interrupt(uint32_t){++interrupted;}bool Stop(){++stops;return true;}template<class A,class B>bool Start(void*,A,B){return false;}};
 class CompanionSocket{
 public:enum class State{Disconnected,AwaitingBegin,ConsentRequired,Arming,Listening,Speaking,Muted,Fault};
  Tasks& tasks_;std::atomic<State> state_{State::Speaking};std::atomic<uint32_t> epoch_{1};std::atomic<bool> consent_{true};std::atomic<uint64_t> last_heartbeat_ms_{0};unsigned heartbeats=0,closes=0;
@@ -48,7 +51,7 @@ public:enum class State{Disconnected,AwaitingBegin,ConsentRequired,Arming,Listen
 };
 static uint64_t ms(){return clock_ms;}
 ACTUAL_SOCKET_TICK
-struct Runtime{Provisioner provisioner;NumericPairing numeric_pairing;NumericUsbRequest numeric_request;uint64_t numeric_until=120000;bool numeric_connected=true;Tasks tasks;CompanionSocket socket{tasks};bool wifi_started=true,grant_connected=true;ConnectGate connect_gate;Consent matching_consent;lv_obj_t ui;lv_obj_t* status=&ui;lv_obj_t *pair_button=&ui,*listen_button=&ui,*connect_button=&ui,*mute_button=&ui,*confirm_button=&ui,*reject_button=&ui;const char* message="Speaking";};
+struct Runtime{Provisioner provisioner;NumericPairing numeric_pairing;NumericUsbRequest numeric_request;uint64_t numeric_until=120000;bool numeric_connected=true;Tasks tasks;CompanionSocket socket{tasks};bool wifi_started=true,grant_connected=true;ConnectGate connect_gate;Consent matching_consent;lv_obj_t ui;lv_obj_t* status=&ui;lv_obj_t* diagnostic_button=&ui;lv_obj_t *pair_button=&ui,*listen_button=&ui,*connect_button=&ui,*mute_button=&ui,*confirm_button=&ui,*reject_button=&ui;const char* message="Speaking";};
 Runtime& runtime(){static Runtime state;return state;}
 constexpr bool STACKCHAN_COMPANION_TRUSTED_USB_PROVISIONING=false;
 ACTUAL_TICK_VIEW

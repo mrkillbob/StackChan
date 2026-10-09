@@ -1,4 +1,5 @@
 #include "companion_socket.h"
+#include "diagnostics.h"
 #include <cJSON.h>
 #include <esp_timer.h>
 #include <cmath>
@@ -29,7 +30,7 @@ bool CompanionSocket::PhysicalConsent(){
     auto epoch=epoch_.load();if(!epoch || state_!=State::ConsentRequired)return false;consent_=true;state_=State::Arming;
     return Text("{\"type\":\"consent\",\"epoch\":"+std::to_string(epoch)+",\"physical\":true}");
 }
-void CompanionSocket::Tick(){if(!epoch_)return;if((state_==State::Listening || state_==State::Speaking) && !tasks_.IsActive()){state_=State::Muted;consent_=false;}auto now=ms();if(now-last_heartbeat_ms_>=500){last_heartbeat_ms_=now;if(!Text("{\"type\":\"heartbeat\",\"epoch\":"+std::to_string(epoch_.load())+"}"))tasks_.Interrupt(epoch_);}}
+void CompanionSocket::Tick(){if(!epoch_)return;if((state_==State::Listening || state_==State::Speaking) && !tasks_.IsActive()){state_=State::Muted;consent_=false;}auto now=ms();if(now-last_heartbeat_ms_>=500){last_heartbeat_ms_=now;diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::HeartbeatEnter);bool sent=Text("{\"type\":\"heartbeat\",\"epoch\":"+std::to_string(epoch_.load())+"}");diagnostic::CountHeartbeat(sent);if(!sent){diagnostic::Fault(diagnostic::Task::Main,diagnostic::FaultCode::HeartbeatWrite);tasks_.Interrupt(epoch_);}diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::HeartbeatExit);}}
 void CompanionSocket::Close(){
     state_=State::Disconnected;consent_=false;tasks_.Interrupt(epoch_);epoch_=0;
     std::shared_ptr<BoundedWebSocket> ws;{std::lock_guard<std::mutex> lock(mutex_);ws=std::move(socket_);}if(ws)ws->Close();

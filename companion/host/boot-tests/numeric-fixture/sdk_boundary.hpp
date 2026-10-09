@@ -4,6 +4,8 @@
 #include <vector>
 #include <functional>
 #include <cstddef>
+#include "companion/diagnostics.h"
+namespace companion::diagnostic {inline void Stage(Task,StageCode){}inline void Sample(Task){}}
 class NetworkInterface{};
 class BoundedWebSocket {
 public:

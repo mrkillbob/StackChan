@@ -15,6 +15,7 @@
 #include <apps/common/common.h>
 #include <assets/assets.h>
 #include <companion/boot.h>
+#include <companion/diagnostics.h>
 #include <hal/hal.h>
 #include <stackchan/stackchan.h>
 #include <stackchan/avatar/skins/default/default.h>
@@ -137,6 +138,7 @@ public:
     void onRunning() override
     {
         auto action = action_.exchange(0);
+        if(action==999)companion::diagnostic::Stage(companion::diagnostic::Task::Main,companion::diagnostic::StageCode::Back);
         if (Back(action)) return;
         companion::TickView();
     }
