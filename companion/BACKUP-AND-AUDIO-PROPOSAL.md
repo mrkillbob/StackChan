@@ -1,6 +1,6 @@
 # StackChan installed-state backup and Mac audio qualification proposal
 
-Prepared 8 October 2026. Neither procedure is authorized or executed by this document. No flash operation is included.
+Prepared 8 October 2026. Michael subsequently approved the installed-state backup. Its collection has not started: the native encrypted-container command failed before a private password prompt, and Time Machine exclusion is not confirmed. Mac audio tests remain separately unapproved and unexecuted. No flash operation is included.
 
 ## Installed-state backup: narrow approval scope
 
@@ -22,9 +22,11 @@ Acceptance: both files exactly 16,777,216 bytes and SHA-256 equal; partition tab
 
 Restore review: confirm same physical device, same flash size, secure boot/encryption state and layout, then prepare the exact original-byte write and verification recipe. A matching duplicate read proves backup integrity, not successful restoration. Do not run a restoration test without its own write approval. Original stock image provenance and encrypted backup protection are distinct from a rebuilt upstream baseline or latest M5Burner firmware. Recovery guarantees must remain limited until actual restore evidence exists.
 
-Suggested approval question: **May I save and verify a complete local backup of this robot, including its Wi-Fi/pairing settings and calibration, inside an encrypted container whose password you enter privately? This performs reads only and does not flash, reset or upload anything.**
+Previously approved scope: **May I save and verify a complete local backup of this robot, including its Wi-Fi/pairing settings and calibration, inside an encrypted container whose password you enter privately? This performs reads only and does not flash, reset or upload anything.**
 
-## Mac audio qualification: separate approval scope
+## Optional Mac audio diagnostics: separate approval scope
+
+This prototype requires a running Mac/native client and cannot satisfy production operation with the Mac off. It is optional diagnostics, not the production architecture or a mandatory next step. The production path is robot → authenticated remote WSS gateway → verified Mira session route; that final session attachment is not yet supported by an identified public interface. See EXPANSION-PLAN.md for feasibility and acceptance.
 
 Use the existing native CoreAudio bridge and allowlisted UIDs `Pro Tools Audio Bridge 2-A_UID` and `Pro Tools Audio Bridge 2-B_UID`. Begin with fresh read-only checks of device presence, 48 kHz physical rate, available input/output streams and buffer bounds. Do not change global default devices, device sample rates or permissions silently.
 

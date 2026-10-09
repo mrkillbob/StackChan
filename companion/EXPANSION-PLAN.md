@@ -6,7 +6,7 @@ Updated 8 October 2026. **Later implementation update:** custom boot/consent UI 
 
 Stack-chan becomes a portable physical companion for Michael’s existing Mira conversation, voice and memory. Mira is the default coordination hub and can use explicitly authorized agents and tools. Michael can also select Claude, Codex or Hermes directly. All routes use the same authorized home/device layer, while keeping each provider’s conversation identity and permissions explicit.
 
-Keep cloud reasoning off the robot where practical. The robot handles its microphones, speaker, display, touch, camera and movement. It should work wherever there is a verified internet route. A nearby trusted computer can provide a companion service after pairing and capability discovery; plugging into USB for power does not grant access to that computer.
+Keep cloud reasoning off the robot where practical. The robot handles its microphones, speaker, display, touch, camera and movement. It should work wherever there is a verified internet route. Production must connect directly over authenticated WSS to an independently reachable remote companion service and work with Michael’s Mac switched off. The Mac is for development/flashing or an optional paired diagnostic host. A nearby trusted computer can provide an optional companion service after pairing and capability discovery; plugging into USB for power does not grant access to that computer.
 
 ## Existing project and evidence
 
@@ -32,11 +32,17 @@ Receipts live in `companion/host/native-audio/VERIFICATION.json`, `companion/hos
 
 Implement the custom boot path, touch consent, visible listening/speaking/muted states and companion lifecycle. A custom boot/UI entry point now compiles. Its trusted grant provisioning, physical audio and recovery acceptance remain open; flashing alone would not deliver the requested experience.
 
-Use the native Mac audio bridge to connect to Mira’s existing voice session. The current allowlisted routes are Pro Tools Audio Bridge 2-A and 2-B, with mono 48 kHz PCM on channel 1. Verify their actual direction and isolation before opening audio. Keep audio callbacks bounded; process codecs and network work outside callbacks. Do not replace Mira with cloned TTS or a new API conversation. The [Codex voice documentation](https://learn.chatgpt.com/docs/features/voice) describes conversation-linked voice, but the inspected public interfaces do not establish an arbitrary raw-audio injection/export API. The native OS audio path therefore still needs qualification.
+Make the direct remote WSS gateway the production audio/session path. The firmware accepts an authorized endpoint URI and does not require a Mac-specific audio transport, but deployment, real grant issuance/revocation, production TLS and provider/session routing remain unimplemented or unqualified. No remote endpoint is activated.
 
-The implementation already includes explicit consent and acknowledgement, generations/epochs, sequence checks, bounded queues, half-duplex gating and a two-second heartbeat deadline. Complete WebSocket handshake validation, connection ownership and shutdown review before activation. Current interruption invalidates queued output; it does not prove physical speaker silence or provider cancellation. Spoken barge-in remains a later requirement.
+The [native voice documentation](https://learn.chatgpt.com/docs/features/voice) describes conversation-linked voice in supported clients. The inspected public documentation and callable tools do not establish an external raw-audio attach/export endpoint for Michael’s existing Mira conversation. [MCP Events](https://developers.openai.com/plugins/build/mcp-events) supports discrete events, explicitly without streaming; it is not evidence of a bidirectional voice transport. This is a remaining integration blocker, not proof that every possible future route is unavailable.
 
-Acceptance: start from mute; authorize a real conversation; verify Mira’s identity and intended conversation continuity; record intelligible bidirectional speech and measured end-to-end latency; test disconnect, revocation, restart and stale packets; verify mute and physical stop. Confirm unrelated Mac audio is not captured. All physical audio tests require their specific approved scope.
+The [GPT-Live API](https://developers.openai.com/api/docs/guides/live) supports remote full-duplex audio and delegation to an existing backend, using a trusted server API credential and separately billed API sessions. It does not document attaching that API voice session to an existing native Mira voice call, or automatically sharing ChatGPT conversation memory. It is technically a candidate for a new cloud voice frontend with an explicit context bridge, not a verified fulfillment of the existing-Mira requirement. Do not create credentials, activate billable sessions, clone Mira’s voice or silently substitute a new agent.
+
+Keep the native Mac CoreAudio bridge as an optional, separately approved diagnostic prototype. Its allowlisted Pro Tools Audio Bridge 2-A/2-B routes use mono 48 kHz PCM on channel 1; direction, isolation and native app routing still need qualification. Even if qualified, this path depends on the running Mac/client and therefore cannot pass production portability acceptance. It is not a mandatory prerequisite for the remote implementation.
+
+The implementation already includes explicit consent and acknowledgement, generations/epochs, sequence checks, bounded queues, half-duplex gating and a two-second heartbeat deadline. WebSocket handshake validation now has compiled regression coverage; qualify actual TLS, connection ownership and shutdown before activation. Current interruption invalidates queued output; it does not prove physical speaker silence or provider cancellation. Spoken barge-in remains a later requirement.
+
+Acceptance: start from mute; authorize a real conversation; verify Mira’s identity and intended conversation continuity; record intelligible bidirectional speech and measured end-to-end latency; test disconnect, revocation, restart and stale packets; verify mute and physical stop. For optional Mac diagnostics, confirm unrelated Mac audio is not captured. All physical audio tests require their specific approved scope.
 
 ## 2. Make the companion portable
 
@@ -44,7 +50,7 @@ Use revocable pairing and explicit microphone/speaker capabilities. A robot disc
 
 Reuse existing Tailscale or cloud routes only after verifying their availability, TLS trust, access scope and intended endpoint. No new paid service, credential, account permission or remote exposure is implied. Network loss must return the robot to a clear muted state and recover without replaying old speech or actions.
 
-Acceptance: test a verified remote internet route, reconnection and host switching; revoke the device grant; demonstrate rejection of stale/replayed traffic and unpaired hosts. Record where audio is processed and what remains available offline.
+Acceptance: place the robot on a different internet connection with Michael’s Mac switched off, verify the intended Mira voice/session and memory continuity through the remote service, then test reconnection and optional host switching; revoke the device grant; demonstrate rejection of stale/replayed traffic and unpaired hosts. Record where audio is processed and what remains available offline.
 
 ## 3. Connect Mira, Claude, Codex and Hermes
 
@@ -94,4 +100,4 @@ The robot’s partition table was read without reading NVS and matches the build
 
 The custom boot path must fail closed on NVS initialization errors, rather than inheriting the stock erase-and-retry behavior. It must avoid unintended vendor OTA/cloud activation. M5Burner offers an [official recovery path](https://docs.m5stack.com/en/StackChan/#restore-factory-firmware), but exact image availability and pairing restoration are not yet proven.
 
-Next implementation: complete the custom boot/consent UI and native audio qualification, then create a specific immutable image-and-backup proposal for approval. Release acceptance requires physical boot, real Mira audio, mute/stop and recovery evidence. Download mode alone is not authorization to flash.
+Next implementation: resolve a supported remote Mira audio/session route, implement trusted endpoint/grant provisioning and remote gateway lifecycle, and qualify physical boot/audio after backup and a separate exact flash approval. Custom boot/consent UI now compiles. Mac loopback remains optional diagnostics. Release acceptance requires physical boot, real Mira audio, mute/stop and recovery evidence. Download mode alone is not authorization to flash.
