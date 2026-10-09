@@ -1,86 +1,204 @@
-"""Human-operated, one-shot volatile USB grant handoff. No gateway/network IO.
+"""Human-operated volatile USB pairing. Import/help do no serial or network I/O.
 
-Run in a real terminal. Tokens are accepted only through masked getpass, never
-arguments or files. This CLI cannot confirm device receipt or pairing-window
-state; it does not read serial, connect audio, or save robot settings.
+Open/stabilize precedes physical Pair. A receipt proves local staging only;
+Connect remains a separate physical action. No tokens in arguments/files/logs.
 """
 import argparse
 import getpass
+import signal
 import sys
+import threading
+import time
 import uuid
 import warnings
+from contextlib import contextmanager
+from pathlib import Path
 
 from provisioning import MAX_FRAME, pack_grant
+from pairing_receipt import READY, STAGED, REJECTED, EXPIRED, decode_receipt
 
 ENDPOINT = 'wss://192.168.1.75:18443/companion/audio'
 DEVICE = 'stackchan-80456b561404'
+SESSION_SECONDS = 180
+INPUT_LIMIT = 4096
 
+class PairingFailure(Exception):
+    """Only fixed nonsecret status labels may be raised here."""
 
 class _Parser(argparse.ArgumentParser):
     def error(self, message):
-        # argparse's default error can echo unknown arguments, including a token
-        # accidentally supplied by the caller. Keep all failures generic.
-        raise ValueError('invalid command arguments')
+        raise PairingFailure('invalid_arguments')
 
+def _pairing_paused():
+    source = Path(__file__).resolve()
+    # Repository checkout lives below StackChan/src/upstream. Check both the
+    # project control marker and a marker alongside the repository itself.
+    return any((source.parents[index] / '.tools' / 'TRANSPORT-PAIRING-PAUSED').exists()
+               for index in (3, 5))
+
+@contextmanager
+def _session_deadline():
+    if threading.current_thread() is not threading.main_thread() or signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0):
+        raise PairingFailure('deadline_unavailable')
+    previous = signal.getsignal(signal.SIGALRM)
+    def expired(signum, frame):
+        raise PairingFailure('session_expired')
+    signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, SESSION_SECONDS)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+def _read(connection):
+    try:
+        data = connection.read(64)
+    except PairingFailure:
+        raise
+    except Exception:
+        raise PairingFailure('transport_lost') from None
+    if type(data) is not bytes or len(data) > 64:
+        raise PairingFailure('invalid_transport')
+    return data
+
+def _stabilize(connection):
+    deadline = time.monotonic() + 2
+    total = 0
+    while time.monotonic() < deadline:
+        total += len(_read(connection))
+        if total > INPUT_LIMIT:
+            raise PairingFailure('input_limit')
+        time.sleep(.02)
+
+class _ReceiptReader:
+    def __init__(self, connection):
+        self.connection = connection
+        self.buffer = b''
+
+    def receive(self, missing):
+        deadline = time.monotonic() + 5
+        total = 0
+        while time.monotonic() < deadline:
+            start = self.buffer.find(b'SCPS')
+            if start < 0:
+                self.buffer = self.buffer[-3:]  # Partial magic only; discard console text.
+            else:
+                self.buffer = self.buffer[start:]
+                if len(self.buffer) >= 22:
+                    frame, self.buffer = self.buffer[:22], self.buffer[22:]
+                    try:
+                        return decode_receipt(frame)
+                    except ValueError:
+                        raise PairingFailure('invalid_receipt') from None
+            chunk = _read(self.connection)
+            total += len(chunk)
+            if total > INPUT_LIMIT:
+                raise PairingFailure('input_limit')
+            self.buffer += chunk
+            time.sleep(.02)
+        raise PairingFailure(missing)
+
+def _rejection(receipt):
+    if receipt.status == REJECTED:
+        raise PairingFailure('rejected')
+    if receipt.status == EXPIRED:
+        raise PairingFailure('expired')
 
 def main(argv=None):
     token = frame = None
     connection = None
     try:
-        parser = _Parser(description='Interactive one-shot USB pairing; never pass a token in arguments.')
-        parser.add_argument('--port', required=True, help='Verified robot serial port path; no automatic discovery.')
+        parser = _Parser(description='Interactive USB pairing; never pass a token in arguments.')
+        parser.add_argument('--port', required=True, help='Verified robot port; no discovery or automatic reopen.')
         try:
             args = parser.parse_args(argv)
-        except SystemExit as exit_request:
-            return int(exit_request.code)
+        except SystemExit as request:
+            return int(request.code)
+        if _pairing_paused():
+            raise PairingFailure('paused')
         if not all(stream.isatty() for stream in (sys.stdin, sys.stdout, sys.stderr)):
-            print('Denied: run from an interactive terminal with no redirection.', file=sys.stderr)
-            return 2
-        if not args.port or len(args.port) > 256 or any(ord(c) < 33 or ord(c) > 126 for c in args.port):
-            print('Denied: provide a bounded serial port path.', file=sys.stderr)
-            return 2
+            raise PairingFailure('interactive_terminal_required')
+        if not args.port or len(args.port) > 256 or any(not 33 <= ord(c) <= 126 for c in args.port):
+            raise PairingFailure('invalid_port')
         print(f'Pinned device: {DEVICE}\nPinned endpoint: {ENDPOINT}')
-        print('Read the current token from your protected local preparation sheet or transport-test terminal. Do not paste it into chat.')
-        with warnings.catch_warnings():
-            # getpass otherwise falls back to echoed input if terminal control
-            # fails. Treat that warning as denial before any fallback read.
-            warnings.simplefilter('error', getpass.GetPassWarning)
-            token = getpass.getpass('Token (masked): ')
-        frame = pack_grant(ENDPOINT, DEVICE, token, uuid.uuid4().hex)
-        if len(frame) > MAX_FRAME:
-            raise ValueError('frame exceeds receiver limit')
-        print('On the robot, open Companion and physically tap Pair trusted host now (opens a 60-second window).')
-        print('Opening this serial port MAY reset a USB-UART robot even with DTR/RTS disabled.')
-        print('If it resets or the pairing window expires, retry manually with a fresh Pair window; no automatic retry occurs.')
-        print('This sends one grant frame only. It does not connect audio or save NVS settings.')
-        if input('Type PAIR to authorize this single write, or Enter to cancel: ') != 'PAIR':
-            print('Cancelled. Serial port was not opened.')
-            return 2
-        import serial  # Existing official pyserial installation; no driver/install/discovery actions.
-        connection = serial.Serial(port=None, baudrate=115200, timeout=0, write_timeout=2)
-        connection.dtr = False
-        connection.rts = False
-        connection.port = args.port
-        connection.open()
-        written = connection.write(frame)  # Exactly one bounded write; never retry a partial frame.
-        if written != len(frame):
-            print('Incomplete write. Close and retry manually after a fresh physical Pair window.', file=sys.stderr)
-            return 3
-        print('One frame written. No acknowledgement was read. Check the robot screen for a staged grant.')
-        print('Use Connect separately only when ready. This CLI has not started audio.')
+        print('Opening or closing native USB MAY reset the robot despite DTR/RTS=False. The cause of a reboot cannot be inferred from a write.')
+        print('Do NOT tap Pair trusted host yet. Open once first; no token or frame is sent during stabilization.')
+        print('The entire session is limited to 180 seconds. Keep this terminal open through your test and physically Mute before closing.')
+        with _session_deadline():
+            if input('Type OPEN to authorize opening, or Enter to cancel: ') != 'OPEN':
+                raise PairingFailure('cancelled')
+            import serial
+            connection = serial.Serial(port=None, baudrate=115200, timeout=0, write_timeout=2)
+            connection.dtr = False
+            connection.rts = False
+            connection.port = args.port
+            try:
+                connection.open()
+            except PairingFailure:
+                raise
+            except Exception:
+                raise PairingFailure('transport_lost') from None
+            _stabilize(connection)
+            print('Check the robot is stable. If it restarted, reopen Companion on its screen before continuing; this program never reopens USB.')
+            if input('Type STABLE after verifying the screen, or Enter to cancel: ') != 'STABLE':
+                raise PairingFailure('cancelled')
+            print('Enter the current token from the protected local sheet or transport-test terminal; never paste it into chat.')
+            with warnings.catch_warnings():
+                warnings.simplefilter('error', getpass.GetPassWarning)
+                token = getpass.getpass('Token (masked): ')
+            request = uuid.uuid4().hex
+            frame = pack_grant(ENDPOINT, DEVICE, token, request)
+            if len(frame) > MAX_FRAME:
+                raise PairingFailure('frame_limit')
+            print('Now physically tap Pair trusted host on the robot (60-second window).')
+            if input('Type PAIR to authorize one write after Ready, or Enter to cancel: ') != 'PAIR':
+                raise PairingFailure('cancelled')
+            receipts = _ReceiptReader(connection)
+            ready = receipts.receive('ready_missing_legacy_or_unsupported')
+            _rejection(ready)
+            if ready.status != READY:
+                raise PairingFailure('unexpected_receipt')
+            print(f'Ready received: boot nonce {ready.boot_nonce}, reset reason code {ready.reset_reason}. This does not establish the cause of the earlier reboot.')
+            intended_length = len(frame)
+            try:
+                written = connection.write(frame)
+            except PairingFailure:
+                raise
+            except Exception:
+                raise PairingFailure('transport_lost') from None
+            token = frame = None
+            if written != intended_length:
+                raise PairingFailure('incomplete_write')
+            staged = receipts.receive('receipt_missing')
+            _rejection(staged)
+            if staged.status == READY:
+                raise PairingFailure('reset_detected' if staged.boot_nonce != ready.boot_nonce else 'window_changed')
+            if staged.status != STAGED:
+                raise PairingFailure('unexpected_receipt')
+            if staged.request != request:
+                raise PairingFailure('request_mismatch')
+            print('Grant staged receipt confirmed. This is not gateway authentication or audio connection. No NVS settings were saved.')
+            print('Keep this port open. Use Connect separately on the robot only when ready; after your test physically tap Mute.')
+            while input('Type MUTED only after physically tapping Mute; the port stays open until then: ') != 'MUTED':
+                print('Port remains open. Physically tap Mute before confirming MUTED.')
+            print('Closing USB after your Mute confirmation. Closing may reset the robot.')
         return 0
+    except PairingFailure as failure:
+        print(f'Pairing stopped: {failure}. No automatic retry. If a frame was sent, physically Mute before retrying.', file=sys.stderr)
+        if str(failure) == 'transport_lost':
+            print('USB transport was lost; reset or re-enumeration is possible, CPU reset is not proven.', file=sys.stderr)
+        return 3
     except (Exception, KeyboardInterrupt):
-        # Never include exception details, traceback, frame, token or argument values.
-        print('Pairing was not completed. Check the terminal, token and serial setup; retry manually.', file=sys.stderr)
+        print('Pairing stopped: input_or_setup_failed. No automatic retry. Physically Mute before retrying.', file=sys.stderr)
         return 3
     finally:
         if connection is not None:
             try:
                 connection.close()
             except Exception:
-                pass  # Do not echo a serial library exception or attempt a second operation.
-        token = frame = None  # Python immutable objects cannot promise secure memory erasure.
-
+                pass
+        token = frame = None  # Immutable Python values cannot promise secure memory erasure.
 
 if __name__ == '__main__':
     raise SystemExit(main())

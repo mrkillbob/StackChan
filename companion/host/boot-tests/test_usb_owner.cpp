@@ -15,6 +15,8 @@ struct SdkDriver {
  bool Install(){++installs;if(!install_ok)return false;installed=true;return true;}
  bool Uninstall(){++uninstalls;if(!uninstall_ok)return false;installed=false;return true;}
  int Read(uint8_t* bytes,size_t capacity){++reads;if(read_error)return -1;size_t n=0;while(n<capacity&&!incoming.empty()){bytes[n++]=incoming.front();incoming.pop_front();}return static_cast<int>(n);}
+ int WriteAck(const uint8_t*,size_t size){return static_cast<int>(size);}
+ bool FlushAck(){return true;}
  void Queue(const std::vector<uint8_t>& bytes){incoming.insert(incoming.end(),bytes.begin(),bytes.end());}
 };
 std::vector<uint8_t> frame(){
@@ -35,8 +37,10 @@ int main(){
  // Stale FIFO bytes (including a complete grant) cannot survive into consent.
  {SdkDriver d;d.Queue(frame());Owner o(d);assert(!o.Open(0,"synthetic-device",true));assert(!o.Active()&&!d.installed&&d.uninstalls==1);assert(fields.credential.empty());}
  {SdkDriver d;d.incoming.resize(4096,'x');Owner o(d);assert(!o.Open(0,"synthetic-device",true));assert(d.reads<=8&&d.uninstalls==1);}
- // Normal frame ingestion uses real receiver parsing, accepts once, then closes.
- {SdkDriver d;Owner o(d);assert(o.Open(10,"synthetic-device",true));d.Queue(frame());assert(o.Poll(11,fields)==Read::Accepted);assert(fields.credential=="synthetic-token-no-authority");assert(!o.Active()&&!o.OwnsDriver()&&d.uninstalls==1);assert(o.Poll(12,fields)==Read::Rejected&&fields.credential.empty());}
+ // Normal frame ingestion uses real receiver parsing, accepts once, retains ownership until staging receipt.
+ {SdkDriver d;Owner o(d);assert(o.Open(10,"synthetic-device",true));d.Queue(frame());assert(o.Poll(11,fields)==Read::Accepted);assert(fields.credential=="synthetic-token-no-authority");assert(!o.Active()&&o.OwnsDriver()&&d.uninstalls==0);assert(o.CompleteAccepted(true,fields.request));assert(!o.OwnsDriver()&&d.uninstalls==1);assert(o.Poll(12,fields)==Read::Rejected&&fields.credential.empty());}
+ // A successful receipt retains the staged outcome even if teardown fails.
+ {SdkDriver d;Owner o(d);assert(o.Open(0,"synthetic-device",true));d.Queue(frame());assert(o.Poll(1,fields)==Read::Accepted);d.uninstall_ok=false;assert(o.CompleteAccepted(true,fields.request)&&o.OwnsDriver());assert(o.LastError()==companion::UsbOwnershipError::CloseFailed);d.uninstall_ok=true;assert(o.Close());}
  // Expired or wrong-core polls reject before reading queued tokens.
  {SdkDriver d;Owner o(d);assert(o.Open(0,"synthetic-device",true));d.Queue(frame());auto n=d.reads;assert(o.Poll(60000,fields)==Read::Rejected);assert(d.reads==n&&d.uninstalls==1&&fields.credential.empty());}
  {SdkDriver d;Owner o(d);assert(o.Open(0,"synthetic-device",true));d.cpu0=false;auto n=d.reads;assert(o.Poll(1,fields)==Read::Rejected);assert(d.reads==n&&d.uninstalls==0&&o.OwnsDriver());d.cpu0=true;assert(o.Close()&&d.uninstalls==1);}

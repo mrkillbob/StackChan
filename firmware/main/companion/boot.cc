@@ -6,6 +6,8 @@
 #include "connect_gate.hpp"
 #include <driver/usb_serial_jtag.h>
 #include <esp_mac.h>
+#include <esp_random.h>
+#include <esp_system.h>
 #include <esp_timer.h>
 #include <cstdio>
 #ifndef STACKCHAN_COMPANION_TRUSTED_USB_PROVISIONING
@@ -44,9 +46,12 @@ struct UsbSdkDriver {
     }
     bool Uninstall() { return usb_serial_jtag_driver_uninstall()==ESP_OK; }
     int Read(uint8_t* bytes,size_t capacity) { return usb_serial_jtag_read_bytes(bytes,capacity,0); }
+    int WriteAck(const uint8_t* bytes,size_t size) { return usb_serial_jtag_write_bytes(bytes,size,pdMS_TO_TICKS(100)); }
+    bool FlushAck() { return usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(100))==ESP_OK; }
 };
 class UsbProvisioner {
     UsbSdkDriver driver_;
+    const uint32_t boot_nonce_=esp_random();
     UsbProvisioningOwner<UsbSdkDriver> owner_{driver_};
 public:
     bool Close() {
@@ -59,9 +64,10 @@ public:
         if(!STACKCHAN_COMPANION_TRUSTED_USB_PROVISIONING)return false;
         uint8_t mac[6];if(esp_read_mac(mac,ESP_MAC_WIFI_STA)!=ESP_OK)return false;
         char device[32];std::snprintf(device,sizeof(device),"stackchan-%02x%02x%02x%02x%02x%02x",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
-        return owner_.Open(esp_timer_get_time()/1000,device,true);
+        return owner_.Open(esp_timer_get_time()/1000,device,true,boot_nonce_?boot_nonce_:1,static_cast<uint32_t>(esp_reset_reason()));
     }
     ProvisioningRead Poll(ProvisioningFields& fields) { return owner_.Poll(esp_timer_get_time()/1000,fields); }
+    bool CompleteAccepted(bool staged,const std::string& request) { return owner_.CompleteAccepted(staged,request); }
 };
 void wifi_event(void*, esp_event_base_t base, int32_t id, void*) {
     if(base==IP_EVENT && id==IP_EVENT_STA_GOT_IP) connected=true;
@@ -163,15 +169,23 @@ void TickView() {
             if(result==ProvisioningRead::Accepted) {
                 AuthorizedGrant grant;grant.uri=fields.uri;grant.device=fields.device;grant.credential=std::move(fields.credential);grant.request=fields.request;
                 grant.host_audio_qualified=STACKCHAN_COMPANION_TRUSTED_USB_PROVISIONING;
-                message=StageAuthorizedGrant(std::move(grant))?"Mira companion\nMuted - grant staged; tap Connect":"Mira companion\nMuted - grant rejected";
+                bool staged=StageAuthorizedGrant(std::move(grant));
+                bool receipt_sent=provisioner.CompleteAccepted(staged,fields.request);
+                if(!receipt_sent&&staged){
+                    std::lock_guard<std::mutex> lock(grant_mutex);
+                    if(pending_grant)std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');
+                    pending_grant.reset();staged=false;
+                }
+                message=staged?"Mira companion\nMuted - grant staged; tap Connect":"Mira companion\nMuted - grant or acknowledgement rejected";
             } else if(result==ProvisioningRead::Rejected) message="Mira companion\nMuted - pairing expired or rejected";
             fields.Clear();
         }
         if(connect_requested.exchange(false)) {
-            provisioner.Close();
+            bool usb_closed=provisioner.Close();
             bool have_grant=false;{std::lock_guard<std::mutex> lock(grant_mutex);have_grant=pending_grant.has_value();}
-            connect_gate.Request(have_grant);
-            if(!have_grant)message="Mira companion\nMuted - trusted host grant required";
+            connect_gate.Request(usb_closed&&have_grant);
+            if(!usb_closed)message="Mira companion\nMuted - USB cleanup pending; tap Mute";
+            else if(!have_grant)message="Mira companion\nMuted - trusted host grant required";
             else if(!wifi_started){wifi_started=StartSavedWifi();message=wifi_started?"Mira companion\nConnecting saved Wi-Fi":"Mira companion\nMuted - Wi-Fi unavailable";}
             else if(!connected){esp_wifi_connect();message="Mira companion\nConnecting saved Wi-Fi";}
         }

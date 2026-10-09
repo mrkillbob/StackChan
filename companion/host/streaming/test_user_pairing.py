@@ -1,150 +1,154 @@
-"""Offline tests: only the human terminal and physical serial boundaries are surrogates."""
-import contextlib
-import importlib.util
+"""Offline: real codec/framing/CLI; terminal, clock and serial boundary are synthetic."""
 import io
+import struct
 import sys
 import types
 import unittest
 from unittest.mock import patch
-
-if importlib.util.find_spec('user_pairing'):
-    import user_pairing
-else:
-    user_pairing = None
+import user_pairing
 from provisioning import unpack_grant
-
-TOKEN = 'offline-fixture-token-NOT-A-CREDENTIAL'
-
+try:
+    import pairing_receipt as codec
+except ImportError:
+    codec = None
+TOKEN='offline-fixture-NOT-A-CREDENTIAL'
+REQUEST='00112233445566778899aabbccddeeff'
+def receipt(status, payload=bytes(16)):
+    return struct.pack('>4sBB16s', b'SCPS', 1, status, payload)
+def ready(nonce=123, reason=1):
+    return receipt(1, struct.pack('>II8s', nonce, reason, bytes(8)))
 class Terminal(io.StringIO):
-    def __init__(self, tty=True): super().__init__(); self.tty = tty
-    def isatty(self): return self.tty
-
-class SerialBoundary:
-    """Surrogate for pyserial's external open/control-line/write/close effects only."""
-    def __init__(self, events, short=False, error=None):
-        object.__setattr__(self, 'events', events)
-        object.__setattr__(self, 'short', short)
-        object.__setattr__(self, 'error', error)
-        object.__setattr__(self, 'frames', [])
-    def __setattr__(self, key, value):
-        self.events.append((key, value)); object.__setattr__(self, key, value)
+    def __init__(self,tty=True):super().__init__();self.tty=tty
+    def isatty(self):return self.tty
+class Clock:
+    def __init__(self):self.now=0
+    def monotonic(self):return self.now
+    def sleep(self,n):self.now+=n
+class Boundary:
+    def __init__(self, events, mode):
+        object.__setattr__(self,'events',events);object.__setattr__(self,'mode',mode)
+        object.__setattr__(self,'phase','initial');object.__setattr__(self,'frames',[])
+        object.__setattr__(self,'pending',b'');object.__setattr__(self,'sent_ready',False)
+    def __setattr__(self,k,v):self.events.append((k,v));object.__setattr__(self,k,v)
     def open(self):
         self.events.append(('open',))
-        if self.error == 'open': raise OSError(TOKEN)
-    def write(self, frame):
-        self.events.append(('write',)); self.frames.append(frame)
-        if self.error == 'write': raise OSError(TOKEN)
-        return len(frame)-1 if self.short else len(frame)
-    def close(self): self.events.append(('close',))
-
-class UserPairingTests(unittest.TestCase):
-    def setUp(self):
-        self.assertIsNotNone(user_pairing, 'user-controlled pairing CLI is not implemented')
-
-    def run_cli(self, *, answer='PAIR', token=TOKEN, tty=(True,True,True), short=False, error=None, args=None):
-        events=[]; boundary=SerialBoundary(events, short, error)
-        streams=[Terminal(flag) for flag in tty]
-        def serial_factory(**kwargs):
-            events.append(('construct', kwargs)); return boundary
-        def confirm(prompt):
-            # Removing reset/Pair disclosure must fail before any serial open.
-            self.assertIn('Pair trusted host', streams[1].getvalue())
-            self.assertIn('reset', streams[1].getvalue().lower())
-            events.append(('confirm',)); return answer
-        def masked(prompt): events.append(('masked-token',)); return token
-        fake=types.SimpleNamespace(Serial=serial_factory)
-        with patch.object(sys,'stdin',streams[0]), patch.object(sys,'stdout',streams[1]), patch.object(sys,'stderr',streams[2]), \
-             patch('builtins.input',confirm), patch('getpass.getpass',masked), patch.dict(sys.modules,{'serial':fake}):
-            result=user_pairing.main(args if args is not None else ['--port','/dev/offline-fixture'])
-        output=streams[1].getvalue()+streams[2].getvalue()
-        self.assertNotIn(TOKEN, output)
-        return result,events,boundary,output
-
-    def test_noninteractive_input_is_denied_before_token_or_serial(self):
-        for flags in [(False,True,True),(True,False,True),(True,True,False)]:
-            with self.subTest(flags=flags):
-                result,events,_,_=self.run_cli(tty=flags)
-                self.assertNotEqual(result,0); self.assertEqual(events,[])
-
-    def test_default_confirmation_denies_all_serial_effects(self):
-        result,events,boundary,_=self.run_cli(answer='')
-        self.assertNotEqual(result,0)
-        self.assertFalse(boundary.frames)
-        self.assertFalse(any(e[0]=='construct' for e in events))
-
-    def test_confirmation_is_exact_and_not_a_yes_shortcut(self):
-        for answer in ['yes','pair',' PAIR ','y']:
-            with self.subTest(answer=answer):
-                result,events,_,_=self.run_cli(answer=answer)
-                self.assertNotEqual(result,0)
-                self.assertFalse(any(e[0]=='construct' for e in events))
-
-    def test_one_write_uses_real_grant_framing_and_pinned_recipient(self):
-        result,events,boundary,output=self.run_cli()
-        self.assertEqual(result,0)
-        self.assertEqual(len(boundary.frames),1)
-        frame=boundary.frames[0]
-        self.assertLessEqual(len(frame),755)
-        self.assertEqual(frame[:5],b'SCPG\x01')
-        uri,device,token,request=unpack_grant(frame)
-        self.assertEqual(uri,'wss://192.168.1.75:18443/companion/audio')
-        self.assertEqual(device,'stackchan-80456b561404')
-        self.assertEqual(token,TOKEN)
-        self.assertTrue(1<=len(request)<=128)
-        self.assertIn('no acknowledgement',output.lower())
-        self.assertIn('screen',output.lower())
-
-    def test_serial_remains_closed_until_control_lines_are_disabled(self):
-        _,events,_,_=self.run_cli()
-        names=[e[0] for e in events]
-        self.assertEqual(names,['masked-token','confirm','construct','dtr','rts','port','open','write','close'])
-        options=events[2][1]
-        self.assertIsNone(options['port'])
-        self.assertEqual(options['baudrate'],115200)
-        self.assertGreater(options['write_timeout'],0)
-        self.assertLessEqual(options['write_timeout'],2)
-        self.assertEqual(events[3:5],[('dtr',False),('rts',False)])
-
-    def test_short_write_closes_without_retry_or_success_claim(self):
-        result,events,boundary,output=self.run_cli(short=True)
-        self.assertNotEqual(result,0)
-        self.assertEqual(len(boundary.frames),1)
-        self.assertEqual(events[-1],('close',))
-        self.assertNotIn('One frame written',output)
-
-    def test_serial_exceptions_never_expose_token_and_always_close(self):
-        for operation in ['open','write']:
-            with self.subTest(operation=operation):
-                result,events,_,_=self.run_cli(error=operation)
-                self.assertNotEqual(result,0); self.assertEqual(events[-1],('close',))
-
-    def test_malformed_or_oversized_token_is_denied_before_serial(self):
-        for token in ['', 'x'*257, 'space token', '\u00e9']:
-            with self.subTest(size=len(token)):
-                result,events,_,_=self.run_cli(token=token)
-                self.assertNotEqual(result,0)
-                self.assertFalse(any(e[0]=='construct' for e in events))
-
-    def test_largest_credential_still_makes_one_bounded_frame(self):
-        result,_,boundary,_=self.run_cli(token='x'*256)
-        self.assertEqual(result,0); self.assertLessEqual(len(boundary.frames[0]),755)
-
-    def test_endpoint_and_device_cannot_be_overridden_through_argv(self):
-        result,events,_,output=self.run_cli(args=['--endpoint',TOKEN,'--device',TOKEN,'--token',TOKEN])
-        self.assertNotEqual(result,0); self.assertEqual(events,[])
+        if self.mode=='open_error':raise OSError(TOKEN)
+    def read(self,n):
+        self.events.append(('read',))
+        if self.mode=='lost':raise OSError(TOKEN)
+        if self.mode=='flood':return b'x'*n
+        if self.phase=='pair' and not self.sent_ready:
+            self.sent_ready=True
+            self.pending= b'' if self.mode=='missing_ready' else (receipt(3) if self.mode=='reject_ready' else (ready()+ready(124) if self.mode=='compound_ready' else ready()))
+        if self.pending:
+            size=n if self.mode=='compound_ready' else min(3,n)
+            chunk=self.pending[:size];self.pending=self.pending[size:];return chunk
+        return b''
+    def write(self,frame):
+        self.events.append(('write',));self.frames.append(frame)
+        if self.mode=='write_error':raise OSError(TOKEN)
+        _,_,_,req=unpack_grant(frame)
+        payload=bytes.fromhex(req)
+        self.pending=self.pending+{'new_boot':ready(124),'repeat_ready':ready(),'expired':receipt(4),'rejected':receipt(3),'wrong_uuid':receipt(2,bytes(16)),'missing_staged':b''}.get(self.mode,receipt(2,payload))
+        return len(frame)-1 if self.mode=='short' else len(frame)
+    def close(self):self.events.append(('close',))
+class CodecTests(unittest.TestCase):
+    def setUp(self):self.assertIsNotNone(codec,'receipt codec missing')
+    def test_ready_wire_fields(self):
+        parsed=codec.decode_receipt(ready(0x12345678,64))
+        self.assertEqual(parsed.status,1);self.assertEqual(parsed.boot_nonce,0x12345678);self.assertEqual(parsed.reset_reason,64)
+    def test_uuid_wire_fields(self):
+        self.assertEqual(codec.decode_receipt(receipt(2,bytes.fromhex(REQUEST))).request,REQUEST)
+    def test_fixed_empty_status_payloads(self):
+        for status in (3,4):self.assertEqual(codec.decode_receipt(receipt(status)).status,status)
+    def test_malformed_frames_rejected(self):
+        bad=[b'',ready()[:-1],ready()+b'x',b'XXXX'+ready()[4:],ready()[:4]+b'\x02'+ready()[5:],receipt(0),receipt(5),ready(0),ready(1,65),receipt(1,struct.pack('>II8s',1,1,b'x'*8)),receipt(3,b'x'*16),receipt(4,b'x'*16)]
+        for frame in bad:
+            with self.subTest(frame=frame):
+                with self.assertRaises(ValueError):codec.decode_receipt(frame)
+class CliTests(unittest.TestCase):
+    def run_cli(self, mode='', answers=None, tty=True, paused=False, token=TOKEN, argv=None):
+        events=[];port=Boundary(events,mode);clock=Clock();streams=[Terminal(tty) for _ in range(3)]
+        choices=iter(answers if answers is not None else ['OPEN','STABLE','PAIR','MUTED'])
+        def prompt(text):
+            answer=next(choices);events.append(('confirm',answer))
+            if answer=='PAIR':port.phase='pair'
+            return answer
+        def masked(text):events.append(('masked',));return token
+        def factory(**kw):events.append(('construct',kw));return port
+        with patch.object(sys,'stdin',streams[0]),patch.object(sys,'stdout',streams[1]),patch.object(sys,'stderr',streams[2]),patch('builtins.input',prompt),patch('getpass.getpass',masked),patch.dict(sys.modules,{'serial':types.SimpleNamespace(Serial=factory)}),patch.object(user_pairing,'_pairing_paused',return_value=paused,create=True),patch.object(user_pairing.time,'monotonic',clock.monotonic),patch.object(user_pairing.time,'sleep',clock.sleep):
+            result=user_pairing.main(argv or ['--port','/dev/offline-fixture'])
+        output=''.join(s.getvalue() for s in streams)
         self.assertNotIn(TOKEN,output)
-
-    def test_masking_failure_is_denied_without_echo_fallback(self):
-        import getpass
-        import warnings
-        def warning(prompt): warnings.warn('terminal unavailable',getpass.GetPassWarning); return TOKEN
-        with patch('getpass.getpass',warning):
-            # Dedicated run avoids replacing the getpass warning surrogate above.
-            events=[]; streams=[Terminal() for _ in range(3)]
-            fake=types.SimpleNamespace(Serial=lambda **kwargs:events.append(kwargs))
-            with patch.object(sys,'stdin',streams[0]),patch.object(sys,'stdout',streams[1]),patch.object(sys,'stderr',streams[2]),patch.dict(sys.modules,{'serial':fake}):
-                result=user_pairing.main(['--port','/dev/offline-fixture'])
-            self.assertNotEqual(result,0);self.assertEqual(events,[])
-            self.assertNotIn(TOKEN,''.join(s.getvalue() for s in streams))
-
-if __name__=='__main__': unittest.main()
+        return result,events,port,output,clock.now
+    def test_pause_blocks_all_input_and_io(self):
+        result,events,port,out,_=self.run_cli(paused=True)
+        self.assertNotEqual(result,0);self.assertEqual(events,[]);self.assertIn('paused',out.lower())
+    def test_non_tty_denied(self):
+        result,events,_,_,_=self.run_cli(tty=False);self.assertNotEqual(result,0);self.assertEqual(events,[])
+    def test_open_default_denies_before_serial_and_token(self):
+        for answer in ('','yes','open',' OPEN '):
+            result,events,_,_,_=self.run_cli(answers=[answer]);self.assertNotEqual(result,0)
+            self.assertEqual(events,[('confirm',answer)])
+    def test_stable_denial_never_requests_token_or_writes(self):
+        result,events,port,_,_=self.run_cli(answers=['OPEN',''])
+        self.assertNotEqual(result,0);self.assertFalse(port.frames);self.assertNotIn(('masked',),events);self.assertEqual(events[-1],('close',))
+    def test_happy_path_order_flags_and_real_frame(self):
+        result,events,port,out,elapsed=self.run_cli()
+        self.assertEqual(result,0);self.assertEqual(len(port.frames),1)
+        self.assertLessEqual(len(port.frames[0]),755)
+        uri,device,token,req=unpack_grant(port.frames[0]);self.assertEqual(uri,user_pairing.ENDPOINT);self.assertEqual(device,user_pairing.DEVICE);self.assertEqual(token,TOKEN);self.assertEqual(len(bytes.fromhex(req)),16)
+        self.assertLess(events.index(('open',)),events.index(('confirm','STABLE')))
+        self.assertLess(events.index(('confirm','STABLE')),events.index(('masked',)))
+        self.assertLess(events.index(('confirm','PAIR')),events.index(('write',)))
+        self.assertLess(events.index(('confirm','MUTED')),events.index(('close',)))
+        self.assertGreaterEqual(elapsed,2)
+        construct=next(e[1] for e in events if e[0]=='construct');self.assertIsNone(construct['port']);self.assertLessEqual(construct['write_timeout'],2)
+        self.assertLess(events.index(('dtr',False)),events.index(('open',)));self.assertLess(events.index(('rts',False)),events.index(('open',)))
+        self.assertIn('staged',out.lower());self.assertIn('reset',out.lower());self.assertIn('not',out.lower())
+    def test_no_ready_never_writes(self):
+        result,_,port,out,elapsed=self.run_cli(mode='missing_ready');self.assertNotEqual(result,0);self.assertFalse(port.frames);self.assertIn('unsupported',out);self.assertLess(elapsed,8)
+    def test_ready_reject_never_writes(self):
+        result,_,port,out,_=self.run_cli(mode='reject_ready');self.assertNotEqual(result,0);self.assertFalse(port.frames);self.assertIn('rejected',out)
+    def test_staged_failure_labels_and_no_retries(self):
+        for mode,label in [('new_boot','reset_detected'),('repeat_ready','window_changed'),('expired','expired'),('rejected','rejected'),('wrong_uuid','request_mismatch'),('missing_staged','receipt_missing'),('short','incomplete_write')]:
+            with self.subTest(mode=mode):
+                result,events,port,out,_=self.run_cli(mode=mode);self.assertNotEqual(result,0);self.assertEqual(len(port.frames),1);self.assertIn(label,out);self.assertEqual(events[-1],('close',))
+    def test_transport_exceptions_sanitized(self):
+        for mode in ('open_error','lost','write_error'):
+            result,events,_,out,_=self.run_cli(mode=mode);self.assertNotEqual(result,0);self.assertIn('transport_lost',out);self.assertEqual(events[-1],('close',))
+    def test_flood_is_bounded(self):
+        result,_,port,out,elapsed=self.run_cli(mode='flood');self.assertNotEqual(result,0);self.assertFalse(port.frames);self.assertIn('input_limit',out);self.assertLess(elapsed,2)
+    def test_invalid_token_does_not_write(self):
+        for token in ('','x'*257,'space token','é'):
+            result,_,port,_,_=self.run_cli(token=token);self.assertNotEqual(result,0);self.assertFalse(port.frames)
+    def test_largest_token_supported(self):
+        result,_,port,_,_=self.run_cli(token='x'*256);self.assertEqual(result,0);self.assertLessEqual(len(port.frames[0]),755)
+    def test_pair_denial_never_writes(self):
+        result,_,port,_,_=self.run_cli(answers=['OPEN','STABLE','']);self.assertNotEqual(result,0);self.assertFalse(port.frames)
+    def test_keep_open_until_exact_muted(self):
+        result,events,_,_,_=self.run_cli(answers=['OPEN','STABLE','PAIR','','muted','MUTED']);self.assertEqual(result,0);self.assertEqual(events[-2:],[('confirm','MUTED'),('close',)])
+    def test_argv_secret_never_echoed(self):
+        result,events,_,_,_=self.run_cli(argv=['--token',TOKEN]);self.assertNotEqual(result,0);self.assertEqual(events,[])
+    def test_alarm_lifecycle_no_prior_alarm_overwrite(self):
+        import signal
+        with patch.object(user_pairing.signal,'getitimer',return_value=(10,0)):
+            result,events,_,out,_=self.run_cli();self.assertNotEqual(result,0);self.assertFalse(any(e[0]=='construct' for e in events));self.assertIn('deadline_unavailable',out)
+    def test_two_receipts_in_one_usb_read_preserve_nonce_change(self):
+        result,_,port,out,_=self.run_cli(mode='compound_ready')
+        self.assertNotEqual(result,0);self.assertEqual(len(port.frames),1);self.assertIn('reset_detected',out)
+    def test_session_expiry_restores_alarm_and_closes_once(self):
+        with patch.object(user_pairing,'_stabilize',side_effect=user_pairing.PairingFailure('session_expired')),patch.object(user_pairing.signal,'getitimer',return_value=(0,0)),patch.object(user_pairing.signal,'getsignal',return_value='prior'),patch.object(user_pairing.signal,'signal') as handler,patch.object(user_pairing.signal,'setitimer') as timer:
+            result,events,port,out,_=self.run_cli()
+        self.assertNotEqual(result,0);self.assertIn('session_expired',out);self.assertEqual(events.count(('close',)),1);self.assertFalse(port.frames)
+        self.assertEqual(timer.call_args_list[-1].args,(user_pairing.signal.ITIMER_REAL,0))
+        self.assertEqual(handler.call_args_list[-1].args,(user_pairing.signal.SIGALRM,'prior'))
+    def test_masking_warning_never_falls_back(self):
+        import getpass,warnings
+        def warning(text):warnings.warn('synthetic',getpass.GetPassWarning)
+        # Standalone fixture invokes the actual warning guard.
+        streams=[Terminal() for _ in range(3)];events=[];port=Boundary(events,'');clock=Clock()
+        with patch.object(sys,'stdin',streams[0]),patch.object(sys,'stdout',streams[1]),patch.object(sys,'stderr',streams[2]),patch('builtins.input',side_effect=['OPEN','STABLE']),patch('getpass.getpass',warning),patch.dict(sys.modules,{'serial':types.SimpleNamespace(Serial=lambda **kw:port)}),patch.object(user_pairing,'_pairing_paused',return_value=False,create=True),patch.object(user_pairing.time,'monotonic',clock.monotonic),patch.object(user_pairing.time,'sleep',clock.sleep):
+            self.assertNotEqual(user_pairing.main(['--port','/dev/offline-fixture']),0)
+        self.assertFalse(port.frames);self.assertEqual(events[-1],('close',))
+if __name__=='__main__':unittest.main()
