@@ -11,7 +11,7 @@ cd /Users/mikedemott/Developer/AgentWork/StackChan/src/upstream/companion/host/s
 /Users/mikedemott/Developer/AgentWork/StackChan/.tools/espressif/python_env/idf5.5_py3.13_env/bin/python user_pairing.py --port <verified-robot-serial-port>
 ```
 
-Replace only the serial-port placeholder with the independently verified robot port. There is no automatic port discovery. Run in a real terminal without redirection; stdin, stdout and stderr must all be TTYs. Verify the printed pinned endpoint and device. Enter the current token at the masked prompt. After that prompt, physically open Companion on the robot and tap **Pair 60s**. Type the exact word `PAIR` only while that window is open. Enter or any other response cancels before the serial port is opened.
+Replace only the serial-port placeholder with the independently verified robot port. There is no automatic port discovery. Run in a real terminal without redirection; stdin, stdout and stderr must all be TTYs. Verify the printed pinned endpoint and device. Enter the current token at the masked prompt. After that prompt, physically open Companion on the robot and tap **Pair trusted host**. Type the exact word `PAIR` only while that window is open. Enter or any other response cancels before the serial port is opened.
 
 Opening a USB-UART serial port MAY reset the robot despite disabling DTR and RTS before opening. That can close the physical Pair window. The CLI cannot detect a reset or an expired pairing window, and it never retries automatically. If the device resets or no staged grant appears, close the attempt, reopen the physical Pair window and manually rerun with a still-valid token; do not assume receipt from the write result.
 

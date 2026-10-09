@@ -48,7 +48,7 @@ class UserPairingTests(unittest.TestCase):
             events.append(('construct', kwargs)); return boundary
         def confirm(prompt):
             # Removing reset/Pair disclosure must fail before any serial open.
-            self.assertIn('Pair 60s', streams[1].getvalue())
+            self.assertIn('Pair trusted host', streams[1].getvalue())
             self.assertIn('reset', streams[1].getvalue().lower())
             events.append(('confirm',)); return answer
         def masked(prompt): events.append(('masked-token',)); return token

@@ -49,7 +49,7 @@ def main(argv=None):
         frame = pack_grant(ENDPOINT, DEVICE, token, uuid.uuid4().hex)
         if len(frame) > MAX_FRAME:
             raise ValueError('frame exceeds receiver limit')
-        print('On the robot, open Companion and physically tap Pair 60s now.')
+        print('On the robot, open Companion and physically tap Pair trusted host now (opens a 60-second window).')
         print('Opening this serial port MAY reset a USB-UART robot even with DTR/RTS disabled.')
         print('If it resets or the pairing window expires, retry manually with a fresh Pair window; no automatic retry occurs.')
         print('This sends one grant frame only. It does not connect audio or save NVS settings.')
