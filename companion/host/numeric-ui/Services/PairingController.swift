@@ -36,7 +36,7 @@ final class PairingController: ObservableObject {
         case .usb_ready, .waiting_robot: return "Keep USB connected. On the robot, tap Pair trusted host."
         case .comparing, .waiting_confirmation: return confirmationSent ? "Confirm the same number on StackChan. Only accept if both numbers match." : "Compare this number with the correct StackChan screen. Confirm on both only if they match."
         case .staging: return "Both confirmations received. Waiting for StackChan’s acknowledgement."
-        case .paired: return "Pairing acknowledged. Audio stays muted. Use Connect and Allow on StackChan for the approved test."
+        case .paired: return "Pairing acknowledged. Keep StackChan muted. Audio needs separate approval."
         case .cancelled: return "Cancelled. Any temporary grant is revoked. Retry starts a fresh attempt."
         case .expired: return "The session expired. Retry starts a fresh attempt; no previous grant is reused."
         case .failed: return "Pairing stopped. Check the robot is muted and connected before a fresh retry."

@@ -148,12 +148,12 @@ class NumericPairing:
 
 class NumericGateway:
     """One pairing socket held through one separately consented audio test."""
-    def __init__(self,pairing,transport):
-        self.pairing=pairing;self.transport=transport;self._candidate=False;self._audio=False
+    def __init__(self,pairing,transport,*,audio_enabled=False):
+        self.pairing=pairing;self.transport=transport;self.audio_enabled=audio_enabled;self._candidate=False;self._audio=False
         self.sockets=set()
     def process_request(self,connection,request):
         if request.path=='/companion/pair' and not self._candidate and self.pairing.state=='waiting_robot':return None
-        if request.path=='/companion/audio' and self.pairing.audio_allowed and not self._audio:
+        if request.path=='/companion/audio' and self.audio_enabled and self.pairing.audio_allowed and not self._audio:
             return self.transport.process_request(connection,request)
         return connection.respond(403,'Pairing unavailable.\n')
     async def handle(self,socket):
@@ -161,7 +161,7 @@ class NumericGateway:
         pending=None
         try:
             if socket.request.path=='/companion/audio':
-                if not self.pairing.audio_allowed or self._audio:raise PairingError('audio_denied')
+                if not self.audio_enabled or not self.pairing.audio_allowed or self._audio:raise PairingError('audio_denied')
                 self._audio=True
                 await self.transport.handle(socket)
                 return

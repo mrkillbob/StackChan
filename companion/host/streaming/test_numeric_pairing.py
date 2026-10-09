@@ -133,6 +133,13 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
             def respond(self,status,text):return status
         class Request:path='/companion/audio'
         self.assertEqual(gateway.process_request(Connection(),Request()),403)
+        core.audio_allowed=True;core.state='paired'
+        self.assertEqual(gateway.process_request(Connection(),Request()),403)
+        class Socket:
+            request=Request()
+            async def close(self):pass
+        await gateway.handle(Socket())
+        self.assertFalse(gateway._audio)
     async def test_partial_numeric_write_no_retry_and_close(self):
         self.assertIsNotNone(n)
         class Port:
