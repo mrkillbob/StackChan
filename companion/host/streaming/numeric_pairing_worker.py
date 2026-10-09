@@ -7,6 +7,7 @@ import argparse
 import asyncio
 from contextlib import asynccontextmanager
 import hashlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -26,7 +27,7 @@ CERT_HASH='7950b01015dc2f80338ec4f35581039213539eac0e6e67f4cadd0207232f3411'
 CERT_BEGIN=1791540049;CERT_END=1791626449
 STATES={'idle','opening','usb_ready','waiting_robot','comparing','waiting_confirmation','staging','paired','cancelled','expired','failed','closed'}
 
-DIAGNOSTIC_REASONS={'expired','cancelled','closed','pair_connection_closed','receipt_missing','reset_detected','window_changed','rejected','setup_or_transport_failed','transport_lost','approval_required','paused','audio_complete','audio_transport_failed'}
+DIAGNOSTIC_REASONS={'expired','cancelled','closed','pair_connection_closed','receipt_missing','reset_detected','window_changed','rejected','setup_or_transport_failed','transport_lost','approval_required','approval_consumed','paused','audio_complete','audio_transport_failed'}
 
 def _transport_projection(value):
     if type(value) is not dict:return None
@@ -42,6 +43,7 @@ def _transport_projection(value):
 class NumericWorker:
     def __init__(self,*,approved=False,paused,serial_factory,runtime_loader,emit,clock=time.monotonic,sleep=asyncio.sleep,consume_approval=lambda:None,audio_enabled=False):
         self.audio_enabled=audio_enabled;self.audio_authorized=False;self.last_transport_result=None
+        self.first_terminal_result=None;self._attempt_authorized=False
         self.approved=approved;self.paused=paused;self.serial_factory=serial_factory;self.runtime_loader=runtime_loader
         self.emit=emit;self.clock=clock;self.sleep=sleep;self.consume_approval=consume_approval
         self.state='idle';self.port=None;self.pairing=None;self.gateway=None;self.task=None;self._closed=False
@@ -54,7 +56,17 @@ class NumericWorker:
         self.state=value['state']
         if value['state'] in ('failed','expired','cancelled','closed') and (self.port is not None or self.gateway is not None or self.cleanup_blocked):
             self._terminal_status=value
-        else:self.emit(value)
+        else:
+            if value['state'] in ('failed','expired','cancelled','closed') and self._attempt_authorized and self.first_terminal_result is None:
+                first={'state':value['state'],'audio_enabled':self.audio_authorized}
+                reason=value.get('message')
+                if type(reason) is str and reason in DIAGNOSTIC_REASONS:first['reason']=reason
+                remaining=value.get('remaining')
+                if type(remaining) is int and 0<=remaining<=120:first['remaining']=remaining
+                transport=_transport_projection(self.last_transport_result) if self.audio_authorized else None
+                if transport is not None:first['transport']=transport
+                self.first_terminal_result=first
+            self.emit(value)
     def pairing_status(self,value):
         self._publish(value)
     async def command(self,command):
@@ -101,13 +113,12 @@ class NumericWorker:
         raise PairingError('ready_missing')
     async def _prepare(self):
         runtime=None
-        self.last_transport_result=None
         try:
-            self.audio_authorized=False
             if self.approved is not True or type(self.audio_enabled) is not bool:raise PairingError('approval_required')
             if self.paused():raise PairingError('paused')
-            self.consume_approval()
-            self.audio_authorized=self.audio_enabled
+            try:self.consume_approval()
+            except FileExistsError:raise PairingError('approval_consumed') from None
+            self.audio_authorized=self.audio_enabled;self.last_transport_result=None;self._attempt_authorized=True
             self._deadline=self.clock()+180;self.pairing=None;self.gateway=None;self._usb_buffer=b'';self._terminal_status=None
             self.status('opening','usb_open_may_reset')
             self.port=self.serial_factory()  # Configured closed, DTR/RTS false.
@@ -181,7 +192,7 @@ class NumericWorker:
                     except Exception:self.last_transport_result=None
                 if not self.cleanup_blocked and self._terminal_status is not None:
                     value=self._terminal_status;self._terminal_status=None
-                    self.state=value['state'];self.emit(value)
+                    self._publish(value)
     async def close(self):
         self._closed=True
         if self.task and not self.task.done():self.task.cancel()
@@ -249,7 +260,22 @@ def _consume_approval(*,audio_enabled=False):
     with (ROOT/'.tools'/marker).open('x') as receipt:
         receipt.write(json.dumps({'consumed_unix':time.time(),'pid':os.getpid(),'audio_allowed':audio_enabled})+'\n')
 
-def _status_metadata(value,*,audio_enabled=False,transport_result=None):
+def _append_history(metadata):
+    line=(json.dumps(metadata,separators=(',',':'))+'\n').encode('utf-8')
+    if len(line)>4096:return
+    path=ROOT/'notes/NUMERIC-PAIRING-STATUS-HISTORY.jsonl'
+    # A locked append never truncates earlier evidence; stop at either bound.
+    with path.open('a+b') as history:
+        fcntl.flock(history.fileno(),fcntl.LOCK_EX)
+        try:
+            size=os.fstat(history.fileno()).st_size
+            if size+len(line)>65536:return
+            history.seek(0);existing=history.read(65536)
+            if existing.count(b'\n')>=128:return
+            history.seek(0,os.SEEK_END);history.write(line);history.flush()
+        finally:fcntl.flock(history.fileno(),fcntl.LOCK_UN)
+
+def _status_metadata(value,*,audio_enabled=False,transport_result=None,first_terminal_result=None):
     state=value.get('state')
     if state not in STATES:raise PairingError('invalid_status')
     metadata={'state':state,'observed_unix':time.time(),'worker_pid':os.getpid(),'audio_enabled':audio_enabled is True}
@@ -260,14 +286,24 @@ def _status_metadata(value,*,audio_enabled=False,transport_result=None):
     if audio_enabled is True:
         projected=_transport_projection(transport_result)
         if projected is not None:metadata['transport']=projected
+    if type(first_terminal_result) is dict and first_terminal_result.get('state') in ('failed','expired','cancelled','closed'):
+        first={'state':first_terminal_result['state'],'audio_enabled':first_terminal_result.get('audio_enabled') is True}
+        reason=first_terminal_result.get('reason')
+        if type(reason) is str and reason in DIAGNOSTIC_REASONS:first['reason']=reason
+        remaining=first_terminal_result.get('remaining')
+        if type(remaining) is int and 0<=remaining<=120:first['remaining']=remaining
+        projected=_transport_projection(first_terminal_result.get('transport')) if first['audio_enabled'] else None
+        if projected is not None:first['transport']=projected
+        metadata['first_terminal']=first
     # No comparison number, credential, raw message or network payload is saved.
+    _append_history(metadata)
     path=ROOT/'notes/NUMERIC-PAIRING-LIVE-STATUS.json'
     temporary=path.with_suffix('.tmp')
     temporary.write_text(json.dumps(metadata)+'\n');temporary.replace(path)
     _output(value)
 
 async def _run(args):
-    worker=NumericWorker(approved=args.approved_test,paused=lambda:(ROOT/'.tools/TRANSPORT-PAIRING-PAUSED').exists(),serial_factory=lambda:_serial_factory(args.port),runtime_loader=lambda:_runtime(args),emit=lambda value:_status_metadata(value,audio_enabled=worker.audio_authorized,transport_result=worker.last_transport_result),consume_approval=lambda:_consume_approval(audio_enabled=args.approved_audio),audio_enabled=args.approved_audio)
+    worker=NumericWorker(approved=args.approved_test,paused=lambda:(ROOT/'.tools/TRANSPORT-PAIRING-PAUSED').exists(),serial_factory=lambda:_serial_factory(args.port),runtime_loader=lambda:_runtime(args),emit=lambda value:_status_metadata(value,audio_enabled=worker.audio_authorized,transport_result=worker.last_transport_result,first_terminal_result=worker.first_terminal_result),consume_approval=lambda:_consume_approval(audio_enabled=args.approved_audio),audio_enabled=args.approved_audio)
     worker.status('idle')
     loop=asyncio.get_running_loop();reader=asyncio.StreamReader(limit=2048);protocol=asyncio.StreamReaderProtocol(reader)
     pipe=None;monitor=None

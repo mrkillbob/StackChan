@@ -10,6 +10,7 @@ final class PairingController: ObservableObject {
     @Published private(set) var cleanupPending = false
     let approved: Bool
     let audioApproved: Bool
+    let oneAttempt: Bool
     private let root: URL
     private var child: Process?
     private var input: FileHandle?
@@ -20,17 +21,18 @@ final class PairingController: ObservableObject {
     private var requiresProcessExit = false
     private var receivedUptime = ProcessInfo.processInfo.systemUptime
     private let processFactory: (() -> Process)?
-    init(approved: Bool, root: URL, processFactory: (() -> Process)? = nil, audioApproved: Bool = false) { self.approved = approved; self.audioApproved = approved && audioApproved; self.root = root; self.processFactory = processFactory }
+    init(approved: Bool, root: URL, processFactory: (() -> Process)? = nil, audioApproved: Bool = false, oneAttempt: Bool = true) { self.oneAttempt = oneAttempt; self.approved = approved; self.audioApproved = approved && audioApproved; self.root = root; self.processFactory = processFactory }
     var canConfirm: Bool { approved && phase == .comparing && code != nil && !confirmationSent }
     var primaryTitle: String {
         if phase == .comparing || phase == .waiting_confirmation { return confirmationSent ? "Waiting for StackChan" : "Confirm match" }
-        if phase.terminal { return "Retry pairing" }
+        if phase.terminal { return oneAttempt ? "New approval needed" : "Retry pairing" }
         return phase == .idle ? "Pair StackChan" : "Pairing…"
     }
-    var canPrimary: Bool { approved && !cleanupPending && (phase == .idle || phase.terminal || canConfirm) }
+    var canPrimary: Bool { approved && !cleanupPending && (phase == .idle || (phase.terminal && !oneAttempt) || canConfirm) }
     var canCancel: Bool { approved && phase.busy && !cleanupPending }
     var instruction: String {
         if !approved { return "Prepared preview. Pairing needs approval for one temporary USB/Wi-Fi check." }
+        if phase.terminal && oneAttempt { return "Session ended. Keep StackChan muted. A fresh approved check is needed before another attempt." }
         switch phase {
         case .idle: return "Open Companion on StackChan and leave it muted. Click Pair StackChan to begin."
         case .opening: return "Opening USB before pairing. Wait for the robot to settle."

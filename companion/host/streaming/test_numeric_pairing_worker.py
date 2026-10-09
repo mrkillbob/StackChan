@@ -355,4 +355,45 @@ class DeadlineReceiptTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(sys.modules,{'websockets.asyncio.server':types.SimpleNamespace(serve=fake_serve)}),patch.object(w.asyncio,'timeout',timeout_context):
             async with runtime.listener(gateway):pass
         self.assertEqual(observed,[111])
+class DiagnosticPreservationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_denied_retry_preserves_original_reason_audio_scope_and_counts(self):
+        fixture=DeadlineReceiptTests();worker,_,_,_,_=await fixture.scenario(listener_delay=118,timeout=True)
+        self.assertEqual(worker.state,'expired');self.assertTrue(worker.audio_authorized)
+        before=dict(worker.last_transport_result);first=dict(worker.first_terminal_result)
+        def denied():raise FileExistsError('synthetic consumed marker')
+        worker.consume_approval=denied
+        await worker.command('retry');await worker.wait()
+        self.assertEqual(worker.first_terminal_result,first);self.assertEqual(worker.first_terminal_result['reason'],'expired')
+        self.assertEqual(worker.last_transport_result,before);self.assertTrue(worker.audio_authorized)
+        self.assertEqual(worker.state,'failed')
+    async def test_first_receipt_snapshot_not_mutable_by_later_stats(self):
+        fixture=DeadlineReceiptTests();worker,_,_,_,_=await fixture.scenario()
+        original=worker.first_terminal_result['transport']['decoded_mic_frames']
+        worker.last_transport_result['decoded_mic_frames']=0
+        self.assertEqual(worker.first_terminal_result['transport']['decoded_mic_frames'],original)
+
+class HistoryTests(unittest.TestCase):
+    setUp=ApprovalMetadataTests.setUp
+    authorization=ApprovalMetadataTests.authorization
+    def test_history_appends_projected_records_and_keeps_first_failure(self):
+        with patch.object(w,'_output'):
+            w._status_metadata({'state':'failed','message':'transport_lost','code':'123456','credential':'synthetic_secret'},audio_enabled=True,transport_result={'decoded_mic_frames':960})
+            w._status_metadata({'state':'failed','message':'approval_consumed'})
+        history=(self.root/'notes/NUMERIC-PAIRING-STATUS-HISTORY.jsonl').read_text().splitlines()
+        records=[json.loads(line) for line in history]
+        self.assertEqual(records[0]['reason'],'transport_lost');self.assertEqual(records[0]['transport']['decoded_mic_frames'],960)
+        self.assertEqual(records[1]['reason'],'approval_consumed');self.assertNotIn('synthetic_secret',''.join(history));self.assertNotIn('123456',''.join(history))
+    def test_history_is_bounded_append_only(self):
+        with patch.object(w,'_output'):
+            for _ in range(140):w._status_metadata({'state':'idle'})
+        path=self.root/'notes/NUMERIC-PAIRING-STATUS-HISTORY.jsonl';before=path.read_bytes()
+        self.assertLessEqual(len(before),65536);self.assertLessEqual(len(before.splitlines()),128)
+        with patch.object(w,'_output'):w._status_metadata({'state':'failed','message':'approval_consumed'})
+        self.assertEqual(path.read_bytes(),before)
+    def test_first_terminal_projection_excludes_unknown_fields(self):
+        first={'state':'failed','reason':'transport_lost','audio_enabled':True,'transport':{'decoded_mic_frames':960,'raw_pcm':b'not-retained'},'credential':'synthetic_secret','code':'123456'}
+        with patch.object(w,'_output'):w._status_metadata({'state':'failed','message':'approval_consumed'},first_terminal_result=first)
+        record=json.loads((self.root/'notes/NUMERIC-PAIRING-LIVE-STATUS.json').read_text())
+        self.assertEqual(record['first_terminal']['reason'],'transport_lost');self.assertEqual(record['first_terminal']['transport']['decoded_mic_frames'],960)
+        self.assertNotIn('credential',record['first_terminal']);self.assertNotIn('raw_pcm',record['first_terminal']['transport'])
 if __name__=='__main__':unittest.main()
