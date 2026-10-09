@@ -1,4 +1,7 @@
 #include "stock_services.h"
+#include "firmware_install_policy.h"
+#include "firmware_install_ui.h"
+#include <board.h>
 #include <apps/apps.h>
 #include <apps/app_setup/workers/workers.h>
 #include <apps/network_setup/persistence_gate.h>
@@ -21,7 +24,7 @@
 
 namespace stock_services {
 namespace {
-constexpr int kFeatureCount = static_cast<int>(Feature::FirmwareCheck) + 1;
+constexpr int kFeatureCount = static_cast<int>(Feature::Onboarding) + 1;
 constexpr uint32_t kPreviewMagic = 0x4E535450;
 struct PreviewCookie { uint32_t magic, feature, inverse; };
 RTC_NOINIT_ATTR PreviewCookie preview_cookie;
@@ -40,6 +43,8 @@ const char* Name(Feature feature)
         case Feature::Rgb: return "RGB strip test";
         case Feature::Account: return "Account";
         case Feature::FirmwareCheck: return "Firmware updates";
+        case Feature::AppCenter: return "APP.CENTER downloads";
+        case Feature::Onboarding: return "Welcome setup";
     }
     return "Native service";
 }
@@ -54,14 +59,16 @@ const char* Effects(Feature feature)
         case Feature::Microphone: return "Opens the original record/playback test. Record Test enables the microphone and speaker.";
         case Feature::Rgb: return "Opens the original RGB strip test. Motors remain off.";
         case Feature::Account: return "Connects Wi-Fi and reads the vendor account/device status. Unbind and reset require the original confirmations.";
-        case Feature::FirmwareCheck: return "Connects Wi-Fi and checks the vendor firmware version. No firmware is downloaded or installed.";
+        case Feature::FirmwareCheck: return "Checks vendor firmware updates. Installing requires a separate confirmation and replaces this custom firmware.";
+        case Feature::AppCenter: return "Opens the original vendor app catalog. Installing a listed app replaces this custom firmware after a separate confirmation.";
+        case Feature::Onboarding: return "Runs the original Welcome, Skip, servo test and phone setup wizard. Start enables motors for the test.";
     }
     return "";
 }
 bool NeedsMotion(Feature feature)
 {
     return feature == Feature::Avatar || feature == Feature::EspNow ||
-        feature == Feature::EzData || feature == Feature::Dance || feature == Feature::Servo;
+        feature == Feature::EzData || feature == Feature::Dance || feature == Feature::Servo || feature == Feature::Onboarding;
 }
 bool NeedsFreshRuntime()
 {
@@ -211,13 +218,13 @@ public:
     }
 };
 
-// The original SystemUpdateWorker automatically upgrades and reboots. This
-// worker performs the real version query and displays its result, without any
-// Upgrade/StartUpgrade call or custom firmware replacement.
+// Query original update metadata, then offer a separate local confirmation
+// before any firmware download or image write.
 class FirmwareCheckWorker final : public setup_workers::WorkerBase {
     lv_obj_t* root_ = nullptr;
     lv_obj_t* result_ = nullptr;
     std::atomic<bool> back_{false};
+    std::string firmware_url_, firmware_version_;
 public:
     FirmwareCheckWorker()
     {
@@ -253,11 +260,23 @@ public:
         else if (ota.HasNewVersion()) result += "Available: " + ota.GetFirmwareVersion().substr(0, 128) +
             "\nInstalling vendor firmware replaces this custom build.";
         else result += "No newer vendor firmware is listed.";
-        result += "\nNo firmware was downloaded or installed.";
+        if (error == ESP_OK && ota.HasNewVersion() && IsFirmwareImageUrl(ota.GetFirmwareUrl())) {
+            firmware_url_ = ota.GetFirmwareUrl(); firmware_version_ = ota.GetFirmwareVersion();
+        }
+        result += "\nInstallation requires confirmation.";
         GetHAL().lvglLock();
         lv_label_set_text(result_, result.c_str());
         lv_obj_update_layout(result_);
-        lv_obj_set_y(button, std::max(182, static_cast<int>(lv_obj_get_y(result_) + lv_obj_get_height(result_) + 14)));
+        if (!firmware_url_.empty()) {
+            auto install = lv_button_create(root_); lv_obj_set_size(install,294,48);
+            lv_obj_set_pos(install,10,lv_obj_get_y(result_)+lv_obj_get_height(result_)+14);
+            auto label = lv_label_create(install);lv_label_set_text(label,"Review installation");lv_obj_center(label);
+            lv_obj_add_event_cb(install,[](lv_event_t* event){
+                auto self=static_cast<FirmwareCheckWorker*>(lv_event_get_user_data(event));
+                OfferFirmwareInstall(self->firmware_url_,self->firmware_version_);
+            },LV_EVENT_CLICKED,this);
+            lv_obj_set_y(button,lv_obj_get_y(install)+62);
+        } else lv_obj_set_y(button, std::max(182, static_cast<int>(lv_obj_get_y(result_) + lv_obj_get_height(result_) + 14)));
     }
     ~FirmwareCheckWorker() override { if (root_) lv_obj_delete(root_); }
     void update() override { if (back_) _is_done = true; }
@@ -270,6 +289,7 @@ std::unique_ptr<setup_workers::WorkerBase> ActualWorker(Feature feature)
         case Feature::Rgb: return std::make_unique<setup_workers::RgbTestWorker>();
         case Feature::Account: return std::make_unique<setup_workers::AccountWorker>();
         case Feature::FirmwareCheck: return std::make_unique<FirmwareCheckWorker>();
+        case Feature::Onboarding: return std::make_unique<setup_workers::StartupWorker>();
         default: return nullptr;
     }
 }
@@ -288,7 +308,7 @@ public:
         LvglLockGuard lock;
         if (worker_) worker_->update();
         GetStackChan().update();
-        if (!worker_ || worker_->isDone()) ReturnHome();
+        if (!worker_ || worker_->isDone()) { worker_.reset(); ReturnHome(); }
     }
     void onClose() override { ReturnHome(); }
 };
@@ -299,6 +319,7 @@ std::unique_ptr<mooncake::AppAbility> ActualApp(Feature feature)
         case Feature::EspNow: return std::make_unique<AppEspnowControl>();
         case Feature::EzData: return std::make_unique<AppEzdata>();
         case Feature::Dance: return std::make_unique<AppDance>();
+        case Feature::AppCenter: return std::make_unique<AppAppCenter>();
         default: return std::make_unique<WorkerHost>(feature);
     }
 }
@@ -363,6 +384,7 @@ std::optional<Feature> ConsumePreviewRequest()
         NeedsFreshRuntime() || !companion::AcquireAudio(companion::AudioOwner::Native)) ReturnHome();
     preview_cookie = {};
     active.store(static_cast<int>(feature));
+    if(feature==Feature::AppCenter||feature==Feature::FirmwareCheck||feature==Feature::Avatar||feature==Feature::EzData||feature==Feature::Account)Board::GetInstance().GetUuid();
     auto status = SessionControls(feature); // precedes hardware, network and every native constructor
     if (!GetHAL().prepareStockFeatureHardware(NeedsMotion(feature), feature == Feature::Avatar)) {
         {

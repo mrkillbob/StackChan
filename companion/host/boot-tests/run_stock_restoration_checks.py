@@ -15,8 +15,11 @@ with tempfile.TemporaryDirectory(prefix="stackchan-stock-tests-") as temporary:
     generated = temp / "backend"
     subprocess.run(["python3", str(main / "apps/stock_agent/generate_backend.py"), "--xiaozhi", str(repo / "firmware/xiaozhi-esp32/main"), "--wifi", str(repo / "firmware/managed_components/78__esp-wifi-connect"), "--output", str(generated)], check=True)
     cases = [
+        ("advanced_config", [repo / "firmware/tests/advanced_config_test.cpp"], [main]),
+        ("firmware_policy", [repo / "firmware/tests/firmware_install_policy_test.cpp"], [main]),
         ("credentials", [tests / "test_wifi_credentials.cpp"], [main]),
         ("wifi_store", [tests / "test_wifi_store.cpp", generated / "stock_ssid_manager.cc"], [tests / "wifi-store-fixture", main, repo / "firmware/managed_components/78__esp-wifi-connect/include"]),
+        ("firmware_migration", [tests / "test_firmware_migration.cpp", generated / "stock_ssid_manager.cc", main / "apps/stock_services/firmware_install_migration.cc"], [tests / "wifi-store-fixture", main, repo / "firmware/managed_components/78__esp-wifi-connect/include"]),
         ("scoped_settings", [tests / "test_readonly.cpp", main / "companion/readonly_settings.cc"], [tests, main, repo / "firmware/xiaozhi-esp32/main"]),
         ("tools_ui", [tests / "test_tools_ui.cpp"], [main / "apps/stock_shell", main / "companion"]),
         ("stock_models", [tests / "test_stock_models.cpp"], [main / "apps/stock_shell"]),
@@ -25,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix="stackchan-stock-tests-") as temporary:
         binary = temp / name
         command = [args.compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror"]
         # Match ESP-IDF's existing vendor signed-index comparison exemption.
-        if name == "wifi_store": command.append("-Wno-sign-compare")
+        if name in ("wifi_store", "firmware_migration"): command.append("-Wno-sign-compare")
         command += ["-I" + str(path) for path in includes]
         command += [str(path) for path in sources] + ["-o", str(binary)]
         subprocess.run(command, check=True)

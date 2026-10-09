@@ -620,8 +620,11 @@ public:
 
     virtual std::string GetUuid() override
     {
-        if (uuid_.empty() && companion::CurrentAudioOwner() == companion::AudioOwner::Stock) {
-            uuid_ = GenerateUuid(); // RAM only after explicit Start
+        if (uuid_.empty() && (companion::CurrentAudioOwner() == companion::AudioOwner::Stock ||
+            (companion::CurrentAudioOwner() == companion::AudioOwner::Native && stock_services::IsActive()))) {
+            Settings identity("board", true);
+            uuid_ = GenerateUuid();
+            identity.SetString("uuid", uuid_); // Stable original activation identity after explicit Start.
         }
         return uuid_;
     }

@@ -32,29 +32,24 @@ def replace_region(source, begin, end, replacement):
 def generate(xiaozhi, wifi, output):
     output.mkdir(parents=True, exist_ok=True)
     source = pinned(xiaozhi / 'application.cc', 'application.cc')
-    source = replace_once(source, '    mcp_server.AddUserOnlyTools();',
-        '    // Update/reboot/asset-download user tools are excluded in the selectable-agent build.')
-    source = replace_region(source, 'void Application::CheckAssetsVersion() {',
-        'void Application::CheckNewVersion() {', '''void Application::CheckAssetsVersion() {
-    if (assets_version_checked_) return;
-    assets_version_checked_ = true;
-    auto& assets = Assets::GetInstance();
-    // Apply local assets and voice models only. Never consume saved download_url.
-    if (assets.partition_valid()) assets.Apply();
-}''')
+    source = '#include <apps/stock_services/firmware_install_policy.h>\n#include <apps/stock_services/firmware_install_ui.h>\n#include <hal/hal.h>\n' + source
     source = replace_once(source, '''        if (ota_->HasNewVersion()) {
             if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
                 return; // This line will never be reached after reboot
             }
             // If upgrade failed, continue to normal operation
-        }''', '        // Activation metadata is retained; firmware downloads are never accepted.')
-    source = replace_region(source,
+        }''', '''        if (ota_->HasNewVersion()) {
+            stock_services::OfferFirmwareInstall(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion());
+        }''')
+    source = replace_once(source,
         'bool Application::UpgradeFirmware(const std::string& url, const std::string& version) {',
-        'void Application::WakeWordInvoke(const std::string& wake_word) {',
         '''bool Application::UpgradeFirmware(const std::string& url, const std::string& version) {
-    (void)url; (void)version;
-    return false; // Explicit firmware installation belongs to the host workflow.
-}''')
+    if (!stock_services::FirmwareInstallAllowed()) {
+        stock_services::OfferFirmwareInstall(url, version);
+        return false;
+    }
+    if (!stock_services::IsFirmwareImageUrl(url)) return false;''')
+    source = replace_once(source, '    esp_restart();', '    GetHAL().reboot();')
     (output / 'stock_application.cc').write_text(source)
 
     source = pinned(xiaozhi / 'ota.cc', 'ota.cc')
@@ -64,13 +59,23 @@ def generate(xiaozhi, wifi, output):
     source = replace_once(source,
         '        ESP_LOGE(TAG, "Failed to activate, code: %d, body: %s", status_code, http->ReadAll().c_str());',
         '        ESP_LOGE(TAG, "Failed to activate, code: %d", status_code);')
-    source = replace_region(source,
+    source = '#include <apps/stock_services/firmware_install_policy.h>\n#include <apps/stock_services/firmware_install_ui.h>\n' + source
+    source = replace_once(source,
         'bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback) {',
-        'bool Ota::StartUpgrade(std::function<void(int progress, size_t speed)> callback) {',
         '''bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback) {
-    (void)firmware_url; (void)callback;
-    return false; // No OTA firmware download or flash writes in this variant.
-}''')
+    if (!stock_services::FirmwareInstallAllowed() ||
+        !stock_services::IsFirmwareImageUrl(firmware_url) ||
+        !stock_services::PrepareOriginalFirmwareWifi()) return false;''')
+    source = replace_once(source, '    if (content_length == 0) {',
+        '    if (content_length < sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t) || content_length > update_partition->size) {')
+    source = replace_once(source, '    auto http = network->CreateHttp(0);\n    if (!http->Open("GET", firmware_url)) {',
+        '    auto http = network->CreateHttp(0);\n    http->SetTimeout(4000);\n    if (!http->Open("GET", firmware_url)) {')
+    source = replace_once(source, '            heap_caps_free(buffer);\n            return false;\n        }\n\n        // Calculate speed',
+        '            if (image_header_checked) esp_ota_abort(update_handle);\n            heap_caps_free(buffer);\n            return false;\n        }\n        if (total_read + static_cast<size_t>(ret) > content_length || (ret == 0 && total_read != content_length)) {\n            if (image_header_checked) esp_ota_abort(update_handle);\n            heap_caps_free(buffer);\n            return false;\n        }\n\n        // Calculate speed')
+    source = replace_once(source, '    auto last_calc_time = esp_timer_get_time();\n    while (true) {',
+        '    auto last_calc_time = esp_timer_get_time();\n    const auto install_deadline = last_calc_time + 180000000;\n    while (true) {\n        if (esp_timer_get_time() > install_deadline) {\n            if (image_header_checked) esp_ota_abort(update_handle);\n            heap_caps_free(buffer);\n            return false;\n        }')
+    source = replace_once(source, '            image_header.append(buffer, buffer_offset);',
+        '            image_header.assign(buffer, buffer_offset);')
     (output / 'stock_ota.cc').write_text(source)
 
     source = pinned(xiaozhi / 'boards/common/wifi_board.cc', 'boards/common/wifi_board.cc')
@@ -78,6 +83,12 @@ def generate(xiaozhi, wifi, output):
         Application::GetInstance().Alert("Stock AI", "Wi-Fi failed. Stop / Home to return.", "triangle_exclamation");
         return;
     }''')
+    source = '#include <apps/network_setup/persistence_gate.h>\n' + source
+    source = replace_once(source,
+        '    Application::GetInstance().SetDeviceState(kDeviceStateWifiConfiguring);',
+        '    Application::GetInstance().SetDeviceState(kDeviceStateWifiConfiguring);\n    network_setup::BeginStockWifiProvisioningSession();')
+    source = replace_once(source, '            case WifiEvent::ConfigModeExit:',
+        '            case WifiEvent::ConfigModeExit:\n                network_setup::EndStockWifiProvisioningSession();')
     (output / 'stock_wifi_board.cc').write_text(source)
 
     source = pinned(wifi / 'wifi_manager.cc', 'wifi_manager.cc')
@@ -89,9 +100,12 @@ def generate(xiaozhi, wifi, output):
     (output / 'stock_wifi_manager.cc').write_text(source)
 
     source = pinned(wifi / 'wifi_configuration_ap.cc', 'wifi_configuration_ap.cc')
-    source = '#include <apps/network_setup/wifi_credentials.hpp>\n#include <apps/network_setup/persistence_gate.h>\n' + source
+    source = '#include <apps/network_setup/wifi_credentials.hpp>\n#include <apps/network_setup/advanced_config.hpp>\n#include <apps/network_setup/persistence_gate.h>\n' + source
+    source = replace_once(source,
+        '        .uri = "/submit",\n        .method = HTTP_POST,\n        .handler = [](httpd_req_t *req) -> esp_err_t {',
+        '        .uri = "/submit",\n        .method = HTTP_POST,\n        .handler = [](httpd_req_t *req) -> esp_err_t {\n            if (!network_setup::CredentialPersistenceAllowed()) { httpd_resp_set_status(req, "403 Forbidden"); httpd_resp_set_type(req, "application/json"); httpd_resp_send(req, "{\\\"success\\\":false,\\\"error\\\":\\\"Setup session ended\\\"}", HTTPD_RESP_USE_STRLEN); return ESP_OK; }')
     source = replace_once(source, '            this_->Save(ssid_str, password_str);',
-        '            this_->Save(ssid_str, password_str);\n            if (network_setup::CredentialPersistenceAllowed() && !network_setup::CredentialSaveSucceeded()) { cJSON_Delete(json); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Wi-Fi connected but could not be saved"); return ESP_OK; }')
+        '            this_->Save(ssid_str, password_str);\n            if (!network_setup::CredentialPersistenceAllowed() || !network_setup::CredentialSaveSucceeded()) { cJSON_Delete(json); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Wi-Fi connected but could not be saved"); return ESP_OK; }')
 
     source = replace_once(source, '    strlcpy((char *)wifi_config.sta.ssid, ssid.c_str(), 32);\n    strlcpy((char *)wifi_config.sta.password, password.c_str(), 64);',
         '    if (!network_setup::Valid({ssid, password})) return false;\n    memcpy(wifi_config.sta.ssid, ssid.data(), ssid.size());\n    memcpy(wifi_config.sta.password, password.data(), password.size());')
@@ -106,16 +120,88 @@ def generate(xiaozhi, wifi, output):
     end = '    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &advanced_submit));'
     first = source.index(begin)
     last = source.index(end, first) + len(end)
-    source = source[:first] + r'''    // Persistent advanced changes are unavailable in a session-only adapter.
+    source = source[:first] + r'''    // Original advanced fields, fixed keys/types, only during explicit setup.
     httpd_uri_t advanced_submit = {
         .uri = "/advanced/submit",
         .method = HTTP_POST,
         .handler = [](httpd_req_t *req) -> esp_err_t {
-            httpd_resp_set_status(req, "403 Forbidden");
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_set_hdr(req, "Connection", "close");
-            httpd_resp_send(req, "{\"success\":false,\"error\":\"Persistent settings are preserved; use normal Wi-Fi setup for this session\"}", HTTPD_RESP_USE_STRLEN);
-            return ESP_OK;
+            auto respond = [req](const char* status, const char* body) {
+                httpd_resp_set_status(req, status);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_set_hdr(req, "Connection", "close");
+                httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+                return ESP_OK;
+            };
+            if (!network_setup::CredentialPersistenceAllowed())
+                return respond("403 Forbidden", "{\"success\":false,\"error\":\"Setup session ended\"}");
+            if (req->content_len < 2 || req->content_len > 1024)
+                return respond("400 Bad Request", "{\"success\":false,\"error\":\"Invalid request size\"}");
+            std::string body(req->content_len, '\0');
+            size_t received = 0;
+            while (received < body.size()) {
+                int count = httpd_req_recv(req, body.data() + received, body.size() - received);
+                if (count <= 0) return respond("400 Bad Request", "{\"success\":false,\"error\":\"Incomplete request\"}");
+                received += count;
+            }
+            cJSON* json = cJSON_ParseWithLengthOpts(body.c_str(), body.size() + 1, nullptr, true);
+            bool valid = cJSON_IsObject(json) && body.find("\\u0000") == std::string::npos && body.find('\0') == std::string::npos;
+            auto* this_ = static_cast<WifiConfigurationAp*>(req->user_ctx);
+            std::string url = this_->ota_url_;
+            int power = this_->max_tx_power_;
+            bool remember = this_->remember_bssid_, sleep = this_->sleep_mode_;
+            unsigned seen = 0;
+            for (auto* item = valid ? json->child : nullptr; item; item = item->next) {
+                unsigned bit = 0;
+                if (strcmp(item->string, "ota_url") == 0) {
+                    bit = 1;
+                    if (!cJSON_IsString(item) || !item->valuestring) valid = false;
+                    else {
+                        url = item->valuestring;
+                        if (!network_setup::ValidActivationUrl(url)) valid = false;
+                    }
+                } else if (strcmp(item->string, "max_tx_power") == 0) {
+                    bit = 2;
+                    if (!cJSON_IsNumber(item) || !network_setup::ValidTxPower(item->valuedouble)) valid = false;
+                    else power = item->valueint;
+                } else if (strcmp(item->string, "remember_bssid") == 0) {
+                    bit = 4;
+                    if (!cJSON_IsBool(item)) valid = false;
+                    else remember = cJSON_IsTrue(item);
+                } else if (strcmp(item->string, "sleep_mode") == 0) {
+                    bit = 8;
+                    if (!cJSON_IsBool(item)) valid = false;
+                    else sleep = cJSON_IsTrue(item);
+                } else valid = false;
+                if (seen & bit) valid = false;
+                seen |= bit;
+            }
+            cJSON_Delete(json);
+            if (!valid || !seen) return respond("400 Bad Request", "{\"success\":false,\"error\":\"Invalid settings\"}");
+            if (!network_setup::CredentialPersistenceAllowed())
+                return respond("403 Forbidden", "{\"success\":false,\"error\":\"Setup session ended\"}");
+            int8_t old_power = this_->max_tx_power_;
+            auto err = (seen & 2) ? esp_wifi_set_max_tx_power(power) : ESP_OK;
+            nvs_handle_t handle = 0;
+            if (err == ESP_OK) err = nvs_open("wifi", NVS_READWRITE, &handle);
+            if (err == ESP_OK && (seen & 1)) err = nvs_set_str(handle, "ota_url", url.c_str());
+            if (err == ESP_OK && (seen & 2)) err = nvs_set_i8(handle, "max_tx_power", power);
+            if (err == ESP_OK && (seen & 4)) err = nvs_set_u8(handle, "remember_bssid", remember ? 1 : 0);
+            if (err == ESP_OK && (seen & 8)) err = nvs_set_u8(handle, "sleep_mode", sleep ? 1 : 0);
+            if (err == ESP_OK) err = nvs_commit(handle);
+            if (handle) nvs_close(handle);
+            if (err != ESP_OK) {
+                if (seen & 2) {
+                    auto restore = esp_wifi_set_max_tx_power(old_power);
+                    if (restore != ESP_OK) ESP_LOGE(TAG, "Could not restore Wi-Fi power: %d", restore);
+                }
+                return respond("500 Internal Server Error", "{\"success\":false,\"error\":\"Could not save settings\"}");
+            }
+            this_->ota_url_ = url;
+            this_->max_tx_power_ = power;
+            this_->remember_bssid_ = remember;
+            this_->sleep_mode_ = sleep;
+            // Saving the activation endpoint never downloads firmware.
+            return respond("200 OK", "{\"success\":true}");
         },
         .user_ctx = this
     };

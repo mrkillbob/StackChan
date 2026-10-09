@@ -2,6 +2,9 @@
 // Explicit, bounded network setup using official StackChan World / browser flows.
 #include "network_setup.h"
 #include <apps/app_setup/workers/workers.h>
+#include <apps/stock_services/policy.h>
+#include <application.h>
+#include <settings.h>
 #include <assets/assets.h>
 #include <companion/audio_owner.hpp>
 #include <companion/boot.h>
@@ -22,10 +25,29 @@ constexpr uint64_t setup_timeout_ms = 5 * 60 * 1000;
 constexpr uint32_t preview_magic = 0x57494650; // WIFP: stopped preview, no consent
 RTC_NOINIT_ATTR uint32_t preview_cookie;
 std::atomic<bool> persistence_allowed{false};
+enum class PersistenceScope { Standalone, NativeOnboarding, StockWifi };
+std::atomic<PersistenceScope> persistence_scope{PersistenceScope::Standalone};
+std::atomic<uint32_t> persistence_deadline{0};
 std::atomic<bool> network_started{false};
 std::atomic<int> save_result{0}; // 0 pending, 1 committed, -1 rejected
 std::atomic<bool> browser_exit{false};
 uint64_t NowMs() { return static_cast<uint64_t>(esp_timer_get_time()) / 1000; }
+bool NativeOnboardingOwnsScope() {
+    return companion::CurrentAudioOwner() == companion::AudioOwner::Native &&
+        stock_services::IsActive() &&
+        stock_services::CurrentFeature() == stock_services::Feature::Onboarding;
+}
+bool StockWifiOwnsScope() {
+    return companion::CurrentAudioOwner() == companion::AudioOwner::Stock &&
+        Application::GetInstance().GetDeviceState() == kDeviceStateWifiConfiguring;
+}
+void OpenPersistenceScope(PersistenceScope scope) {
+    persistence_deadline = static_cast<uint32_t>(NowMs() + setup_timeout_ms);
+    save_result = 0;
+    network_started = true;
+    persistence_scope = scope;
+    persistence_allowed = true;
+}
 
 [[noreturn]] void ReturnHome() {
     persistence_allowed = false;
@@ -122,7 +144,7 @@ class Controller {
         if (companion::NetworkWasStarted() || network_started.load() ||
             WifiManager::GetInstance().IsInitialized()) RestartPreview();
         network_started = true; // partial initialization also requires a reset
-        persistence_allowed = true;
+        OpenPersistenceScope(PersistenceScope::Standalone);
         save_result = 0;
         browser_exit = false;
         deadline_ = NowMs() + setup_timeout_ms;
@@ -239,8 +261,45 @@ bool ConsumePreviewRequest() {
     preview_cookie = 0;
     return requested;
 }
-bool CredentialPersistenceAllowed() { return persistence_allowed.load(); }
-void NotifyCredentialsSaved(bool success) { save_result = success ? 1 : -1; }
+bool BeginOriginalOnboardingSession() {
+    if (!NativeOnboardingOwnsScope()) return false;
+    OpenPersistenceScope(PersistenceScope::NativeOnboarding);
+    return true;
+}
+void EndOriginalOnboardingSession() { persistence_allowed = false; }
+bool BeginStockWifiProvisioningSession() {
+    if (!StockWifiOwnsScope()) return false;
+    OpenPersistenceScope(PersistenceScope::StockWifi);
+    return true;
+}
+void EndStockWifiProvisioningSession() {
+    if (persistence_scope.load() == PersistenceScope::StockWifi) persistence_allowed = false;
+}
+bool CredentialPersistenceAllowed() {
+    if (!persistence_allowed.load()) return false;
+    auto scope = persistence_scope.load();
+    bool owns_scope = scope == PersistenceScope::NativeOnboarding ? NativeOnboardingOwnsScope() :
+        scope == PersistenceScope::StockWifi ? StockWifiOwnsScope() :
+        companion::CurrentAudioOwner() == companion::AudioOwner::None;
+    if (!owns_scope) {
+        persistence_allowed = false;
+        return false;
+    }
+    if (static_cast<int32_t>(static_cast<uint32_t>(NowMs()) - persistence_deadline.load()) >= 0) {
+        persistence_allowed = false;
+        return false;
+    }
+    return true;
+}
+void NotifyCredentialsSaved(bool success) {
+    save_result = success ? 1 : -1;
+    // Completed explicit setup marks its completion flag. Failed
+    // credential commits preserve the prior flag and never configure the device.
+    if (success && CredentialPersistenceAllowed()) {
+        Settings configured("app_config", true);
+        configured.SetBool("is_configed", true);
+    }
+}
 bool CredentialSaveSucceeded() { return save_result.load() > 0; }
 bool NetworkWasStarted() { return network_started.load(); }
 }

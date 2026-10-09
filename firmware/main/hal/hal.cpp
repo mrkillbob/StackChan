@@ -106,6 +106,9 @@ std::string Hal::getFactoryMacString(std::string divider)
 
 void Hal::reboot()
 {
+#ifdef STACKCHAN_COMPANION_BOOT
+    setServoPowerEnabled(false);setLaserEnabled(false);showRgbColor(0,0,0);
+#endif
     esp_restart();
 }
 

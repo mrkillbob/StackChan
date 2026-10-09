@@ -201,6 +201,12 @@ void AppSetup::onOpen()
         }
     }
 #endif
+#ifdef STACKCHAN_COMPANION_BOOT
+    _menu_sections.front().items.push_back({"Welcome Setup", [this](){
+        _destroy_menu=true;_worker.reset();companion::SetSettingsScope(companion::SettingsScope::None);
+        _worker=stock_services::MakeWorker(stock_services::Feature::Onboarding);
+    }});
+#endif
     LvglLockGuard lock;
 
     _menu_page = std::make_unique<view::SelectMenuPage>(_menu_sections);

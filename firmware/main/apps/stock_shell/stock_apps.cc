@@ -17,6 +17,7 @@
 #include <stackchan/stackchan.h>
 #include <stackchan/avatar/skins/default/default.h>
 #include <esp_random.h>
+#include <esp_system.h>
 #include <esp_timer.h>
 #include <lvgl.h>
 #include <atomic>
@@ -628,7 +629,7 @@ public:
     int stock_agent_id = install(stock_agent::MakeApp(), "Stock AI", "Start the original AI service with saved Wi-Fi or its setup flow.");
     std::map<stock_services::Feature,int> native_ids;
     using Feature=stock_services::Feature;
-    for(auto feature:{Feature::Avatar,Feature::EspNow,Feature::EzData,Feature::Dance,Feature::Servo,Feature::Microphone,Feature::Rgb,Feature::Account,Feature::FirmwareCheck}) {
+    for(auto feature:{Feature::Avatar,Feature::EspNow,Feature::EzData,Feature::Dance,Feature::Servo,Feature::Microphone,Feature::Rgb,Feature::Account,Feature::FirmwareCheck,Feature::AppCenter,Feature::Onboarding}) {
         auto app=stock_services::MakeApp(feature);
         auto name=app->getAppInfo().name;
         native_ids[feature]=install(std::move(app), name.c_str(), "Start this original service; Stop / Home returns to the launcher.");
@@ -642,6 +643,7 @@ public:
     if (stock_agent::ConsumePreviewRequest()) { stopped_preview=true; launcher->openApp(stock_agent_id); }
     if (network_setup::ConsumePreviewRequest()) { stopped_preview=true; launcher->openApp(network_id); }
     if (auto feature=stock_services::ConsumePreviewRequest()) { stopped_preview=true; launcher->openApp(native_ids.at(*feature)); }
+    if (!stopped_preview && !GetHAL().isAppConfiged() && esp_reset_reason()!=ESP_RST_SW) { stopped_preview=true; launcher->openApp(native_ids.at(Feature::Onboarding)); }
     if (!stopped_preview && stock_agent::AutoStartRequested()) {
         stock_agent::AuthorizeAutoStart();
         shell.uninstallAllApps();
@@ -656,9 +658,9 @@ public:
         if(auto feature=stock_services::ConsumeRequest()) {
             shell.uninstallAllApps();
             mooncake::DestroyMooncake();
-            companion::SetSettingsScope(*feature==Feature::Servo ? companion::SettingsScope::Calibration :
+            companion::SetSettingsScope((*feature==Feature::Servo || *feature==Feature::Onboarding) ? companion::SettingsScope::Calibration :
                 *feature==Feature::Account ? companion::SettingsScope::Account :
-                (*feature==Feature::Avatar || *feature==Feature::EzData) ? companion::SettingsScope::RemoteService : companion::SettingsScope::None);
+                (*feature==Feature::Avatar || *feature==Feature::EzData || *feature==Feature::AppCenter || *feature==Feature::FirmwareCheck) ? companion::SettingsScope::RemoteService : companion::SettingsScope::None);
             stock_services::RunFeature(*feature);
         }
         if (stock_agent::ConsumeStartRequest()) {

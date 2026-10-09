@@ -6,6 +6,7 @@
 #include <apps/app_ai_agent/app_ai_agent.h>
 #include <companion/boot.h>
 #include <companion/audio_owner.hpp>
+#include <companion/settings_policy.hpp>
 #include <hal/hal.h>
 #include <hal/board/hal_bridge.h>
 #include <stackchan/stackchan.h>
@@ -176,6 +177,8 @@ void AuthorizeAutoStart() {
 [[noreturn]] void RunStockAgent() {
     if (!start_authorized.exchange(false) || (companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized()) ||
         !companion::AcquireAudio(companion::AudioOwner::Stock)) ReturnHome();
+    companion::SetSettingsScope(companion::SettingsScope::StockRuntime);
+    Board::GetInstance().GetUuid();
     hal_bridge::set_xiaozhi_mode(true);
     SessionControls(); // present before audio/network/provisioning activation
     // Root's HAL prepares motion/camera, MCP and the power policy before the

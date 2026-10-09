@@ -35,4 +35,17 @@ assert(writes==3&&commits==3);
 network_setup::gate=false;
 {Settings s("app_config",true);s.SetBool("is_configed",false);}
 assert(writes==3&&commits==3&&opens==closes);
+companion::SetSettingsScope(companion::SettingsScope::StockRuntime);
+{Settings s("board",true);s.SetString("uuid","no-owner");}
+assert(writes==3&&commits==3);
+assert(companion::AcquireAudio(companion::AudioOwner::Stock));
+{Settings s("board",true);s.SetString("uuid","persistent");s.SetString("other","blocked");}
+{Settings s("mqtt",true);s.SetString("endpoint","persisted");assert(s.GetString("endpoint","nvs-default")=="nvs-default");}
+{Settings s("audio",true);s.SetInt("output_volume",50);s.SetInt("gain",8);}
+{Settings s("display",true);s.SetInt("brightness",70);}
+{Settings s("assets",true);s.SetString("download_url","https://example.com/assets");s.EraseKey("download_url");}
+assert(writes==9&&commits==8&&opens==closes);
+companion::ReleaseAudio(companion::AudioOwner::Stock);
+companion::SetSettingsScope(companion::SettingsScope::None);
+
 }
