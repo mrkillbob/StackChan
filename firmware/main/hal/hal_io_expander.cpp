@@ -15,6 +15,7 @@ static std::unique_ptr<m5::PY32IOExpander_Class> _io_expander;
 
 void Hal::io_expander_init()
 {
+    if (_io_expander) return;
     mclog::tagInfo(_tag, "init");
 
     auto i2c_bus        = hal_bridge::board_get_i2c_bus();
@@ -41,7 +42,11 @@ void Hal::io_expander_init()
         // VM EN
         _io_expander->setDirection(0, true);  // Output
         _io_expander->setPullMode(0, true);   // Pull-up
+        #ifdef STACKCHAN_COMPANION_BOOT
+        GetHAL().setServoPowerEnabled(false); // RGB setup never powers motors.
+#else
         GetHAL().setServoPowerEnabled(true);
+#endif
         vTaskDelay(pdMS_TO_TICKS(200));
 
         // RGB

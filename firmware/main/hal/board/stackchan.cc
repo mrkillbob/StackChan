@@ -1,4 +1,6 @@
 #include "wifi_board.h"
+#include <apps/stock_services/policy.h>
+#include <companion/settings_policy.hpp>
 #include "cores3_audio_codec.h"
 #include "display/lcd_display.h"
 #include "stackchan_display.h"
@@ -322,7 +324,7 @@ private:
     LvglDisplay* display_;
     StackChanCamera* camera_ = nullptr;
     esp_timer_handle_t touchpad_timer_;
-    PowerSaveTimer* power_save_timer_;
+    PowerSaveTimer* power_save_timer_ = nullptr;
     hal_bridge::XiaozhiConfig_t xiaozhi_config_;
     bool last_power_save_enabled_      = false;
     int64_t last_power_state_check_ms_ = 0;
@@ -463,8 +465,13 @@ private:
                 [](void* arg) {
                     M5StackCoreS3Board* board = (M5StackCoreS3Board*)arg;
                     board->PollTouchpad();
-        #ifndef STACKCHAN_COMPANION_BOOT
-            board->PollPowerSaveState();
+#ifdef STACKCHAN_COMPANION_BOOT
+                    if(companion::CurrentAudioOwner()==companion::AudioOwner::Stock) {
+                        if(!board->power_save_timer_)board->InitializePowerSaveTimer();
+                        board->PollPowerSaveState();
+                    }
+#else
+                    board->PollPowerSaveState();
 #endif
                 },
             .arg                   = this,
@@ -635,6 +642,9 @@ public:
 
     virtual Camera* GetCamera() override
     {
+        #ifdef STACKCHAN_COMPANION_BOOT
+        if (!camera_ && (stock_services::AllowsCamera() || companion::CurrentAudioOwner()==companion::AudioOwner::Stock)) InitializeCamera();
+#endif
         return camera_;
     }
 
@@ -739,29 +749,20 @@ uint8_t hal_bridge::board_get_backlight_brightness()
 
 void hal_bridge::board_set_speaker_volume(uint8_t volume, bool permanent)
 {
-    auto& board      = Board::GetInstance();
-    auto audio_codec = board.GetAudioCodec();
-    if (audio_codec) {
-        Settings settings("audio", false);
-        const int persisted_volume = settings.GetInt("output_volume", audio_codec->output_volume());
-        audio_codec->SetOutputVolume(volume);
-        if (!permanent) {
-            Settings writable_settings("audio", true);
-            writable_settings.SetInt("output_volume", persisted_volume);
-            return;
-        }
-    }
+    auto codec=Board::GetInstance().GetAudioCodec();
+    if(!codec)return;
+    auto scope=companion::CurrentSettingsScope();
+    companion::SetSettingsScope(companion::SettingsScope::None);
+    codec->SetOutputVolume(volume);
+    companion::SetSettingsScope(scope);
+    // Codec::SetOutputVolume persists through Settings only inside the explicit
+    // Volume scope; permanent Confirm is the sole allowed persistent operation.
+    if(permanent){Settings settings("audio",true);settings.SetInt("output_volume",volume);}
 }
-
 uint8_t hal_bridge::board_get_speaker_volume()
 {
-    int volume = 70;
-    Settings settings("audio", false);
-    volume = settings.GetInt("output_volume", volume);
-    if (volume <= 0) {
-        volume = 10;
-    }
-    return volume;
+    auto codec=Board::GetInstance().GetAudioCodec();
+    return codec ? codec->output_volume() : 70;
 }
 
 void hal_bridge::toggle_xiaozhi_chat_state()

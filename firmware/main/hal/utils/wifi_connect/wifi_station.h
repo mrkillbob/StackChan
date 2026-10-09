@@ -3,6 +3,7 @@
 
 #include <string>
 #include <functional>
+#include <mutex>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
@@ -19,7 +20,7 @@ public:
     StackChanWifiStation();
     ~StackChanWifiStation();
 
-    void AddAuth(const std::string& ssid, const std::string& password);
+    bool AddAuth(const std::string& ssid, const std::string& password);
     void Start();
     void Stop();
     bool IsConnected();
@@ -27,10 +28,12 @@ public:
     int8_t GetRssi();
     std::string GetSsid() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return ssid_;
     }
     std::string GetIpAddress() const
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return ip_address_;
     }
     uint8_t GetChannel();
@@ -41,6 +44,15 @@ public:
     void OnConnectFailed(std::function<void(const std::string& ssid)> on_connect_failed);
 
 private:
+    mutable std::mutex mutex_;
+    std::string pending_password_;
+    bool pending_ = false;
+    bool associated_ = false;
+    bool awaiting_disconnect_ = false;
+    bool committing_ = false;
+    bool ApplyPending();
+    void FailPending();
+    void WipePendingLocked();
     EventGroupHandle_t event_group_;
     esp_event_handler_instance_t instance_any_id_ = nullptr;
     esp_event_handler_instance_t instance_got_ip_ = nullptr;

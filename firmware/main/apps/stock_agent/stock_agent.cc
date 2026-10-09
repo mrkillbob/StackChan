@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Explicit-start adapter for the pinned official Stock AI.AGENT lifecycle.
 #include "stock_agent.h"
+#include <apps/network_setup/persistence_gate.h>
+#include <wifi_manager.h>
 #include <apps/app_ai_agent/app_ai_agent.h>
 #include <companion/boot.h>
 #include <companion/audio_owner.hpp>
@@ -75,13 +77,13 @@ public:
         lv_obj_set_style_text_color(panel_, lv_color_hex(0xffffff), 0);
         lv_obj_set_style_text_font(panel_, &lv_font_montserrat_16, 0);
         Label(panel_, "Stock AI.AGENT - stopped", 10, 10, 300);
-        Label(panel_, "Start enables vendor AI, microphone and wake word.\nCamera / motion off.\nStop / Home restarts launcher.", 10, 43, 300);
-        notice_ = Label(panel_, companion::NetworkWasStarted()
+        Label(panel_, "Start enables cloud AI, microphone/wake word, camera and motors.\nStop / Home restarts launcher.", 10, 43, 300);
+        notice_ = Label(panel_, (companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized())
             ? "Wi-Fi was used. Restart this\nstopped preview, then tap Start."
             : "Wi-Fi setup: phone browser.\nStock vendor activation.\nWi-Fi changes last this session.",
             10, 128, 300);
         Button("Back", 10, 192, 90, 1);
-        Button(companion::NetworkWasStarted() ? "Restart preview" : "Start", 112, 192, 198, 2);
+        Button((companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized()) ? "Restart preview" : "Start", 112, 192, 198, 2);
     }
     void onRunning() override {
         auto action = action_.exchange(0);
@@ -92,7 +94,7 @@ public:
             lv_label_set_text(notice_, "Audio is still stopping.\nRetry Start.");
             return;
         }
-        if (companion::NetworkWasStarted()) {
+        if ((companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized())) {
             preview_cookie = preview_magic;
             esp_restart(); // no start request survives reset
             return;
@@ -109,7 +111,7 @@ public:
 };
 
 void SessionTimer(lv_timer_t*) {
-    GetStackChan().update(); // only avatar modifiers are installed in this build
+    // The original HAL background task owns avatar/motion/reminder updates.
     auto state = Application::GetInstance().GetDeviceState();
     const char* text = "Stock AI - starting";
     switch (state) {
@@ -162,14 +164,20 @@ bool ConsumePreviewRequest() {
     preview_cookie = 0;
     return requested;
 }
+bool AutoStartRequested() {
+    return esp_reset_reason() != ESP_RST_SW && hal_bridge::get_xiaozhi_config().startAiAgentOnBoot;
+}
+void AuthorizeAutoStart() {
+    if (AutoStartRequested()) start_authorized = true;
+}
 [[noreturn]] void RunStockAgent() {
-    if (!start_authorized.exchange(false) || companion::NetworkWasStarted() ||
+    if (!start_authorized.exchange(false) || (companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized()) ||
         !companion::AcquireAudio(companion::AudioOwner::Stock)) ReturnHome();
     hal_bridge::set_xiaozhi_mode(true);
     SessionControls(); // present before audio/network/provisioning activation
-    auto& app = Application::GetInstance();
-    app.Initialize();
-    app.Run();
+    // Root's HAL prepares motion/camera, MCP and the power policy before the
+    // official reminder/update task and Application lifecycle begin.
+    GetHAL().startXiaozhi();
     ReturnHome();
 }
 }

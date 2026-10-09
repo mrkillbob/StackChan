@@ -89,6 +89,19 @@ def generate(xiaozhi, wifi, output):
     (output / 'stock_wifi_manager.cc').write_text(source)
 
     source = pinned(wifi / 'wifi_configuration_ap.cc', 'wifi_configuration_ap.cc')
+    source = '#include <apps/network_setup/wifi_credentials.hpp>\n#include <apps/network_setup/persistence_gate.h>\n' + source
+    source = replace_once(source, '            this_->Save(ssid_str, password_str);',
+        '            this_->Save(ssid_str, password_str);\n            if (network_setup::CredentialPersistenceAllowed() && !network_setup::CredentialSaveSucceeded()) { cJSON_Delete(json); httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Wi-Fi connected but could not be saved"); return ESP_OK; }')
+
+    source = replace_once(source, '    strlcpy((char *)wifi_config.sta.ssid, ssid.c_str(), 32);\n    strlcpy((char *)wifi_config.sta.password, password.c_str(), 64);',
+        '    if (!network_setup::Valid({ssid, password})) return false;\n    memcpy(wifi_config.sta.ssid, ssid.data(), ssid.size());\n    memcpy(wifi_config.sta.password, password.data(), password.size());')
+    source = replace_once(source, '            if (!this_->ConnectToWifi(ssid_str, password_str)) {',
+        '            if (!network_setup::Valid({ssid_str, password_str}) || !this_->ConnectToWifi(ssid_str, password_str)) {')
+    source = replace_once(source, '            std::string password_str = "";',
+        '            if (!cJSON_IsString(password_item) || !password_item->valuestring || strlen(password_item->valuestring) > 64) { cJSON_Delete(json); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid password"); return ESP_OK; }\n            std::string password_str = "";')
+    source = replace_once(source, '    ESP_LOGI(TAG, "Save SSID %s %d", ssid.c_str(), ssid.length());',
+        '    // No credential or network-name logging.')
+
     begin = '    // Register the /advanced/submit URI'
     end = '    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &advanced_submit));'
     first = source.index(begin)
@@ -110,15 +123,73 @@ def generate(xiaozhi, wifi, output):
     source = replace_once(source,
         '            ESP_LOGI(TAG, "SmartConfig SSID: %s, Password: %s", ssid, password);',
         '            // Never log Wi-Fi credentials.')
+    source = replace_once(source, '            self->Save(ssid, password);',
+        '            // SmartConfig credentials are not saved before a verified connection.')
+    # Suppress network names in logs; local setup UI still receives the scan list.
+    lines = source.splitlines(keepends=True)
+    clean = []; index = 0
+    while index < len(lines):
+        line = lines[index]
+        if 'ESP_LOG' in line and ('%s' in line) and ('SSID' in line or 'WiFi' in line):
+            while ');' not in lines[index]: index += 1
+            clean.append('    // Wi-Fi name omitted from logs.\n')
+        else: clean.append(line)
+        index += 1
+    source = ''.join(clean)
     (output / 'stock_wifi_configuration_ap.cc').write_text(source)
 
     source = pinned(wifi / 'ssid_manager.cc', 'ssid_manager.cc')
+    source = '#include <apps/network_setup/persistence_gate.h>\n#include <apps/network_setup/wifi_credentials.hpp>\n' + source
+    source = replace_once(source, '    ssid_list_.clear();\n\n    // Load ssid', """    ssid_list_.clear();
+    nvs_handle_t saved = 0;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &saved) == ESP_OK) {
+        size_t size = 0;
+        if (nvs_get_blob(saved, "config_v1", nullptr, &size) == ESP_OK && size <= 1024) {
+            std::vector<uint8_t> blob(size);
+            std::vector<network_setup::Credential> credentials;
+            if (nvs_get_blob(saved, "config_v1", blob.data(), &size) == ESP_OK &&
+                network_setup::Decode(blob.data(), size, credentials)) {
+                for (const auto& item : credentials) ssid_list_.push_back({item.ssid, item.password});
+                nvs_close(saved);
+                return;
+            }
+        }
+        nvs_close(saved);
+    }
+    // Legacy keys remain untouched and serve as a fallback after a damaged blob.
+    // Load ssid""")
+    source = replace_once(source, '        ssid_list_.push_back({ssid, password});',
+        '        if (network_setup::Valid({ssid, password})) ssid_list_.push_back({ssid, password});')
     source = replace_region(source, 'void SsidManager::SaveToNvs() {',
         'void SsidManager::AddSsid(const std::string& ssid, const std::string& password) {',
-        '''void SsidManager::SaveToNvs() {
-    // Phone provisioning changes only this session's SSID list. Existing NVS
-    // credentials and other namespaces remain unchanged across Stop / Home.
-}''')
+        """void SsidManager::SaveToNvs() {
+    if (!network_setup::CredentialPersistenceAllowed()) return;
+    std::vector<network_setup::Credential> credentials;
+    for (const auto& item : ssid_list_) credentials.push_back({item.ssid, item.password});
+    std::vector<uint8_t> blob;
+    if (!network_setup::Encode(credentials, blob)) {
+        network_setup::NotifyCredentialsSaved(false); return;
+    }
+    nvs_handle_t handle = 0;
+    auto result = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (result == ESP_OK) {
+        result = nvs_set_blob(handle, "config_v1", blob.data(), blob.size());
+        if (result == ESP_OK) result = nvs_commit(handle);
+        nvs_close(handle);
+    }
+    // One atomic NVS blob update; legacy Wi-Fi, calibration and account keys stay intact.
+    network_setup::NotifyCredentialsSaved(result == ESP_OK);
+}""")
+    source = replace_region(source, 'void SsidManager::AddSsid(const std::string& ssid, const std::string& password) {',
+        'void SsidManager::RemoveSsid(int index) {', """void SsidManager::AddSsid(const std::string& ssid, const std::string& password) {
+    if (!network_setup::Valid({ssid, password})) { network_setup::NotifyCredentialsSaved(false); return; }
+    for (auto iter = ssid_list_.begin(); iter != ssid_list_.end(); ++iter) {
+        if (iter->ssid == ssid) { ssid_list_.erase(iter); break; }
+    }
+    if (ssid_list_.size() >= MAX_WIFI_SSID_COUNT) ssid_list_.pop_back();
+    ssid_list_.insert(ssid_list_.begin(), {ssid, password});
+    SaveToNvs();
+}""")
     (output / 'stock_ssid_manager.cc').write_text(source)
 
 if __name__ == '__main__':

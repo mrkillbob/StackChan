@@ -9,26 +9,12 @@
 #include <mooncake_log.h>
 #include <assets/assets.h>
 #include <stackchan/stackchan.h>
-#include <atomic>
 #include <apps/common/common.h>
 
 #ifdef STACKCHAN_COMPANION_BOOT
-namespace {
-class LockedFeatureWorker : public setup_workers::WorkerBase {
-    lv_obj_t* root_=nullptr;std::atomic<bool> back_{false};
-public:
-    explicit LockedFeatureWorker(const std::string& feature) {
-        root_=lv_obj_create(lv_screen_active());lv_obj_set_size(root_,320,240);
-        auto text=lv_label_create(root_);lv_obj_set_width(text,280);
-        std::string message=feature+"\nRetained in stock source.\nThis action needs separate feature qualification; camera, motion, credentials and vendor transfer remain inactive.";
-        lv_label_set_text(text,message.c_str());lv_obj_align(text,LV_ALIGN_TOP_MID,0,12);
-        auto button=lv_button_create(root_);lv_obj_align(button,LV_ALIGN_BOTTOM_MID,0,-12);auto label=lv_label_create(button);lv_label_set_text(label,"Back");
-        lv_obj_add_event_cb(button,[](lv_event_t* e){static_cast<LockedFeatureWorker*>(lv_event_get_user_data(e))->back_=true;},LV_EVENT_CLICKED,this);
-    }
-    ~LockedFeatureWorker(){lv_obj_delete(root_);}
-    void update()override{if(back_.load())_is_done=true;}
-};
-}
+#include <companion/settings_policy.hpp>
+#include <apps/network_setup/network_setup.h>
+#include <apps/stock_services/stock_services.h>
 #endif
 using namespace mooncake;
 using namespace view;
@@ -60,6 +46,9 @@ void AppSetup::onOpen()
     _destroy_menu    = false;
     _need_warm_reset = false;
     _magic_count     = 0;
+#ifdef STACKCHAN_COMPANION_BOOT
+    companion::SetSettingsScope(companion::SettingsScope::None);
+#endif
 
     _menu_sections = {
         {
@@ -140,6 +129,10 @@ void AppSetup::onOpen()
                      if (_magic_count >= 10) {
                          _magic_count  = 0;
                          _destroy_menu = true;
+#ifdef STACKCHAN_COMPANION_BOOT
+                         _worker.reset();
+                         companion::SetSettingsScope(companion::SettingsScope::None);
+#endif
                          _worker       = std::make_unique<FwVersionWorker>();
                      }
                  }},
@@ -159,10 +152,53 @@ void AppSetup::onOpen()
     };
 
 #ifdef STACKCHAN_COMPANION_BOOT
-    for(auto& section:_menu_sections)for(auto& item:section.items) {
-        if(item.label=="Brightness" || item.label=="Volume") { item.label+=" (this boot)";continue; }
-        const auto feature=item.label;
-        item.onClick=[this,feature](){_destroy_menu=true;_worker=std::make_unique<LockedFeatureWorker>(feature);};
+    // Lightweight settings remain native workers. Radio/hardware/account work
+    // opens an explicit preview and transfers to its isolated runtime on Start.
+    // Keep the unmodified callbacks above for the original non-companion build.
+    using Scope = companion::SettingsScope;
+    using Feature = stock_services::Feature;
+    for (auto& section : _menu_sections) {
+        for (auto& item : section.items) {
+            Scope scope = Scope::None;
+            std::function<std::unique_ptr<WorkerBase>()> factory;
+            if (item.label == "Change Wi-Fi") factory = [] { return network_setup::MakeWorker(); };
+            else if (item.label == "Brightness") {
+                scope = Scope::Brightness;
+                factory = [] { return std::make_unique<BrightnessSetupWorker>(); };
+            } else if (item.label == "Volume") {
+                scope = Scope::Volume;
+                factory = [] { return std::make_unique<VolumeSetupWorker>(); };
+            } else if (item.label == "Timezone") {
+                scope = Scope::Timezone;
+                factory = [] { return std::make_unique<TimezoneWorker>(); };
+            } else if (item.label == "General") {
+                scope = Scope::AiGeneral;
+                factory = [] { return std::make_unique<XiaozhiGeneralWorker>(); };
+            } else if (item.label == "Power Saving") {
+                scope = Scope::AiPower;
+                factory = [] { return std::make_unique<XiaozhiPowerSavingWorker>(); };
+            } else if (item.label == "Servo") {
+                factory = [] { return stock_services::MakeWorker(Feature::Servo); };
+            } else if (item.label == "Microphone") {
+                factory = [] { return stock_services::MakeWorker(Feature::Microphone); };
+            } else if (item.label == "RGB Strip") {
+                factory = [] { return stock_services::MakeWorker(Feature::Rgb); };
+            } else if (item.label == "Unbind & Reset") {
+                factory = [] { return stock_services::MakeWorker(Feature::Account); };
+            } else if (item.label == "Check for Updates") {
+                factory = [] { return stock_services::MakeWorker(Feature::FirmwareCheck); };
+            }
+            // The version row keeps its original ten-tap FwVersionWorker.
+            if (!factory) continue;
+            item.onClick = [this, scope, factory]() {
+                _destroy_menu = true;
+                _need_warm_reset = false;
+                // Destroy the old worker while its own scope is still active.
+                _worker.reset();
+                companion::SetSettingsScope(scope);
+                _worker = factory();
+            };
+        }
     }
 #endif
     LvglLockGuard lock;
@@ -190,6 +226,10 @@ void AppSetup::onRunning()
         _worker->update();
         if (_worker->isDone()) {
             _worker.reset();
+#ifdef STACKCHAN_COMPANION_BOOT
+            // Confirmed values are saved by worker destructors above.
+            companion::SetSettingsScope(companion::SettingsScope::None);
+#endif
             _menu_page = std::make_unique<view::SelectMenuPage>(_menu_sections);
         }
     }
@@ -209,11 +249,16 @@ void AppSetup::onClose()
     _menu_sections.clear();
     _menu_page.reset();
     _worker.reset();
+#ifdef STACKCHAN_COMPANION_BOOT
+    companion::SetSettingsScope(companion::SettingsScope::None);
+#endif
 
     view::destroy_home_indicator();
     view::destroy_status_bar();
 
+#ifndef STACKCHAN_COMPANION_BOOT
     if (_need_warm_reset) {
         GetHAL().requestWarmReboot(6);
     }
+#endif
 }

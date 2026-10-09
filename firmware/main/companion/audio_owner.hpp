@@ -1,7 +1,7 @@
 #pragma once
 #include <atomic>
 namespace companion {
-enum class AudioOwner { None, Mira, Stock };
+enum class AudioOwner { None, Mira, Stock, Native };
 inline std::atomic<AudioOwner> audio_owner{AudioOwner::None};
 inline bool AcquireAudio(AudioOwner owner) {
  if(owner==AudioOwner::None)return false;

@@ -7,5 +7,10 @@ std::unique_ptr<mooncake::AppAbility> MakeApp();
 bool ConsumeStartRequest();
 // One-shot stopped preview, never an active session, on intentional software reset only.
 bool ConsumePreviewRequest();
+// A legacy boot_ai flag alone never authorizes boot activation. Software resets,
+// including Stop/Home, always return to the stopped launcher.
+bool AutoStartRequested();
+// One-shot authorization for the root boot dispatcher after validating opt-in.
+void AuthorizeAutoStart();
 [[noreturn]] void RunStockAgent();
 }

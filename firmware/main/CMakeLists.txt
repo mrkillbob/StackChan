@@ -379,6 +379,7 @@ if(STACKCHAN_COMPANION_BOOT AND NOT CMAKE_BUILD_EARLY_EXPANSION)
         "${STOCK_BACKEND_DIR}/stock_ssid_manager.cc"
         "${STOCK_BACKEND_DIR}/stock_wifi_configuration_ap.cc")
     set_property(TARGET ${STOCK_WIFI_LIB} PROPERTY SOURCES "${STOCK_WIFI_SOURCES}")
+    target_include_directories(${STOCK_WIFI_LIB} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME

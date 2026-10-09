@@ -143,6 +143,8 @@ void WifiSetupWorker::update_state()
             if (_is_first_in) {
                 _is_first_in = false;
 
+                // Retrying the original setup must keep exactly one event subscriber.
+                GetHAL().onAppConfigEvent.disconnect(_app_config_signal_id);
                 // Start app config server
                 _app_config_signal_id =
                     GetHAL().onAppConfigEvent.connect([this](AppConfigEvent event) { _last_app_config_event = event; });

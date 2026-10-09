@@ -302,6 +302,8 @@ public:
     void getMicWaveformFrame(std::vector<int16_t>& data);
     void clearupMicTest();
 
+    bool prepareStockFeatureHardware(bool motion, bool camera);
+
 private:
     bool _xiaozhi_start_requested = false;
 

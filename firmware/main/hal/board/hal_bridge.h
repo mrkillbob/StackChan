@@ -50,6 +50,8 @@ void xiaozhi_board_init();
 void start_xiaozhi_app();
 bool is_xiaozhi_ready();
 bool is_xiaozhi_idle();
+// In the companion build, startAiAgentOnBoot is validated against the explicit
+// custom-firmware stock_optin setting; a legacy boot_ai value alone is ignored.
 XiaozhiConfig_t get_xiaozhi_config();
 void set_xiaozhi_config(const XiaozhiConfig_t& config);
 

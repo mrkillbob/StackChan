@@ -3,6 +3,10 @@
 #include "stock_tools_hw.h"
 #include "tools_ui.hpp"
 #include <apps/stock_agent/stock_agent.h>
+#include <apps/network_setup/network_setup.h>
+#include <apps/stock_services/stock_services.h>
+#include <companion/settings_policy.hpp>
+#include <map>
 #include <apps/stock_app_center/stock_app_center.h>
 #include <optional>
 #include <apps/apps.h>
@@ -132,57 +136,6 @@ public:
         auto action = action_.exchange(0);
         if (Back(action)) return;
         companion::TickView();
-    }
-};
-class GatedApp : public Page {
-    const char* reason_;
-
-public:
-    GatedApp(const mooncake::AppAbility::AppInfo_t& info, const char* reason) : reason_(reason)
-    {
-        setAppInfo() = info;
-    }
-    void onOpen() override
-    {
-        Panel(getAppInfo().name.c_str());
-        LvglLockGuard lock;
-        Text(reason_, 12, 48, 294);
-    }
-    void onRunning() override
-    {
-        Back(action_.exchange(0));
-    }
-};
-class AvatarApp : public Page {
-public:
-    AvatarApp()
-    {
-        AppAvatar source;
-        setAppInfo() = source.getAppInfo();
-    }
-    void onOpen() override
-    {
-        Panel("Local avatar");
-        LvglLockGuard lock;
-        auto avatar = std::make_unique<stackchan::avatar::DefaultAvatar>();
-        avatar->init(root_);
-        GetStackChan().attachAvatar(std::move(avatar));
-        Button("Back", 260, 2, 56, 28, 999);
-    }
-    void onRunning() override
-    {
-        if (Back(action_.exchange(0))) return;
-        LvglLockGuard lock;
-        GetStackChan().update();
-    }
-    void onClose() override
-    {
-        {
-            LvglLockGuard lock;
-            GetStackChan().clearModifiers();
-            GetStackChan().resetAvatar();
-        }
-        Page::onClose();
     }
 };
 class ToolsApp : public Page {
@@ -673,28 +626,41 @@ public:
     };
     install(std::make_unique<CompanionApp>(), "Mira Companion", "Connect a trusted Mira host and allow this conversation.");
     int stock_agent_id = install(stock_agent::MakeApp(), "Stock AI", "Start the original AI service with saved Wi-Fi or its setup flow.");
-    install(std::make_unique<AvatarApp>(), "Avatar", "Show the local avatar with camera and motion inactive.");
-    AppEspnowControl remote;
-    shell.installApp(std::make_unique<GatedApp>(remote.getAppInfo(),
-                                                "Stock ESP-NOW control is retained.\nRadio pairing and remote motor "
-                                                "control remain inactive pending separate feature qualification."));
-    AppEzdata data;
-    shell.installApp(std::make_unique<GatedApp>(
-        data.getAppInfo(), "Stock EzData is retained.\nAccount binding and vendor data transfer remain inactive."));
-    AppDance dance;
-    shell.installApp(std::make_unique<GatedApp>(dance.getAppInfo(),
-                                                "Stock Dance is retained.\nMotors and BLE control remain inactive. "
-                                                "Motion requires separate per-feature qualification and consent."));
-    install(std::make_unique<AppSetup>(), "Setup", "Adjust this boot's brightness and volume.");
+    std::map<stock_services::Feature,int> native_ids;
+    using Feature=stock_services::Feature;
+    for(auto feature:{Feature::Avatar,Feature::EspNow,Feature::EzData,Feature::Dance,Feature::Servo,Feature::Microphone,Feature::Rgb,Feature::Account,Feature::FirmwareCheck}) {
+        auto app=stock_services::MakeApp(feature);
+        auto name=app->getAppInfo().name;
+        native_ids[feature]=install(std::move(app), name.c_str(), "Start this original service; Stop / Home returns to the launcher.");
+    }
+    int network_id=install(network_setup::MakeApp(), "Wi-Fi Setup", "Change saved Wi-Fi using the original phone app or browser.");
+    install(std::make_unique<AppSetup>(), "Setup", "Change Wi-Fi, saved settings and original hardware services.");
     install(std::make_unique<ToolsApp>(), "Tools", "Learn and send an IR signal or emulate an NFC URL.");
     install(std::make_unique<GamesApp>(), "Games", "Play touch-controlled 2048.");
     shell.installApp(stock_app_center::MakeApp(std::move(installed)));
-    if (stock_agent::ConsumePreviewRequest()) launcher->openApp(stock_agent_id);
+    bool stopped_preview=false;
+    if (stock_agent::ConsumePreviewRequest()) { stopped_preview=true; launcher->openApp(stock_agent_id); }
+    if (network_setup::ConsumePreviewRequest()) { stopped_preview=true; launcher->openApp(network_id); }
+    if (auto feature=stock_services::ConsumePreviewRequest()) { stopped_preview=true; launcher->openApp(native_ids.at(*feature)); }
+    if (!stopped_preview && stock_agent::AutoStartRequested()) {
+        stock_agent::AuthorizeAutoStart();
+        shell.uninstallAllApps();
+        mooncake::DestroyMooncake();
+        stock_agent::RunStockAgent();
+    }
     while (true) {
         GetHAL().feedTheDog();
         shell.update();
         int requested = stock_app_center::ConsumeRequestedAppId();
         if (requested >= 0) launcher->openApp(requested);
+        if(auto feature=stock_services::ConsumeRequest()) {
+            shell.uninstallAllApps();
+            mooncake::DestroyMooncake();
+            companion::SetSettingsScope(*feature==Feature::Servo ? companion::SettingsScope::Calibration :
+                *feature==Feature::Account ? companion::SettingsScope::Account :
+                (*feature==Feature::Avatar || *feature==Feature::EzData) ? companion::SettingsScope::RemoteService : companion::SettingsScope::None);
+            stock_services::RunFeature(*feature);
+        }
         if (stock_agent::ConsumeStartRequest()) {
             shell.uninstallAllApps();
             mooncake::DestroyMooncake();

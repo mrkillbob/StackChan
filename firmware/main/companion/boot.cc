@@ -17,6 +17,8 @@
 #include <esp_event.h>
 #include <esp_netif.h>
 #include <nvs.h>
+#include <ssid_manager.h>
+#include <apps/network_setup/wifi_credentials.hpp>
 #include <lvgl.h>
 #include <atomic>
 #include <algorithm>
@@ -63,14 +65,11 @@ void wifi_event(void*, esp_event_base_t base, int32_t id, void*) {
 }
 bool StartSavedWifi() {
     if(wifi_initialized.load())return false;
-    // Read only the existing preferred SSID. Never provisioning/AP or NVS erase.
-    nvs_handle_t handle=0; wifi_config_t wifi={};
-    if(nvs_open("wifi",NVS_READONLY,&handle)!=ESP_OK)return false;
-    size_t ssid_size=sizeof(wifi.sta.ssid), password_size=sizeof(wifi.sta.password);
-    auto a=nvs_get_str(handle,"ssid",reinterpret_cast<char*>(wifi.sta.ssid),&ssid_size);
-    auto b=nvs_get_str(handle,"password",reinterpret_cast<char*>(wifi.sta.password),&password_size);
-    nvs_close(handle);
-    if(a!=ESP_OK || b!=ESP_OK || !wifi.sta.ssid[0])return false;
+    const auto& saved=SsidManager::GetInstance().GetSsidList();
+    if(saved.empty()||!network_setup::Valid({saved.front().ssid,saved.front().password}))return false;
+    wifi_config_t wifi={};
+    std::memcpy(wifi.sta.ssid,saved.front().ssid.data(),saved.front().ssid.size());
+    std::memcpy(wifi.sta.password,saved.front().password.data(),saved.front().password.size());
     if(esp_netif_init()!=ESP_OK)return false;
     auto loop=esp_event_loop_create_default();if(loop!=ESP_OK && loop!=ESP_ERR_INVALID_STATE)return false;
     if(!esp_netif_create_default_wifi_sta())return false;
