@@ -14,7 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var controller = PairingController(
         approved: CommandLine.arguments.contains("--approved-test"),
-        root: URL(fileURLWithPath: "/Users/mikedemott/Developer/AgentWork/StackChan"))
+        root: URL(fileURLWithPath: "/Users/mikedemott/Developer/AgentWork/StackChan"),
+        audioApproved: CommandLine.arguments.contains("--approved-audio"))
     var body: some Scene {
         Window("Pair StackChan", id: "pairing") {
             ContentView(controller: controller).onAppear { delegate.controller = controller }

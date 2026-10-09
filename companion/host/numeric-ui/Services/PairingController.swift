@@ -9,6 +9,7 @@ final class PairingController: ObservableObject {
     @Published private(set) var confirmationSent = false
     @Published private(set) var cleanupPending = false
     let approved: Bool
+    let audioApproved: Bool
     private let root: URL
     private var child: Process?
     private var input: FileHandle?
@@ -19,7 +20,7 @@ final class PairingController: ObservableObject {
     private var requiresProcessExit = false
     private var receivedUptime = ProcessInfo.processInfo.systemUptime
     private let processFactory: (() -> Process)?
-    init(approved: Bool, root: URL, processFactory: (() -> Process)? = nil) { self.approved = approved; self.root = root; self.processFactory = processFactory }
+    init(approved: Bool, root: URL, processFactory: (() -> Process)? = nil, audioApproved: Bool = false) { self.approved = approved; self.audioApproved = approved && audioApproved; self.root = root; self.processFactory = processFactory }
     var canConfirm: Bool { approved && phase == .comparing && code != nil && !confirmationSent }
     var primaryTitle: String {
         if phase == .comparing || phase == .waiting_confirmation { return confirmationSent ? "Waiting for StackChan" : "Confirm match" }
@@ -29,14 +30,14 @@ final class PairingController: ObservableObject {
     var canPrimary: Bool { approved && !cleanupPending && (phase == .idle || phase.terminal || canConfirm) }
     var canCancel: Bool { approved && phase.busy && !cleanupPending }
     var instruction: String {
-        if !approved { return "Prepared preview. Pairing will be enabled after the reviewed firmware is installed." }
+        if !approved { return "Prepared preview. Pairing needs approval for one temporary USB/Wi-Fi check." }
         switch phase {
         case .idle: return "Open Companion on StackChan and leave it muted. Click Pair StackChan to begin."
         case .opening: return "Opening USB before pairing. Wait for the robot to settle."
         case .usb_ready, .waiting_robot: return "Keep USB connected. On the robot, tap Pair trusted host."
         case .comparing, .waiting_confirmation: return confirmationSent ? "Confirm the same number on StackChan. Only accept if both numbers match." : "Compare this number with the correct StackChan screen. Confirm on both only if they match."
         case .staging: return "Both confirmations received. Waiting for StackChan’s acknowledgement."
-        case .paired: return "Pairing acknowledged. Keep StackChan muted. Audio needs separate approval."
+        case .paired: return audioApproved ? "Pairing acknowledged. On StackChan, tap Connect, then Allow for this approved audio check. Tap Mute to stop." : "Pairing acknowledged. Keep StackChan muted. Audio needs separate approval."
         case .cancelled: return "Cancelled. Any temporary grant is revoked. Retry starts a fresh attempt."
         case .expired: return "The session expired. Retry starts a fresh attempt; no previous grant is reused."
         case .failed: return "Pairing stopped. Check the robot is muted and connected before a fresh retry."
@@ -61,6 +62,7 @@ final class PairingController: ObservableObject {
           "--cert", root.appendingPathComponent(".tools/local-companion-tls/server.pem").path,
           "--key", root.appendingPathComponent(".tools/local-companion-tls/server-key.pem").path,
           "--cue", root.appendingPathComponent(".tools/native-call-preparation/transport-speaker-cue.wav").path]
+        if audioApproved { process.arguments?.append("--approved-audio") }
         process.currentDirectoryURL = root
         var environment = ProcessInfo.processInfo.environment
         environment["PYTHONDONTWRITEBYTECODE"] = "1"

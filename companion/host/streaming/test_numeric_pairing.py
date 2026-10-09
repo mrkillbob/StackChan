@@ -82,6 +82,31 @@ class CoreTests(unittest.TestCase):
         self.hello();self.confirm();self.p.mac_confirm();self.p.take_grant();self.stage();self.clock.now=120
         with self.assertRaises(n.PairingError):self.p.tick()
         self.assertFalse(self.p.audio_allowed);self.assertEqual(self.revoked,[True])
+    def test_ready_anchored_budget_excludes_runtime_loading_and_expires(self):
+        self.p.state='idle';self.clock.now=105
+        self.p.prepare(REQ,91,started_at=100,deadline_budget_seconds=118)
+        self.assertEqual(self.p.deadline,218)
+        self.hello();self.confirm();self.p.mac_confirm();grant=self.p.take_grant();self.stage()
+        self.assertEqual(grant['ttl_seconds'],113)
+        self.clock.now=217.999;self.p.tick();self.assertTrue(self.p.audio_allowed)
+        self.clock.now=218
+        with self.assertRaises(n.PairingError):self.p.tick()
+        self.assertEqual(self.p.state,'expired');self.assertEqual(self.revoked,[True]);self.assertFalse(self.p.audio_allowed)
+    def test_expired_ready_budget_never_prepares_or_writes(self):
+        self.p.state='idle';self.clock.now=200
+        with self.assertRaises(n.PairingError):self.p.prepare(REQ,91,started_at=0,deadline_budget_seconds=118)
+        self.assertEqual(self.p.state,'idle')
+        with self.assertRaises(n.PairingError):self.p.numeric_frame()
+        self.assertEqual(self.issued,[])
+    def test_request_write_rechecks_deadline_after_listener_startup(self):
+        self.clock.now=120
+        with self.assertRaises(n.PairingError):self.p.numeric_frame()
+        self.assertEqual(self.p.state,'expired');self.assertEqual(self.issued,[])
+    def test_invalid_ready_deadline_never_prepares(self):
+        for start,budget in [(True,118),(float('nan'),118),(float('inf'),118),(-1,118),(1,118),(0,True),(0,0),(0,121)]:
+            self.setUp();self.p.state='idle'
+            with self.assertRaises(n.PairingError):self.p.prepare(REQ,91,started_at=start,deadline_budget_seconds=budget)
+            self.assertEqual(self.p.state,'idle');self.assertEqual(self.issued,[])
     def test_zero_uuid_staged_does_not_match(self):
         self.hello();self.confirm();self.p.mac_confirm();self.p.take_grant()
         with self.assertRaises(n.PairingError):self.stage(request_id='00'*16)
@@ -149,38 +174,60 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(n.PairingError):n.write_numeric_once(port,struct.pack('>4sB16sI',b'SCNP',1,bytes.fromhex(REQ),91))
         self.assertEqual(port.writes,1)
     async def test_actual_gateway_socket_flow_grant_and_disconnect_revoke(self):
-        issued=[];revoked=[];clock=Clock()
-        core=n.NumericPairing(clock=clock,issuer=lambda ttl:(issued.append(ttl) or 'synthetic-not-a-credential-00000000'),revoke=lambda:revoked.append(True),nonce_factory=lambda:HN,code_factory=lambda:'123456')
-        core.prepare(REQ,91)
-        class Socket:
-            request=type('Request',(),{'path':'/companion/pair'})()
-            def __init__(self):self.queue=asyncio.Queue();self.sent=[];self.closed=False
-            async def recv(self):
-                result=await self.queue.get()
-                if isinstance(result,Exception):raise result
-                return result
-            async def send(self,value):self.sent.append(json.loads(value))
-            async def close(self):self.closed=True
-        socket=Socket();gateway=n.NumericGateway(core,object())
-        socket.queue.put_nowait(json.dumps(dict(type='pair.hello',version=1,request_id=REQ,device=n.DEVICE,device_nonce=DN,boot_nonce=91,capabilities=['microphone','speaker'])))
-        task=asyncio.create_task(gateway.handle(socket))
-        for _ in range(100):
-            if socket.sent:break
-            await asyncio.sleep(.001)
-        self.assertEqual(socket.sent[0]['type'],'pair.challenge');self.assertFalse(issued)
-        core.mac_confirm();socket.queue.put_nowait(json.dumps(dict(type='pair.confirm',version=1,request_id=REQ,device_nonce=DN,host_nonce=HN,physical=True)))
-        for _ in range(100):
-            if len(socket.sent)>1:break
-            await asyncio.sleep(.001)
-        self.assertEqual(socket.sent[1]['type'],'pair.grant');self.assertEqual(len(issued),1);self.assertFalse(core.audio_allowed)
-        socket.queue.put_nowait(json.dumps(dict(type='pair.staged',version=1,request_id=REQ,device_nonce=DN,host_nonce=HN,staged=True)))
-        for _ in range(100):
-            if core.audio_allowed:break
-            await asyncio.sleep(.001)
-        self.assertTrue(core.audio_allowed)
-        socket.queue.put_nowait(OSError('synthetic disconnect'))
-        await asyncio.wait_for(task,.5)
-        self.assertFalse(core.audio_allowed);self.assertEqual(revoked,[True]);self.assertTrue(socket.closed)
+        for end_state in ('failed','expired'):
+            issued=[];revoked=[];clock=Clock()
+            core=n.NumericPairing(clock=clock,issuer=lambda ttl:(issued.append(ttl) or 'synthetic-not-a-credential-00000000'),revoke=lambda:revoked.append(True),nonce_factory=lambda:HN,code_factory=lambda:'123456')
+            core.prepare(REQ,91)
+            class Socket:
+                request=type('Request',(),{'path':'/companion/pair'})()
+                def __init__(self):self.queue=asyncio.Queue();self.sent=[];self.closed=False
+                async def recv(self):
+                    result=await self.queue.get()
+                    if isinstance(result,Exception):raise result
+                    return result
+                async def send(self,value):self.sent.append(json.loads(value))
+                async def close(self):self.closed=True
+            socket=Socket();gateway=n.NumericGateway(core,object())
+            socket.queue.put_nowait(json.dumps(dict(type='pair.hello',version=1,request_id=REQ,device=n.DEVICE,device_nonce=DN,boot_nonce=91,capabilities=['microphone','speaker'])))
+            task=asyncio.create_task(gateway.handle(socket))
+            for _ in range(100):
+                if socket.sent:break
+                await asyncio.sleep(.001)
+            self.assertEqual(socket.sent[0]['type'],'pair.challenge');self.assertFalse(issued)
+            core.mac_confirm();socket.queue.put_nowait(json.dumps(dict(type='pair.confirm',version=1,request_id=REQ,device_nonce=DN,host_nonce=HN,physical=True)))
+            for _ in range(100):
+                if len(socket.sent)>1:break
+                await asyncio.sleep(.001)
+            self.assertEqual(socket.sent[1]['type'],'pair.grant');self.assertEqual(len(issued),1);self.assertFalse(core.audio_allowed)
+            socket.queue.put_nowait(json.dumps(dict(type='pair.staged',version=1,request_id=REQ,device_nonce=DN,host_nonce=HN,staged=True)))
+            for _ in range(100):
+                if core.audio_allowed:break
+                await asyncio.sleep(.001)
+            self.assertTrue(core.audio_allowed)
+            clock.now=119 if end_state=='failed' else 120  # True deadline wins; one-second-early loss stays failure.
+            socket.queue.put_nowait(OSError('synthetic disconnect'))
+            await asyncio.wait_for(task,.5)
+            self.assertFalse(core.audio_allowed);self.assertEqual(revoked,[True]);self.assertTrue(socket.closed);self.assertEqual(core.state,end_state)
+    async def test_expected_audio_completion_closes_and_faults_remain_failures(self):
+        for outcome,complete,expected in [('complete',True,'closed'),('fault',True,'failed'),('complete',False,'failed')]:
+            with self.subTest(outcome=outcome,complete=complete):
+                revoked=[];clock=Clock()
+                core=n.NumericPairing(clock=clock,issuer=lambda ttl:'synthetic-not-a-credential-00000000',revoke=lambda:revoked.append(True),nonce_factory=lambda:HN,code_factory=lambda:'123456')
+                core.prepare(REQ,91)
+                core.hello(dict(type='pair.hello',version=1,request_id=REQ,device=n.DEVICE,device_nonce=DN,boot_nonce=91,capabilities=['microphone','speaker']))
+                core.mac_confirm();core.robot_confirm(dict(type='pair.confirm',version=1,request_id=REQ,device_nonce=DN,host_nonce=HN,physical=True));core.take_grant()
+                core.staged(dict(type='pair.staged',version=1,request_id=REQ,device_nonce=DN,host_nonce=HN,staged=True))
+                class Transport:
+                    last_result=dict(outcome=outcome,consent_received=True,cue_complete=complete,mic_complete=complete)
+                    calls=0
+                    async def handle(self,socket):self.calls+=1
+                class Socket:
+                    request=type('Request',(),{'path':'/companion/audio'})()
+                    async def close(self):pass
+                transport=Transport();gateway=n.NumericGateway(core,transport,audio_enabled=True)
+                await gateway.handle(Socket())
+                self.assertEqual(core.state,expected);self.assertFalse(core.audio_allowed);self.assertEqual(revoked,[True])
+                await gateway.handle(Socket());self.assertEqual(transport.calls,1);self.assertEqual(revoked,[True])
     async def test_cleanup_preserves_expired_cause(self):
         core=n.NumericPairing(issuer=lambda ttl:'fixture',revoke=lambda:None);core.prepare(REQ,91);core.cancel('expired','expired')
         gateway=n.NumericGateway(core,object());await gateway.close()

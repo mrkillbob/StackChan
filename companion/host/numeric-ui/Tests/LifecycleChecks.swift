@@ -11,7 +11,11 @@ import Foundation
  static func main() {
   let root=URL(fileURLWithPath:"/tmp")
   let inert=PairingController(approved:false,root:root)
-  assert(!inert.canPrimary && !inert.canCancel && !inert.canConfirm)
+  assert(!inert.canPrimary && !inert.canCancel && !inert.canConfirm && !inert.audioApproved)
+  let scoped=PairingController(approved:true,root:root,audioApproved:true)
+  assert(scoped.audioApproved)
+  let denied=PairingController(approved:false,root:root,audioApproved:true)
+  assert(!denied.audioApproved)
   let normal="""
 import sys,json
 for line in sys.stdin:

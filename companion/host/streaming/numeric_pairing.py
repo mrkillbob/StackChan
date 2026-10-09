@@ -63,12 +63,19 @@ class NumericPairing:
         if self.deadline is not None:value['remaining']=max(0,math.ceil(self.deadline-self.clock()))
         if message is not None:value['message']=message
         self.emit(value);return value
-    def prepare(self,request,boot_nonce):
+    def prepare(self,request,boot_nonce,*,started_at=None,deadline_budget_seconds=120):
+        now=self.clock()
+        if started_at is None:started_at=now
+        if type(started_at) not in (int,float) or not math.isfinite(started_at) or not 0<=started_at<=now or type(deadline_budget_seconds) is not int or not 1<=deadline_budget_seconds<=120:
+            raise PairingError('invalid_deadline')
         if self.state!='idle' or not fresh_hex(request) or type(boot_nonce) is not int or not 1<=boot_nonce<=0xffffffff:
             raise PairingError('invalid_preparation')
-        self.request=request;self.boot_nonce=boot_nonce;self.deadline=self.clock()+120
+        deadline=started_at+deadline_budget_seconds
+        if now>=deadline:raise PairingError('expired')
+        self.request=request;self.boot_nonce=boot_nonce;self.deadline=deadline
         self.state='waiting_robot';self.status()
     def numeric_frame(self):
+        self.tick()
         if self.state!='waiting_robot':raise PairingError('invalid_state')
         return struct.pack('>4sB16sI',b'SCNP',1,bytes.fromhex(self.request),self.boot_nonce)
     def tick(self):
@@ -164,6 +171,10 @@ class NumericGateway:
                 if not self.audio_enabled or not self.pairing.audio_allowed or self._audio:raise PairingError('audio_denied')
                 self._audio=True
                 await self.transport.handle(socket)
+                if self.pairing.state not in ('cancelled','expired','failed','closed'):
+                    result=getattr(self.transport,'last_result',None)
+                    complete=type(result) is dict and result.get('outcome')=='complete' and all(result.get(key) is True for key in ('consent_received','cue_complete','mic_complete'))
+                    self.pairing.cancel('closed' if complete else 'failed','audio_complete' if complete else 'audio_transport_failed')
                 return
             if socket.request.path!='/companion/pair' or self._candidate:raise PairingError('candidate_already_selected')
             self._candidate=True
@@ -179,6 +190,7 @@ class NumericGateway:
                     await asyncio.wait_for(socket.send(json.dumps(grant)),2)
                     grant=None
                 done,_=await asyncio.wait({pending},timeout=.05)
+                self.pairing.tick()  # Classify an actually elapsed local deadline before late socket results.
                 if done:
                     value=strict_json(pending.result())
                     if value.get('type')=='pair.confirm':self.pairing.robot_confirm(value)

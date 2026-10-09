@@ -7,7 +7,7 @@ struct ContentView: View {
                 Image(systemName: "desktopcomputer.and.arrow.down").font(.title)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Pair StackChan").font(.title2.weight(.semibold))
-                    Text("USB + Wi-Fi · Temporary microphone and speaker access").font(.caption).foregroundStyle(.secondary)
+                    Text(controller.audioApproved ? "USB + Wi-Fi · Local microphone and speaker check" : "USB + Wi-Fi · Temporary pairing check").font(.caption).foregroundStyle(.secondary)
                 }
             }
             VStack(alignment: .leading, spacing: 12) {
