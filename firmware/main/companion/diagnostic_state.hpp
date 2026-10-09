@@ -52,8 +52,18 @@ public:
  Frame Snapshot(uint32_t now)const{
   Frame f;auto* b=f.bytes.data();b[0]='S';b[1]='C';b[2]='F';b[3]='D';b[4]=1;b[5]=uint8_t(prior_valid_)|(back_.load()?2:0);b[6]=0;b[7]=176;
   auto current=Current();Put32(b+8,current.words[0]);Put32(b+12,current.words[1]);Put32(b+16,now);Put32(b+20,ticks_);Put32(b+24,success_);Put32(b+28,failure_);Put32(b+32,dropped_);
-  for(unsigned i=2;i<18;++i)Put32(b+36+(i-2)*4,current.words[i]);for(unsigned i=0;i<18;++i)Put32(b+100+i*4,prior_.words[i]);Put32(b+172,Crc32(b,172));return f;
+  for(unsigned i=2;i<18;++i){Put32(b+36+(i-2)*4,current.words[i]);}
+  for(unsigned i=0;i<18;++i){Put32(b+100+i*4,prior_.words[i]);}
+  Put32(b+172,Crc32(b,172));return f;
  }
 };
+#ifdef ESP_PLATFORM
+// ESP-IDF's PSRAM workaround makes the generic trait false. The actual state
+// and RTC-save claim are explicitly in internal DRAM: its 32-bit wrappers
+// dispatch to hardware S32C1I there, never the external-RAM spinlock fallback.
+static_assert(sizeof(std::atomic<uint32_t>)==4 && alignof(std::atomic<uint32_t>)>=4,
+              "diagnostics require aligned 32-bit atomics");
+#else
 static_assert(std::atomic<uint32_t>::is_always_lock_free,"diagnostics require lock-free 32-bit atomics");
+#endif
 }

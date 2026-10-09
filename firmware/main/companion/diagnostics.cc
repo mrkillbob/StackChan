@@ -1,11 +1,15 @@
 #include "diagnostic_state.hpp"
 #include <esp_attr.h>
+#ifdef ESP_PLATFORM
+#include <xtensa/config/core-isa.h>
+static_assert(XCHAL_HAVE_S32C1I==1,"diagnostics require hardware 32-bit compare-and-swap");
+#endif
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 namespace companion::diagnostic {
 namespace {
-State state;RTC_NOINIT_ATTR Retained retained;std::atomic<uint32_t> saving{0};
+DRAM_ATTR State state;RTC_NOINIT_ATTR Retained retained;DRAM_ATTR std::atomic<uint32_t> saving{0};
 uint32_t Now(){return uint32_t(esp_timer_get_time()/1000);}
 void Save(){uint32_t free=0;if(!saving.compare_exchange_strong(free,1))return;retained=Seal(state.Current());saving.store(0,std::memory_order_release);}
 }

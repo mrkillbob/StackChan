@@ -5,7 +5,7 @@ ROOT=pathlib.Path(__file__).resolve().parents[3]
 def main():
  with tempfile.TemporaryDirectory(prefix='stackchan-diagnostics-offline-') as folder:
   tmp=pathlib.Path(folder);(tmp/'freertos').mkdir()
-  (tmp/'esp_attr.h').write_text('#pragma once\n#define RTC_NOINIT_ATTR\n')
+  (tmp/'esp_attr.h').write_text('#pragma once\n#define RTC_NOINIT_ATTR\n#define DRAM_ATTR\n')
   (tmp/'esp_timer.h').write_text('#pragma once\n#include <cstdint>\ninline int64_t esp_timer_get_time(){return 100000;}\n')
   (tmp/'freertos/FreeRTOS.h').write_text('#pragma once\n')
   (tmp/'freertos/task.h').write_text('#pragma once\n#include <cassert>\ninline unsigned uxTaskGetStackHighWaterMark(void* task){assert(task==nullptr);return 1024;}\n')
