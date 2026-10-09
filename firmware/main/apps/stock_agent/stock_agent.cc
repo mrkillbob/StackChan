@@ -26,6 +26,9 @@ constexpr uint32_t preview_magic = 0x53544F50; // STOP: preview, never resume
 lv_obj_t* state_label = nullptr;
 
 [[noreturn]] void ReturnHome() {
+    GetHAL().setServoPowerEnabled(false);
+    GetHAL().setLaserEnabled(false);
+    GetHAL().showRgbColor(0,0,0);
     preview_cookie = 0;
     // The official service has no joined teardown. Hardware reset ends all tasks,
     // radio activity and codec use before the stopped selector is presented.

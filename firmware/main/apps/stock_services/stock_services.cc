@@ -77,6 +77,9 @@ void PreviewAfterReset(Feature feature)
 }
 [[noreturn]] void ReturnHome()
 {
+    GetHAL().setServoPowerEnabled(false);
+    GetHAL().setLaserEnabled(false);
+    GetHAL().showRgbColor(0,0,0);
     preview_cookie = {};
     // Reset terminates all original radio, camera, audio and motion tasks. No
     // active-service authorization survives reset or is stored in the cookie.

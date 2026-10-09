@@ -26,6 +26,9 @@ bool Hal::initCompanion()
     // Errors preserve NVS rather than erasing pairing, Wi-Fi or calibration.
     if (nvs_flash_init() != ESP_OK) return false;
     xiaozhi_board_init(); // Board/display/touch only under companion build.
+    io_expander_init(); // Stopped boot explicitly de-energizes external motor power.
+    setServoPowerEnabled(false);
+    setLaserEnabled(false);
     lvgl_init();
     rtc_init(); // Read existing clock and timezone without starting a network.
     return true;
@@ -352,6 +355,11 @@ static std::string_view _warm_boot_nvs_key = "app_index";
 
 void Hal::requestWarmReboot(int appIndex)
 {
+#ifdef STACKCHAN_COMPANION_BOOT
+    setServoPowerEnabled(false);
+    setLaserEnabled(false);
+    showRgbColor(0,0,0);
+#endif
     mclog::tagInfo(_tag, "warm reboot request to app index: {}", appIndex);
 
 #ifndef STACKCHAN_COMPANION_BOOT
