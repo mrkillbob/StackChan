@@ -10,6 +10,10 @@ struct ContentView: View {
                     Text(controller.audioApproved ? "USB + Wi-Fi · Local microphone and speaker check" : "USB + Wi-Fi · Temporary pairing check").font(.caption).foregroundStyle(.secondary)
                 }
             }
+            if controller.audioApproved {
+                Text("Local check only: microphone frames are counted and discarded. No recording or cloud service. Audio starts only after you tap Connect and Allow on StackChan.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             VStack(alignment: .leading, spacing: 12) {
                 Text(controller.instruction).font(.body).fixedSize(horizontal: false, vertical: true)
                 if let code = controller.code {
