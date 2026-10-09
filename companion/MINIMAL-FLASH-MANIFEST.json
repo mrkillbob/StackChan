@@ -34,5 +34,5 @@
   "whole_chip_erase": false,
   "after_write": "byte verification then reboot only within exact separately confirmed scope",
   "backup": "declined; not a prerequisite",
-  "stock_recovery": "M5Burner official StackChan entry; factory binary/version/hash not yet downloaded or verified"
+  "stock_recovery": "Official StackChan-UserDemo V1.5.1 downloaded and offline verified; see STOCK-RECOVERY-VERIFICATION.json. Full bundle clears NVS; app-only extraction saved."
 }
