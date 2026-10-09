@@ -232,7 +232,7 @@ class ToolsApp : public Page {
         lv_obj_set_style_bg_opa(graphic, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(graphic, 2, 0);
         lv_obj_set_style_border_color(graphic, lv_color_hex(0x53d4d4), 0);
-        lv_obj_remove_flag(graphic, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_remove_flag(graphic, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
         auto piece = [&](int px, int py, int w, int h) {
             auto child = lv_obj_create(graphic);
             lv_obj_set_pos(child, px, py);
@@ -241,7 +241,7 @@ class ToolsApp : public Page {
             lv_obj_set_style_border_width(child, 0, 0);
             lv_obj_set_style_radius(child, 2, 0);
             lv_obj_set_style_bg_color(child, lv_color_hex(0x53d4d4), 0);
-            lv_obj_remove_flag(child, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_remove_flag(child, static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
         };
         if (tag) {
             piece(5, 5, 6, 6);
