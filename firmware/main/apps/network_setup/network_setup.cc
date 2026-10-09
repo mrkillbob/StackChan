@@ -54,7 +54,7 @@ void OpenPersistenceScope(PersistenceScope scope) {
     preview_cookie = 0;
     // Neither upstream radio implementation offers a joined, repeatable cross-
     // driver teardown. Reset ends all radio callbacks before the stopped shell.
-    esp_restart();
+    GetHAL().reboot();
     while (true) GetHAL().delay(1000);
 }
 [[noreturn]] void RestartPreview() {

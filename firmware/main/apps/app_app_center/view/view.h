@@ -253,7 +253,9 @@ public:
             "Restore this custom build over USB to get them back.\n\n";
         if (app.firmwareUrl.rfind("http://", 0) == 0)
             warning += "Unencrypted download (HTTP).\n\n";
-        warning += "The device restarts after installation.";
+        const auto source_end = app.firmwareUrl.find_first_of("?#");
+        const std::string source = app.firmwareUrl.substr(0, source_end).substr(0, 512);
+        warning += "Source: " + source + "\n\nThe device restarts after installation.";
         lv_label_set_text(message, warning.c_str());
         addButton("Cancel", false);
         addButton("Install and restart", true);

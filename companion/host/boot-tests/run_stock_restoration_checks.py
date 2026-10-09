@@ -10,11 +10,14 @@ parser.add_argument("--compiler", default="clang++")
 parser.add_argument("--receipt", type=Path)
 args = parser.parse_args()
 checks = []
+subprocess.run(["python3", str(tests / "verify_stock_menu_hierarchy.py")], check=True)
+checks.append("menu_hierarchy")
 with tempfile.TemporaryDirectory(prefix="stackchan-stock-tests-") as temporary:
     temp = Path(temporary)
     generated = temp / "backend"
     subprocess.run(["python3", str(main / "apps/stock_agent/generate_backend.py"), "--xiaozhi", str(repo / "firmware/xiaozhi-esp32/main"), "--wifi", str(repo / "firmware/managed_components/78__esp-wifi-connect"), "--output", str(generated)], check=True)
     cases = [
+        ("menu_navigation", [tests / "test_menu_navigation.cpp", main / "apps/stock_shell/navigation.cc"], [tests / "menu-fixture", main]),
         ("advanced_config", [repo / "firmware/tests/advanced_config_test.cpp"], [main]),
         ("firmware_policy", [repo / "firmware/tests/firmware_install_policy_test.cpp"], [main]),
         ("credentials", [tests / "test_wifi_credentials.cpp"], [main]),

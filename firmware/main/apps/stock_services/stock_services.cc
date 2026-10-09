@@ -1,4 +1,5 @@
 #include "stock_services.h"
+#include <apps/stock_shell/menu_policy.hpp>
 #include "firmware_install_policy.h"
 #include "firmware_install_ui.h"
 #include <board.h>
@@ -84,14 +85,8 @@ void PreviewAfterReset(Feature feature)
 }
 [[noreturn]] void ReturnHome()
 {
-    GetHAL().setServoPowerEnabled(false);
-    GetHAL().setLaserEnabled(false);
-    GetHAL().showRgbColor(0,0,0);
-    preview_cookie = {};
-    // Reset terminates all original radio, camera, audio and motion tasks. No
-    // active-service authorization survives reset or is stored in the cookie.
-    esp_restart();
-    while (true) GetHAL().delay(1000);
+    GetHAL().reboot(); // also stores a stopped SETUP return for native settings
+    while(true)GetHAL().delay(1000);
 }
 lv_obj_t* Label(lv_obj_t* parent, const std::string& text, int x, int y, int width)
 {
@@ -178,6 +173,7 @@ mooncake::AppAbility::AppInfo_t AppInfo(Feature feature)
         case Feature::EspNow: { AppEspnowControl source; return source.getAppInfo(); }
         case Feature::EzData: { AppEzdata source; return source.getAppInfo(); }
         case Feature::Dance: { AppDance source; return source.getAppInfo(); }
+        case Feature::AppCenter: { AppAppCenter source; return source.getAppInfo(); }
         default: {
             AppSetup source;
             auto info = source.getAppInfo();
@@ -215,6 +211,19 @@ public:
         int action = preview_.Poll();
         if (action == 2) requested.store(static_cast<int>(feature_));
         if (action == 1 || action == 2) _is_done = true;
+    }
+};
+
+class SetupTransferWorker final : public setup_workers::WorkerBase {
+    Feature feature_;
+public:
+    explicit SetupTransferWorker(Feature feature):feature_(feature){}
+    void update() override {
+        if(_is_done)return;
+        // A used radio runtime restarts into SETUP. The row must be selected
+        // again; reset cookies never retain permission to start a worker.
+        if(NeedsFreshRuntime()){GetHAL().reboot();return;}
+        requested.store(static_cast<int>(feature_));_is_done=true;
     }
 };
 
@@ -341,7 +350,7 @@ lv_obj_t* SessionControls(Feature feature)
     lv_obj_set_pos(stop, 226, 1);
     lv_obj_set_size(stop, 92, 44);
     auto label = lv_label_create(stop);
-    lv_label_set_text(label, "Stop / Home");
+    lv_label_set_text(label, stock_shell::IsSetupFeature(feature)?"Stop / Back":"Stop / Home");
     lv_obj_center(label);
     lv_obj_add_event_cb(stop, [](lv_event_t*) { ReturnHome(); }, LV_EVENT_CLICKED, nullptr);
     return status;
@@ -362,6 +371,10 @@ std::unique_ptr<mooncake::AppAbility> MakeApp(Feature feature)
 std::unique_ptr<setup_workers::WorkerBase> MakeWorker(Feature feature)
 {
     return Valid(static_cast<int>(feature)) ? std::make_unique<PreviewWorker>(feature) : nullptr;
+}
+std::unique_ptr<setup_workers::WorkerBase> MakeSetupWorker(Feature feature)
+{
+    return stock_shell::IsSetupFeature(feature)?std::make_unique<SetupTransferWorker>(feature):nullptr;
 }
 std::optional<Feature> ConsumeRequest()
 {

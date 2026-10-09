@@ -84,7 +84,7 @@ public:
         Label(panel_, "Start enables cloud AI, microphone/wake word, camera and motors.\nStop / Home restarts launcher.", 10, 43, 300);
         notice_ = Label(panel_, (companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized())
             ? "Wi-Fi was used. Restart this\nstopped preview, then tap Start."
-            : "Wi-Fi setup: phone browser.\nStock vendor activation.\nWi-Fi changes last this session.",
+            : "Wi-Fi setup: phone browser.\nStock vendor activation.\nWi-Fi changes are saved after connection.",
             10, 128, 300);
         Button("Back", 10, 192, 90, 1);
         Button((companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized()) ? "Restart preview" : "Start", 112, 192, 198, 2);

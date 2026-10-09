@@ -15,6 +15,7 @@
 #include <companion/settings_policy.hpp>
 #include <apps/network_setup/network_setup.h>
 #include <apps/stock_services/stock_services.h>
+#include <apps/stock_shell/navigation.h>
 #endif
 using namespace mooncake;
 using namespace view;
@@ -48,6 +49,7 @@ void AppSetup::onOpen()
     _magic_count     = 0;
 #ifdef STACKCHAN_COMPANION_BOOT
     companion::SetSettingsScope(companion::SettingsScope::None);
+    stock_shell::SetSetupContext(true);
 #endif
 
     _menu_sections = {
@@ -178,15 +180,15 @@ void AppSetup::onOpen()
                 scope = Scope::AiPower;
                 factory = [] { return std::make_unique<XiaozhiPowerSavingWorker>(); };
             } else if (item.label == "Servo") {
-                factory = [] { return stock_services::MakeWorker(Feature::Servo); };
+                factory = [] { return stock_services::MakeSetupWorker(Feature::Servo); };
             } else if (item.label == "Microphone") {
-                factory = [] { return stock_services::MakeWorker(Feature::Microphone); };
+                factory = [] { return stock_services::MakeSetupWorker(Feature::Microphone); };
             } else if (item.label == "RGB Strip") {
-                factory = [] { return stock_services::MakeWorker(Feature::Rgb); };
+                factory = [] { return stock_services::MakeSetupWorker(Feature::Rgb); };
             } else if (item.label == "Unbind & Reset") {
-                factory = [] { return stock_services::MakeWorker(Feature::Account); };
+                factory = [] { return stock_services::MakeSetupWorker(Feature::Account); };
             } else if (item.label == "Check for Updates") {
-                factory = [] { return stock_services::MakeWorker(Feature::FirmwareCheck); };
+                factory = [] { return stock_services::MakeSetupWorker(Feature::FirmwareCheck); };
             }
             // The version row keeps its original ten-tap FwVersionWorker.
             if (!factory) continue;
@@ -201,18 +203,19 @@ void AppSetup::onOpen()
         }
     }
 #endif
-#ifdef STACKCHAN_COMPANION_BOOT
-    _menu_sections.front().items.push_back({"Welcome Setup", [this](){
-        _destroy_menu=true;_worker.reset();companion::SetSettingsScope(companion::SettingsScope::None);
-        _worker=stock_services::MakeWorker(stock_services::Feature::Onboarding);
-    }});
-#endif
     LvglLockGuard lock;
 
     _menu_page = std::make_unique<view::SelectMenuPage>(_menu_sections);
 
     view::create_home_indicator([&]() { close(); });
     view::create_status_bar();
+#ifdef STACKCHAN_COMPANION_BOOT
+    if (_initial_worker) {
+        _menu_page.reset();
+        auto factory=std::move(_initial_worker);_initial_worker={};
+        _worker=factory();
+    }
+#endif
 }
 
 void AppSetup::onRunning()
@@ -257,6 +260,7 @@ void AppSetup::onClose()
     _worker.reset();
 #ifdef STACKCHAN_COMPANION_BOOT
     companion::SetSettingsScope(companion::SettingsScope::None);
+    stock_shell::SetSetupContext(false);
 #endif
 
     view::destroy_home_indicator();

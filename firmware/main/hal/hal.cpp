@@ -1,3 +1,4 @@
+#include <apps/stock_shell/navigation.h>
 /*
  * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
  *
@@ -107,6 +108,7 @@ std::string Hal::getFactoryMacString(std::string divider)
 void Hal::reboot()
 {
 #ifdef STACKCHAN_COMPANION_BOOT
+    stock_shell::SaveSetupReturnForReset();
     setServoPowerEnabled(false);setLaserEnabled(false);showRgbColor(0,0,0);
 #endif
     esp_restart();

@@ -1,5 +1,7 @@
 // Stock Mooncake shell, original native Tools and game implementations.
 #include "stock_apps.h"
+#include "menu_policy.hpp"
+#include "navigation.h"
 #include "stock_tools_hw.h"
 #include "tools_ui.hpp"
 #include <apps/stock_agent/stock_agent.h>
@@ -7,7 +9,6 @@
 #include <apps/stock_services/stock_services.h>
 #include <companion/settings_policy.hpp>
 #include <map>
-#include <apps/stock_app_center/stock_app_center.h>
 #include <optional>
 #include <apps/apps.h>
 #include <apps/common/common.h>
@@ -174,6 +175,7 @@ class ToolsApp : public Page {
         lv_obj_set_style_bg_color(button, lv_color_hex(0x22596d), 0);
         lv_obj_set_style_border_width(button, 0, 0);
         lv_obj_set_style_text_font(button, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_opa(button, LV_OPA_50, LV_STATE_DISABLED);
         return button;
     }
     lv_obj_t* Graphic(lv_obj_t* parent, int x, int y, bool tag, bool small = false)
@@ -619,31 +621,37 @@ public:
     auto launcher_owned = std::make_unique<AppLauncher>();
     auto* launcher = launcher_owned.get();
     shell.installApp(std::move(launcher_owned));
-    std::vector<stock_app_center::InstalledApp> installed;
-    auto install = [&](std::unique_ptr<mooncake::AppAbility> app, const char* name, const char* description) {
-        int id = shell.installApp(std::move(app));
-        installed.push_back({id, name, description});
-        return id;
-    };
-    install(std::make_unique<CompanionApp>(), "Mira Companion", "Connect a trusted Mira host and allow this conversation.");
-    int stock_agent_id = install(stock_agent::MakeApp(), "Stock AI", "Start the original AI service with saved Wi-Fi or its setup flow.");
+    // Official 1.5.1 launcher order; setup workers are children of SETUP.
+    int stock_agent_id=shell.installApp(stock_agent::MakeApp());
     std::map<stock_services::Feature,int> native_ids;
     using Feature=stock_services::Feature;
-    for(auto feature:{Feature::Avatar,Feature::EspNow,Feature::EzData,Feature::Dance,Feature::Servo,Feature::Microphone,Feature::Rgb,Feature::Account,Feature::FirmwareCheck,Feature::AppCenter,Feature::Onboarding}) {
-        auto app=stock_services::MakeApp(feature);
-        auto name=app->getAppInfo().name;
-        native_ids[feature]=install(std::move(app), name.c_str(), "Start this original service; Stop / Home returns to the launcher.");
-    }
-    int network_id=install(network_setup::MakeApp(), "Wi-Fi Setup", "Change saved Wi-Fi using the original phone app or browser.");
-    install(std::make_unique<AppSetup>(), "Setup", "Change Wi-Fi, saved settings and original hardware services.");
-    install(std::make_unique<ToolsApp>(), "Tools", "Learn and send an IR signal or emulate an NFC URL.");
-    install(std::make_unique<GamesApp>(), "Games", "Play touch-controlled 2048.");
-    shell.installApp(stock_app_center::MakeApp(std::move(installed)));
+    for(auto feature:LauncherNativeFeatures) native_ids[feature]=shell.installApp(stock_services::MakeApp(feature));
+    auto setup_owned=std::make_unique<AppSetup>();auto* setup=setup_owned.get();
+    int setup_id=shell.installApp(std::move(setup_owned));
+    shell.installApp(std::make_unique<CompanionApp>());
+    shell.installApp(std::make_unique<ToolsApp>());
+    shell.installApp(std::make_unique<GamesApp>());
     bool stopped_preview=false;
-    if (stock_agent::ConsumePreviewRequest()) { stopped_preview=true; launcher->openApp(stock_agent_id); }
-    if (network_setup::ConsumePreviewRequest()) { stopped_preview=true; launcher->openApp(network_id); }
-    if (auto feature=stock_services::ConsumePreviewRequest()) { stopped_preview=true; launcher->openApp(native_ids.at(*feature)); }
-    if (!stopped_preview && !GetHAL().isAppConfiged() && esp_reset_reason()!=ESP_RST_SW) { stopped_preview=true; launcher->openApp(native_ids.at(Feature::Onboarding)); }
+    bool setup_return=ConsumeSetupReturn(); // consume even when a more specific preview wins
+    if(stock_agent::ConsumePreviewRequest()){stopped_preview=true;launcher->openApp(stock_agent_id);}
+    if(network_setup::ConsumePreviewRequest()){
+        stopped_preview=true;setup->openInitialWorker([]{return network_setup::MakeWorker();});launcher->openApp(setup_id);
+    }
+    if(auto feature=stock_services::ConsumePreviewRequest()){
+        stopped_preview=true;
+        if(IsSetupFeature(*feature)){
+            launcher->openApp(setup_id);
+        }else if(*feature==Feature::Onboarding){
+            setup->openInitialWorker([feature]{return stock_services::MakeWorker(*feature);});launcher->openApp(setup_id);
+        }else{
+            auto destination=native_ids.find(*feature);
+            if(destination!=native_ids.end())launcher->openApp(destination->second);
+        }
+    }
+    if(!stopped_preview&&setup_return){stopped_preview=true;launcher->openApp(setup_id);}
+    if(!stopped_preview&&!GetHAL().isAppConfiged()&&esp_reset_reason()!=ESP_RST_SW){
+        stopped_preview=true;setup->openInitialWorker([]{return stock_services::MakeWorker(Feature::Onboarding);});launcher->openApp(setup_id);
+    }
     if (!stopped_preview && stock_agent::AutoStartRequested()) {
         stock_agent::AuthorizeAutoStart();
         shell.uninstallAllApps();
@@ -653,14 +661,13 @@ public:
     while (true) {
         GetHAL().feedTheDog();
         shell.update();
-        int requested = stock_app_center::ConsumeRequestedAppId();
-        if (requested >= 0) launcher->openApp(requested);
         if(auto feature=stock_services::ConsumeRequest()) {
             shell.uninstallAllApps();
             mooncake::DestroyMooncake();
             companion::SetSettingsScope((*feature==Feature::Servo || *feature==Feature::Onboarding) ? companion::SettingsScope::Calibration :
                 *feature==Feature::Account ? companion::SettingsScope::Account :
                 (*feature==Feature::Avatar || *feature==Feature::EzData || *feature==Feature::AppCenter || *feature==Feature::FirmwareCheck) ? companion::SettingsScope::RemoteService : companion::SettingsScope::None);
+            SetSetupContext(IsSetupFeature(*feature));
             stock_services::RunFeature(*feature);
         }
         if (stock_agent::ConsumeStartRequest()) {
