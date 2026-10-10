@@ -7,8 +7,7 @@ Only the read-only diagnostic helper uses this class; pairing is unchanged.
 import errno
 import os
 import select
-import termios
-from serial.serialposix import Serial
+from posix_serial_controls import ControlPreservingSerial
 from serial.serialutil import SerialException,Timeout
 
 class DiagnosticReadError(SerialException):
@@ -17,25 +16,7 @@ class DiagnosticReadError(SerialException):
         self.diagnostic_code=code;self.diagnostic_phase=phase
         self.errno=number if type(number) is int and 0<number<=4095 else None
 
-class DiagnosticSerial(Serial):
-    def _update_dtr_state(self):
-        # pySerial calls this on open even for a preconfigured False value.
-        pass
-
-    def _update_rts_state(self):
-        pass
-
-    def _reconfigure_port(self, force_update=False):
-        if self._rtscts or self._dsrdtr or self._rs485_mode is not None:
-            raise ValueError('diagnostic_flow_control_forbidden')
-        super()._reconfigure_port(force_update)
-        attrs=termios.tcgetattr(self.fd)
-        if attrs[2]&termios.HUPCL:
-            attrs[2]&=~termios.HUPCL
-            termios.tcsetattr(self.fd,termios.TCSANOW,attrs)
-        if termios.tcgetattr(self.fd)[2]&termios.HUPCL:
-            raise ValueError('diagnostic_hangup_not_disabled')
-
+class DiagnosticSerial(ControlPreservingSerial):
     def read(self,size=1):
         # Return one available OS chunk immediately. pySerial's accumulating
         # read can discard a complete frame if a following read raises/EOFs.

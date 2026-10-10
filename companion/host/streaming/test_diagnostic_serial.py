@@ -89,7 +89,7 @@ class SerialControlTests(unittest.TestCase):
             self.assertFalse(port.is_open);self.assertIsNone(port.fd)
     def test_hangup_configuration_failure_closes_owned_fd(self):
         port=DiagnosticSerial(port=None);port.port=self.path
-        with patch('diagnostic_serial.termios.tcsetattr',side_effect=OSError('synthetic')):
+        with patch('posix_serial_controls.termios.tcsetattr',side_effect=OSError('synthetic')):
             with self.assertRaises(OSError):port.open()
         self.assertFalse(port.is_open);self.assertIsNone(port.fd)
 if __name__=='__main__':unittest.main()

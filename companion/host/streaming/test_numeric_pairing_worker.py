@@ -119,6 +119,32 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls,['consume']);self.assertEqual(self.opened,0);self.assertEqual(self.loaded,0)
         self.assertEqual(worker.state,'failed')
 
+class ExpectedBootTests(unittest.IsolatedAsyncioTestCase):
+    async def run_ready(self,expected):
+        clock=Clock();port=Port();port.reads=[];sent=False;loaded=[];events=[]
+        ready=struct.pack('>4sBB16s',b'SCPS',1,1,struct.pack('>II8s',91,1,bytes(8)))
+        def read(cap):
+            nonlocal sent
+            if clock.now>=2 and not sent:sent=True;return ready
+            return b''
+        port.read=read
+        async def sleep(n):clock.now+=n;await asyncio.sleep(0)
+        def loader():loaded.append(True);raise RuntimeError('synthetic boundary')
+        worker=w.NumericWorker(approved=True,audio_enabled=True,paused=lambda:False,serial_factory=lambda:port,runtime_loader=loader,emit=events.append,clock=clock,sleep=sleep,consume_approval=lambda:expected)
+        await worker.command('prepare');await worker.wait()
+        return worker,port,loaded,events
+    async def test_changed_nonce_aborts_before_runtime_write_or_grant(self):
+        worker,port,loaded,events=await self.run_ready(92)
+        self.assertEqual(loaded,[]);self.assertEqual(port.events,['open','close'])
+        self.assertTrue(port.closed);self.assertIsNone(worker.port)
+        self.assertEqual(worker.first_terminal_result['reason'],'reset_detected')
+        self.assertEqual(worker.first_terminal_result['robot_boot_nonce'],91)
+        self.assertEqual(events[-1]['state'],'failed')
+    async def test_matching_nonce_reaches_runtime_after_ready(self):
+        worker,port,loaded,events=await self.run_ready(91)
+        self.assertEqual(loaded,[True]);self.assertTrue(port.closed)
+        self.assertEqual(worker.first_terminal_result['robot_boot_nonce'],91)
+
 class ApprovalMetadataTests(unittest.TestCase):
     def setUp(self):
         import tempfile
@@ -128,7 +154,7 @@ class ApprovalMetadataTests(unittest.TestCase):
         self.patch=patch.object(w,'ROOT',self.root);self.patch.start();self.addCleanup(self.patch.stop)
     def authorization(self,**changes):
         import time
-        value={'approved':True,'audio_allowed':False,'valid_until_unix':time.time()+60};value.update(changes)
+        value={'approved':True,'audio_allowed':False,'valid_until_unix':time.time()+60,'expected_boot_nonce':91};value.update(changes)
         (self.root/'notes/NUMERIC-PAIRING-RUNTIME-AUTHORIZATION.json').write_text(json.dumps(value))
     def test_consumption_is_once_and_receipt_nonsecret(self):
         self.authorization();w._consume_approval()
@@ -151,6 +177,13 @@ class ApprovalMetadataTests(unittest.TestCase):
             self.authorization(**changes)
             with self.assertRaises(Exception):w._consume_approval()
             self.assertFalse((self.root/'.tools/NUMERIC-PAIRING-CHECK-CONSUMED').exists())
+    def test_audio_requires_valid_expected_boot_before_consumption(self):
+        for nonce in (None,True,0,-1,2**32,'91'):
+            self.authorization(audio_allowed=True,expected_boot_nonce=nonce)
+            with self.assertRaises(Exception):w._consume_approval(audio_enabled=True)
+            self.assertFalse((self.root/'.tools/NUMERIC-PAIRING-AUDIO-CHECK-CONSUMED').exists())
+        self.authorization(audio_allowed=True,expected_boot_nonce=91)
+        self.assertEqual(w._consume_approval(audio_enabled=True),91)
     def test_metadata_saves_only_fixed_nonsecret_fields(self):
         payload={'state':'paired','acknowledged':True,'remaining':59,'code':'123456','credential':'synthetic_secret','message':'synthetic_raw','device_nonce':'private_fixture'}
         with patch.object(w,'_output') as output:w._status_metadata(payload)
@@ -310,7 +343,7 @@ class AudioWorkerTests(unittest.IsolatedAsyncioTestCase):
         for enabled in (False,True):
             with self.subTest(audio_enabled=enabled),tempfile.TemporaryDirectory(prefix='scope-ready-fixture-') as folder:
                 root=Path(folder);(root/'notes').mkdir();(root/'.tools').mkdir()
-                (root/'notes/NUMERIC-PAIRING-RUNTIME-AUTHORIZATION.json').write_text(json.dumps({'approved':True,'audio_allowed':enabled,'valid_until_unix':time.time()+60}))
+                (root/'notes/NUMERIC-PAIRING-RUNTIME-AUTHORIZATION.json').write_text(json.dumps({'approved':True,'audio_allowed':enabled,'valid_until_unix':time.time()+60,'expected_boot_nonce':91}))
                 clock=Clock();port=Port();port.reads=[];sent=False;observed=[]
                 ready=struct.pack('>4sBB16s',b'SCPS',1,1,struct.pack('>II8s',91,1,bytes(8)))
                 def read(cap):

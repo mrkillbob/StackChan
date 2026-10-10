@@ -36,12 +36,12 @@ final class PairingController: ObservableObject {
         switch phase {
         case .idle: return "Open Companion on StackChan and leave it muted. Click Pair StackChan to begin."
         case .opening: return "Opening USB before pairing. Wait for the robot to settle."
-        case .usb_ready, .waiting_robot: return "Keep USB connected. On the robot, tap Pair trusted host."
+        case .usb_ready, .waiting_robot: return "Keep USB connected. On the robot, tap Pair."
         case .comparing, .waiting_confirmation:
             if audioApproved { return confirmationSent ? "Confirm the same number on StackChan to connect one temporary local microphone and speaker session. Only accept if both numbers match." : "Compare this number with the correct StackChan screen. Confirming on both connects and allows one temporary local microphone and speaker session. Only accept if the numbers match." }
             return confirmationSent ? "Confirm the same number on StackChan. Only accept if both numbers match." : "Compare this number with the correct StackChan screen. Confirm on both only if they match."
         case .staging: return "Both confirmations received. Waiting for StackChan’s acknowledgement."
-        case .paired: return audioApproved ? "Pairing confirmed. StackChan will connect one temporary local microphone and speaker session. Tap Mute on StackChan to stop." : "Pairing acknowledged. Keep StackChan muted. Audio needs separate approval."
+        case .paired: return audioApproved ? "Pairing confirmed. StackChan will connect one temporary local microphone and speaker session. Use Cancel on this Mac or Back on StackChan to stop." : "Pairing acknowledged. Keep StackChan muted. Audio needs separate approval."
         case .cancelled: return "Cancelled. Any temporary grant is revoked. Retry starts a fresh attempt."
         case .expired: return "The session expired. Retry starts a fresh attempt; no previous grant is reused."
         case .failed: return "Pairing stopped. Check the robot is muted and connected before a fresh retry."

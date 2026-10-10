@@ -126,7 +126,7 @@ class NumericWorker:
         try:
             if self.approved is not True or type(self.audio_enabled) is not bool:raise PairingError('approval_required')
             if self.paused():raise PairingError('paused')
-            try:self.consume_approval()
+            try:expected_boot_nonce=self.consume_approval()
             except FileExistsError:raise PairingError('approval_consumed') from None
             self.audio_authorized=self.audio_enabled;self.last_transport_result=None;self._attempt_authorized=True
             self.robot_boot_nonce=self.robot_reset_reason=None
@@ -145,6 +145,7 @@ class NumericWorker:
             if ready.status!=READY:raise PairingError('unsupported_receipt')
             if not _robot_boot_projection(ready.boot_nonce,ready.reset_reason):raise PairingError('invalid_receipt')
             self.robot_boot_nonce=ready.boot_nonce;self.robot_reset_reason=ready.reset_reason
+            if expected_boot_nonce is not None and ready.boot_nonce!=expected_boot_nonce:raise PairingError('reset_detected')
             # Runtime verification/key loading and listener happen only AFTER Ready.
             if self.paused():raise PairingError('paused')
             runtime=self.runtime_loader()
@@ -233,8 +234,10 @@ class _Runtime:
 def _serial_factory(port):
     library=ROOT/'.tools/espressif/python_env/idf5.5_py3.13_env/lib/python3.13/site-packages'
     if str(library) not in sys.path:sys.path.insert(0,str(library))
-    import serial
-    connection=serial.Serial(port=None,baudrate=115200,timeout=0,write_timeout=2)
+    host=Path(__file__).resolve().parents[1]
+    if str(host) not in sys.path:sys.path.insert(0,str(host))
+    from numeric_pairing_serial import NumericPairingSerial
+    connection=NumericPairingSerial(port=None,baudrate=115200,timeout=0,write_timeout=2)
     connection.dtr=False;connection.rts=False;connection.port=port
     return connection
 
@@ -269,9 +272,12 @@ def _consume_approval(*,audio_enabled=False):
     if approval.get('approved') is not True or approval.get('audio_allowed') is not audio_enabled or not time.time()<approval.get('valid_until_unix',0):
         raise PairingError('approval_required')
     if type(audio_enabled) is not bool:raise PairingError('approval_required')
+    expected=approval.get('expected_boot_nonce')
+    if (audio_enabled or expected is not None) and (type(expected) is not int or not 1<=expected<=0xffffffff):raise PairingError('approval_required')
     marker='NUMERIC-PAIRING-AUDIO-CHECK-CONSUMED' if audio_enabled else 'NUMERIC-PAIRING-CHECK-CONSUMED'
     with (ROOT/'.tools'/marker).open('x') as receipt:
         receipt.write(json.dumps({'consumed_unix':time.time(),'pid':os.getpid(),'audio_allowed':audio_enabled})+'\n')
+    return expected
 
 def _append_history(metadata):
     line=(json.dumps(metadata,separators=(',',':'))+'\n').encode('utf-8')
