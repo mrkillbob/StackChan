@@ -3,7 +3,7 @@
 
 On StackChan, keep Companion muted/stopped and press Export diagnostics after
 starting this helper. It never sends commands, pairing data or credentials.
-Opening USB may reset a board: this helper does not attest physical silence or
+Opening USB may still reset a board through the OS driver: this helper does not attest physical silence or
 that a prior reboot record survived. No listener or audio device is opened.
 """
 import argparse
@@ -16,8 +16,8 @@ from streaming.diagnostic_snapshot import MAGIC,FRAME_SIZE,SnapshotError,decode_
 class CaptureError(ValueError):pass
 
 def _serial_factory():
-    import serial
-    return serial.Serial(port=None,baudrate=115200,timeout=.1,write_timeout=.1)
+    from diagnostic_serial import DiagnosticSerial
+    return DiagnosticSerial(port=None,baudrate=115200,timeout=.1,write_timeout=.1)
 
 def capture_snapshot(port_name,*,serial_factory=None,clock=time.monotonic,timeout_seconds=30):
     if type(port_name) is not str or not 1<=len(port_name)<=256 or any(ord(c)<32 for c in port_name):raise CaptureError('invalid_capture')
