@@ -34,6 +34,10 @@ with tempfile.TemporaryDirectory(prefix='stackchan-codec-diagnostics-') as tmp:
     scratch=tmp/'scratch'
     subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(tests/'codec-fixture'),'-I'+str(repo/'firmware/main'),str(tests/'test_codec_scratch.cpp'),str(repo/'firmware/main/companion/codec_tasks.cc'),'-o',str(scratch)],check=True)
     subprocess.run([str(scratch)],check=True,timeout=10)
+    backpressure=tmp/'backpressure'
+    subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-DCODEC_FIXTURE_REAL_TASKS','-I'+str(tests/'codec-fixture'),'-I'+str(repo/'firmware/main'),str(tests/'test_codec_backpressure.cpp'),str(repo/'firmware/main/companion/codec_tasks.cc'),'-o',str(backpressure)],check=True)
+    for mode in ['delayed_consumer','timeout','interrupt','stop','epoch_change','late_resume']:
+        subprocess.run([str(backpressure),mode],check=True,timeout=10)
     for mode in ['decode_error','short_pcm','partial_input','overflow','encoder_open','decoder_open','resampler_open','encode_error','sequence_gap']:
         subprocess.run([str(executable),mode],check=True,timeout=10)
     subprocess.run([str(executable),'cue',str(framed)],check=True,timeout=10)

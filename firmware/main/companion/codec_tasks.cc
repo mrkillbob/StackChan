@@ -70,13 +70,33 @@ bool CodecTasks::Current(uint32_t epoch){
 }
 bool CodecTasks::Receive(const uint8_t* data,std::size_t bytes){
     WireFrame frame{};if(!decode_wire(data,bytes,frame) || !frame.speaker){codec_fault(diagnostic::FaultCode::PacketRejected,0,diagnostic::Task::AudioTls);return false;}
-    std::lock_guard<std::mutex> lock(mutex_);
-    if(!enabled_ || incoming_.size()>=2 || !session_.packet(frame.epoch,frame.sequence,frame.size,true,now_ms())){
-        if(enabled_ && incoming_.size()>=2)codec_fault(diagnostic::FaultCode::QueueFull,static_cast<int32_t>(incoming_.size()),diagnostic::Task::AudioTls);
-        else codec_fault(diagnostic::FaultCode::PacketRejected,0,diagnostic::Task::AudioTls);
-        enabled_=false;session_.mute();incoming_.clear();return false;
+    // Two 60ms packets remain the memory bound. Backpressure the socket task
+    // instead of muting on a transient full queue; never hold mutex_ while waiting.
+    constexpr uint64_t queue_wait_ms=120;
+    const auto deadline=now_ms()+queue_wait_ms;
+    bool waited=false;
+    for(;;){
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            // Stop/interrupt/new epoch cancels an in-flight wait without touching
+            // the replacement session or recording a spurious queue fault.
+            if(waited && (quit_ || !enabled_ || frame.epoch!=epoch_.load()))return false;
+            if(!enabled_ || quit_){codec_fault(diagnostic::FaultCode::PacketRejected,0,diagnostic::Task::AudioTls);return false;}
+            if(now_ms()>=deadline){
+                codec_fault(diagnostic::FaultCode::QueueFull,static_cast<int32_t>(incoming_.size()),diagnostic::Task::AudioTls);
+                enabled_=false;session_.mute();incoming_.clear();return false;
+            }
+            if(incoming_.size()<2){
+                if(!session_.packet(frame.epoch,frame.sequence,frame.size,true,now_ms())){
+                    codec_fault(diagnostic::FaultCode::PacketRejected,0,diagnostic::Task::AudioTls);
+                    enabled_=false;session_.mute();incoming_.clear();return false;
+                }
+                incoming_.push_back({frame.epoch,std::vector<uint8_t>(frame.payload,frame.payload+frame.size)});return true;
+            }
+        }
+        waited=true;
+        vTaskDelay(1); // One RTOS tick, so the codec consumer can run.
     }
-    incoming_.push_back({frame.epoch,std::vector<uint8_t>(frame.payload,frame.payload+frame.size)});return true;
 }
 void CodecTasks::Run(){
     diagnostic::Stage(diagnostic::Task::Codec,diagnostic::StageCode::WorkerStart);diagnostic::Sample(diagnostic::Task::Codec);
