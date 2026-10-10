@@ -62,6 +62,26 @@ class SerialControlTests(unittest.TestCase):
         port.open=opened
         value=helper.capture_snapshot(self.path,serial_factory=lambda:port)
         self.assertEqual(value['boot_nonce'],12345);self.assertFalse(port.is_open)
+    def test_original_accumulating_read_discards_complete_frame_on_later_eof(self):
+        from test_diagnostic_snapshot import frame
+        port=backend.Serial(port=self.path,timeout=.1)
+        try:
+            with patch.object(backend.select,'select',return_value=([port.fd],[],[])),patch.object(backend.os,'read',side_effect=[frame(),b'']) as read:
+                with self.assertRaises(backend.SerialException):port.read(512)
+                self.assertEqual(read.call_count,2)
+        finally:port.close()
+    def test_capture_decodes_complete_frame_before_following_eof(self):
+        import read_diagnostic_snapshot as helper
+        from test_diagnostic_snapshot import frame
+        port=helper._serial_factory();original=port.open
+        def opened():
+            original()
+            self.fd=port.fd
+        port.open=opened
+        def ready(*args):return [self.fd],[],[]
+        with patch.object(backend.select,'select',side_effect=ready),patch.object(backend.os,'read',side_effect=[frame(changes={0:777}),b'']) as read:
+            value=helper.capture_snapshot(self.path,serial_factory=lambda:port)
+        self.assertEqual(value['boot_nonce'],777);self.assertEqual(read.call_count,1);self.assertFalse(port.is_open)
     def test_flow_control_rejected_and_fd_closed(self):
         for setting in ('rtscts','dsrdtr'):
             port=DiagnosticSerial(port=None,**{setting:True});port.port=self.path

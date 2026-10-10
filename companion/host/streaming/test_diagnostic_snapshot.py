@@ -109,7 +109,7 @@ class CaptureTests(unittest.TestCase):
         with self.assertRaises(helper.CaptureError):helper.capture_snapshot('/dev/synthetic',serial_factory=lambda:self.port,clock=self.clock)
         self.assertEqual(self.port.opens,1);self.assertEqual(self.port.closes,1)
     def test_invalid_timeout_never_opens(self):
-        for timeout in (0,31,True,float('nan')):
+        for timeout in (0,301,True,float('nan')):
             with self.assertRaises(helper.CaptureError):self.capture([],timeout_seconds=timeout)
             self.assertEqual(self.port.opens,0)
     def test_failed_open_and_failed_close_do_not_return_snapshot(self):
