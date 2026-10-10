@@ -39,7 +39,9 @@ bool CodecTasks::Start(AudioCodec* codec,Send send,Stopped stopped){
     if(!scratch)return false; // No task, codec IO or armed state on allocation failure.
     scratch_=std::move(scratch);
     codec_=codec;send_=std::move(send);stopped_=std::move(stopped);quit_=false;enabled_=false;done_=false;
-    if(xTaskCreate([](void* arg){auto self=static_cast<CodecTasks*>(arg);self->Run();self->done_.store(true);vTaskDelete(nullptr);},"companion_codec",16384,this,4,&task_)!=pdPASS){done_=true;scratch_.reset();task_=nullptr;return false;}
+    // Native SILK encoding uses a 9520-byte frame plus dynamic PCM/work arrays
+    // and nested analysis calls. Keep headroom beyond the decoder-only budget.
+    if(xTaskCreate([](void* arg){auto self=static_cast<CodecTasks*>(arg);self->Run();self->done_.store(true);vTaskDelete(nullptr);},"companion_codec",32768,this,4,&task_)!=pdPASS){done_=true;scratch_.reset();task_=nullptr;return false;}
     return true;
 }
 bool CodecTasks::ResetStoppedConnection(){

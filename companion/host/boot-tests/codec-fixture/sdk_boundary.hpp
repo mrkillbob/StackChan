@@ -28,6 +28,7 @@ inline int decode_result=0;
 inline std::size_t decoded_bytes=2880;
 inline bool consume_all=true;
 inline unsigned decode_calls=0;
+inline int task_create_result=1;
 inline int encoder_open_result=0,decoder_open_result=0,resampler_open_result=0;
 inline int encoder_process_result=0;inline uint32_t resample_samples=0;
 inline bool fault_recorded=false;
@@ -47,7 +48,7 @@ constexpr int pdPASS=1;
 #define configASSERT(x) assert(x)
 #define pdMS_TO_TICKS(x) (x)
 #ifndef CODEC_FIXTURE_REAL_TASKS
-inline int xTaskCreate(void (*entry)(void*),const char*,int,void* arg,int,TaskHandle_t* handle){codec_fixture::entry=entry;codec_fixture::argument=arg;*handle=arg;return pdPASS;}
+inline int xTaskCreate(void (*entry)(void*),const char*,int,void* arg,int,TaskHandle_t* handle){if(codec_fixture::task_create_result!=pdPASS)return codec_fixture::task_create_result;codec_fixture::entry=entry;codec_fixture::argument=arg;*handle=arg;return pdPASS;}
 inline void vTaskDelay(unsigned ms){codec_fixture::clock_ms+=ms;if(codec_fixture::delay)codec_fixture::delay();}
 inline void vTaskDelete(void*){}
 inline int64_t esp_timer_get_time(){return codec_fixture::clock_ms*1000;}
