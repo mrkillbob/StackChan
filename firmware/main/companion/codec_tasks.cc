@@ -4,7 +4,7 @@
 #include <esp_opus_dec.h>
 #include <esp_timer.h>
 #include <algorithm>
-#include <array>
+#include <new>
 namespace companion {
 static uint64_t now_ms(){return esp_timer_get_time()/1000;}
 static void codec_fault(diagnostic::FaultCode code,int32_t detail=0,diagnostic::Task caller=diagnostic::Task::Codec){
@@ -35,8 +35,11 @@ void CodecTasks::CloseCodecs(){
 }
 bool CodecTasks::Start(AudioCodec* codec,Send send,Stopped stopped){
     if(!done_ || !codec || !send || !stopped || codec->input_enabled() || codec->output_enabled() || codec->input_sample_rate()!=24000 || codec->output_sample_rate()!=24000 || codec->input_channels()<1 || codec->input_channels()>2)return false;
+    std::unique_ptr<Scratch> scratch(new(std::nothrow) Scratch);
+    if(!scratch)return false; // No task, codec IO or armed state on allocation failure.
+    scratch_=std::move(scratch);
     codec_=codec;send_=std::move(send);stopped_=std::move(stopped);quit_=false;enabled_=false;done_=false;
-    if(xTaskCreate([](void* arg){auto self=static_cast<CodecTasks*>(arg);self->Run();self->done_.store(true);vTaskDelete(nullptr);},"companion_codec",16384,this,4,&task_)!=pdPASS){done_=true;return false;}
+    if(xTaskCreate([](void* arg){auto self=static_cast<CodecTasks*>(arg);self->Run();self->done_.store(true);vTaskDelete(nullptr);},"companion_codec",16384,this,4,&task_)!=pdPASS){done_=true;scratch_.reset();task_=nullptr;return false;}
     return true;
 }
 bool CodecTasks::ResetStoppedConnection(){
@@ -79,7 +82,7 @@ void CodecTasks::Run(){
     diagnostic::Stage(diagnostic::Task::Codec,diagnostic::StageCode::WorkerStart);diagnostic::Sample(diagnostic::Task::Codec);
     uint32_t codec_epoch=0;bool was_active=false;bool failed=false,first_decode=true,first_encode=true;
     std::vector<int16_t> hardware(480*codec_->input_channels()),mono(480),converted(512),playback(1440),slice(480);
-    std::array<uint8_t,opus_max> opus{};std::array<uint8_t,wire_header+opus_max> wire{};
+    auto& opus=scratch_->opus;auto& wire=scratch_->wire;
     while(!quit_){
         auto epoch=epoch_.load();
         if(!Current(epoch)){

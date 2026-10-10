@@ -9,6 +9,8 @@
 #include <functional>
 #include <mutex>
 #include <vector>
+#include <array>
+#include <memory>
 namespace companion {
 // Exclusive BSP codec owner. No constructor IO, NVS, network, camera or motion.
 // Retain this object until Stop() returns true; no forced task deletion.
@@ -30,6 +32,9 @@ public:
     void Interrupt(uint32_t epoch);
     bool Receive(const uint8_t* wire,std::size_t bytes);
 private:
+    // Packet scratch must not consume the codec task stack during native Opus calls.
+    struct Scratch {std::array<uint8_t,opus_max> opus{};std::array<uint8_t,wire_header+opus_max> wire{};};
+    std::unique_ptr<Scratch> scratch_;
     struct Packet { uint32_t epoch; std::vector<uint8_t> payload; };
     AudioSession session_; std::mutex mutex_; std::deque<Packet> incoming_;
     std::atomic<uint32_t> epoch_{0}; std::atomic<bool> enabled_{false},playing_{false},playback_known_{false},quit_{false},done_{true};

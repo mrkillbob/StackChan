@@ -31,6 +31,9 @@ with tempfile.TemporaryDirectory(prefix='stackchan-codec-diagnostics-') as tmp:
             wire=encode_frame(1,seq,True,packet);f.write(struct.pack('>I',len(wire))+wire)
     executable=tmp/'worker'
     subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(tests/'codec-fixture'),'-I'+str(repo/'firmware/main'),str(tests/'test_codec_faults.cpp'),str(repo/'firmware/main/companion/codec_tasks.cc'),'-o',str(executable)],check=True)
+    scratch=tmp/'scratch'
+    subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(tests/'codec-fixture'),'-I'+str(repo/'firmware/main'),str(tests/'test_codec_scratch.cpp'),str(repo/'firmware/main/companion/codec_tasks.cc'),'-o',str(scratch)],check=True)
+    subprocess.run([str(scratch)],check=True,timeout=10)
     for mode in ['decode_error','short_pcm','partial_input','overflow','encoder_open','decoder_open','resampler_open','encode_error','sequence_gap']:
         subprocess.run([str(executable),mode],check=True,timeout=10)
     subprocess.run([str(executable),'cue',str(framed)],check=True,timeout=10)

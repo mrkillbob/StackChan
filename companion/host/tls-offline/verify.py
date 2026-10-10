@@ -34,6 +34,11 @@ def run(fixtures):
         subprocess.run([str(temp/'lifecycle')],check=True)
         subprocess.run(['c++','-std=c++17','-Wall','-Wextra','-Werror',str(pathlib.Path(__file__).with_name('test_tls_writers.cpp')),'-o',str(temp/'writers')],check=True)
         subprocess.run([str(temp/'writers')],check=True)
+        tls_tests=pathlib.Path(__file__).resolve().parent
+        transport=temp/'context'
+        subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-pthread','-fsanitize=address,undefined','-fno-omit-frame-pointer','-I'+str(tls_tests/'sdk-fixture'),'-I'+str(ROOT/'firmware/main'),'-I'+str(ROOT/'firmware/managed_components/78__esp-ml307/include'),str(tls_tests/'test_local_tls_context.cpp'),str(ROOT/'firmware/main/companion/local_tls.cc'),'-o',str(transport)],check=True)
+        for mode in ['overlap','invalid_fd','closed_fd','idle','callback','callback_stop','read_retry']:
+            subprocess.run([str(transport),mode],check=True,timeout=5)
         server=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         server.set_ciphers('DEFAULT:@SECLEVEL=0')
         server.load_cert_chain(str(fixtures/'server1.crt'),str(fixtures/'server1.key'))

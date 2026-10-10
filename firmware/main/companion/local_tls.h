@@ -26,7 +26,9 @@ private:
     TaskHandle_t owner_task_=nullptr;
     std::atomic<bool> active_{false};
     int last_error_=0;
-    std::mutex send_mutex_;
+    std::mutex send_mutex_; // Preserve whole-write ordering, including retries.
+    std::mutex context_mutex_; // One nonblocking SDK read/write at a time.
+    int socket_fd_=-1; // Established once; owner closes only after receive/writer join.
     diagnostic::Task diagnostic_role_=diagnostic::Task::AudioTls;
     std::atomic<TaskHandle_t> diagnostic_receive_task_{nullptr};
     diagnostic::Task CallerRole() const;

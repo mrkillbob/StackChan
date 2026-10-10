@@ -5,6 +5,7 @@
 #include "transport_write.hpp"
 #include <esp_timer.h>
 #include <climits>
+#include <fcntl.h>
 #include <exception>
 #include <mbedtls/build_info.h>
 #include <ctime>
@@ -75,6 +76,21 @@ bool LocalTls::Connect(const std::string& host, int port) {
         return false;
     }
 
+    // Finish the synchronous handshake first. Thereafter a context lock must
+    // never span a socket wait: idle reads must release it for heartbeat writes.
+    int fd=-1;
+    if(esp_tls_get_conn_sockfd(tls_client_,&fd)!=ESP_OK || fd<0){
+        last_error_=-1;esp_tls_conn_destroy(tls_client_);tls_client_=nullptr;return false;
+    }
+    const int flags=fcntl(fd,F_GETFL,0);
+    if(flags<0 || fcntl(fd,F_SETFL,flags|O_NONBLOCK)<0){
+        last_error_=-1;esp_tls_conn_destroy(tls_client_);tls_client_=nullptr;return false;
+    }
+    const int configured=fcntl(fd,F_GETFL,0);
+    if(configured<0 || !(configured&O_NONBLOCK)){
+        last_error_=-1;esp_tls_conn_destroy(tls_client_);tls_client_=nullptr;return false;
+    }
+    socket_fd_=fd;
     active_=true;
     connected_ = true;
 
@@ -85,7 +101,7 @@ bool LocalTls::Connect(const std::string& host, int port) {
         xEventGroupSetBits(ssl->event_group_, BIT0);
         vTaskDelete(NULL);
     }, "companion_tls", 4096, this, 1, &receive_task_handle_)!=pdPASS) {
-        active_=false;connected_=false;esp_tls_conn_destroy(tls_client_);tls_client_=nullptr;return false;
+        active_=false;connected_=false;esp_tls_conn_destroy(tls_client_);tls_client_=nullptr;socket_fd_=-1;return false;
     }
     return true;
 }
@@ -93,8 +109,7 @@ bool LocalTls::Connect(const std::string& host, int port) {
 void LocalTls::Disconnect() {
     active_=false;
     if(!tls_client_)return;
-    int fd=-1;
-    if(esp_tls_get_conn_sockfd(tls_client_,&fd)==ESP_OK && fd>=0)shutdown(fd,SHUT_RDWR);
+    if(socket_fd_>=0)shutdown(socket_fd_,SHUT_RDWR);
     // A receive callback can request stop only. Its task, TLS and event group
     // remain alive until the retaining owner calls Disconnect and joins it.
     if(xTaskGetCurrentTaskHandle()==receive_task_handle_)return;
@@ -104,7 +119,7 @@ void LocalTls::Disconnect() {
     receive_task_handle_=nullptr;
     // Join receive first, then drain writers (including a receive-side pong).
     std::lock_guard<std::mutex> writers(send_mutex_);
-    esp_tls_conn_destroy(tls_client_);tls_client_=nullptr;
+    esp_tls_conn_destroy(tls_client_);tls_client_=nullptr;socket_fd_=-1;
 }
 
 /* CONFIG_MBEDTLS_SSL_RENEGOTIATION should be disabled in sdkconfig.
@@ -137,7 +152,12 @@ int LocalTls::Send(const std::string& data) {
     
     while (total_sent < data_size) {
         if(!WriteMayContinue(active_.load(),started_us,esp_timer_get_time())){diagnostic::Fault(diagnostic_task,diagnostic::FaultCode::TlsWrite,-2);return -1;}
-        int ret = esp_tls_conn_write(tls_client_, data_ptr + total_sent, data_size - total_sent);
+        int ret;
+        {
+            std::lock_guard<std::mutex> context(context_mutex_);
+            if(!active_.load())return -1;
+            ret=esp_tls_conn_write(tls_client_,data_ptr+total_sent,data_size-total_sent);
+        }
 
         if (ret == ESP_TLS_ERR_SSL_WANT_WRITE || ret == ESP_TLS_ERR_SSL_WANT_READ) {
             vTaskDelay(1);
@@ -163,10 +183,16 @@ void LocalTls::ReceiveTask() {
     while (active_.load()) {
         data.resize(1500);
         diagnostic::Stage(diagnostic_role_,diagnostic::StageCode::TlsReadEnter);
-        int ret = esp_tls_conn_read(tls_client_, data.data(), data.size());
+        int ret;
+        {
+            std::lock_guard<std::mutex> context(context_mutex_);
+            if(!active_.load())break;
+            ret=esp_tls_conn_read(tls_client_,data.data(),data.size());
+        } // Release before callbacks: dispatch may synchronously send a pong.
         diagnostic::Stage(diagnostic_role_,diagnostic::StageCode::TlsReadReturn);
 
-        if (ret == ESP_TLS_ERR_SSL_WANT_READ) {
+        if (ret == ESP_TLS_ERR_SSL_WANT_READ || ret == ESP_TLS_ERR_SSL_WANT_WRITE) {
+            vTaskDelay(1); // Yield on an idle nonblocking socket, outside the lock.
             continue;
         }
 
