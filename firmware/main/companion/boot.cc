@@ -47,8 +47,10 @@ std::atomic<bool> pair_requested{false}, connect_requested{false}, listen_reques
 struct UsbSdkDriver {
     bool OnOwnerCore() const { return xPortGetCoreID()==0; }
     bool Installed() const { return usb_serial_jtag_is_driver_installed(); }
-    bool Install() {
-        usb_serial_jtag_driver_config_t config={};config.rx_buffer_size=1024;config.tx_buffer_size=64;
+    bool Install() { return InstallWithTxCapacity(64); }
+    bool InstallDiagnostic() { return InstallWithTxCapacity(DiagnosticUsbMaxBytes); }
+    bool InstallWithTxCapacity(size_t capacity) {
+        usb_serial_jtag_driver_config_t config={};config.rx_buffer_size=1024;config.tx_buffer_size=capacity;
         return usb_serial_jtag_driver_install(&config)==ESP_OK;
     }
     bool Uninstall() { return usb_serial_jtag_driver_uninstall()==ESP_OK; }

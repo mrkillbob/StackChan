@@ -5,7 +5,7 @@ struct Driver {
  bool core=true,installed=false,install_ok=true,close_ok=true,flush_ok=true;int written=-2;
  unsigned installs=0,closes=0,writes=0,flushes=0;
  bool OnOwnerCore(){return core;}bool Installed(){return installed;}
- bool Install(){++installs;if(install_ok)installed=true;return install_ok;}
+ bool InstallDiagnostic(){++installs;if(install_ok)installed=true;return install_ok;}
  bool Uninstall(){++closes;if(close_ok)installed=false;return close_ok;}
  int WriteAck(const uint8_t*,size_t n){++writes;return written==-2?static_cast<int>(n):written;}
  bool FlushAck(){++flushes;return flush_ok;}
