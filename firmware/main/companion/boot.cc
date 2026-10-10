@@ -6,6 +6,7 @@
 #include "numeric_usb.hpp"
 #include "numeric_pairing.h"
 #include "pair_connection_consent.hpp"
+#include "pair_ui_action.hpp"
 #include "local_tls.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -72,7 +73,8 @@ public:
         return closed;
     }
     bool Active() const { return diagnostics_.OwnsDriver()||(numeric_?numeric_owner_.Active():owner_.Active()); }
-    bool ExportDiagnostics(bool eligible){if(!eligible)return false;auto frame=diagnostic::Snapshot();return diagnostics_.Export(true,frame.bytes.data(),frame.size);}
+    bool ExportDiagnostics(bool eligible){if(!eligible)return diagnostics_.Export(false,nullptr,0);auto frame=diagnostic::Snapshot();return diagnostics_.Export(true,frame.bytes.data(),frame.size);}
+    const char* ExportMessage()const{return DiagnosticExportMessage(diagnostics_.LastResult());}
     bool Numeric()const{return numeric_;}
     uint32_t BootNonce()const{return boot_nonce_?boot_nonce_:1;}
     NumericUsbRead PollNumeric(NumericUsbRequest& request){return numeric_owner_.Poll(esp_timer_get_time()/1000,request);}
@@ -109,11 +111,7 @@ bool StartSavedWifi() {
     bool ok=esp_wifi_set_storage(WIFI_STORAGE_RAM)==ESP_OK && esp_wifi_set_mode(WIFI_MODE_STA)==ESP_OK && esp_wifi_set_config(WIFI_IF_STA,&wifi)==ESP_OK && esp_wifi_start()==ESP_OK && esp_wifi_connect()==ESP_OK;
     std::memset(&wifi,0,sizeof(wifi));return ok;
 }
-lv_obj_t* button(lv_obj_t* screen,const char* text,int x,std::atomic<bool>& action) {
-    auto b=lv_button_create(screen);lv_obj_set_size(b,140,48);lv_obj_align(b,LV_ALIGN_BOTTOM_MID,x,-12);
-    auto label=lv_label_create(b);lv_label_set_text(label,text);lv_obj_center(label);
-    lv_obj_add_event_cb(b,[](lv_event_t* e){static_cast<std::atomic<bool>*>(lv_event_get_user_data(e))->store(true);},LV_EVENT_CLICKED,&action);return b;
-}
+
 }
 bool StageAuthorizedGrant(AuthorizedGrant grant) {
     if((grant.expires_at_ms&&static_cast<uint64_t>(esp_timer_get_time()/1000)>=grant.expires_at_ms) || !grant.host_audio_qualified || grant.credential.empty() || grant.credential.size()>256 || grant.uri.rfind("wss://",0)!=0 || grant.device.empty() || grant.request.empty()){std::fill(grant.credential.begin(),grant.credential.end(),'\0');return false;}
@@ -133,9 +131,10 @@ struct Runtime {
     bool wifi_started=false,grant_connected=false;
     ConnectGate connect_gate;
     PairConnectionConsent matching_consent;
+    PairUiAction pair_ui;
     lv_obj_t* status=nullptr;
     lv_obj_t* diagnostic_button=nullptr;
-    lv_obj_t *pair_button=nullptr,*listen_button=nullptr,*connect_button=nullptr,*mute_button=nullptr,*confirm_button=nullptr,*reject_button=nullptr;
+    lv_obj_t* pair_button=nullptr;
     const char* message="Mira companion\nMuted - pair a trusted host\nCamera and motion inactive";
 };
 Runtime& runtime() { static auto* value=new Runtime;return *value; }
@@ -150,7 +149,7 @@ bool IsWifiConnected(){return connected.load();}
 bool NetworkWasStarted(){return wifi_initialized.load();}
 void OpenView(lv_obj_t* parent) {
     diagnostic_requested=false;
-    auto& state=runtime();auto& status=state.status;
+    auto& state=runtime();state.pair_ui.Reset();auto& status=state.status;
     pair_requested=false;connect_requested=false;listen_requested=false;mute_requested=false;confirm_requested=false;reject_requested=false;
     {LvglLockGuard lock;auto screen=parent;
      lv_obj_set_style_bg_color(screen,lv_color_hex(0x10232d),0);
@@ -158,23 +157,17 @@ void OpenView(lv_obj_t* parent) {
      lv_obj_set_style_text_color(status,lv_color_hex(0xffffff),0);
      lv_label_set_text(status,"Mira companion\nMuted - pair a trusted host\nCamera and motion inactive");
      auto diagnostics=lv_button_create(screen);state.diagnostic_button=diagnostics;lv_obj_set_size(diagnostics,180,28);lv_obj_set_pos(diagnostics,8,2);
-     auto diagnostic_label=lv_label_create(diagnostics);lv_label_set_text(diagnostic_label,"Export diagnostics");lv_obj_center(diagnostic_label);
+     auto diagnostic_label=lv_label_create(diagnostics);lv_label_set_text(diagnostic_label,"Export");lv_obj_center(diagnostic_label);
      lv_obj_add_event_cb(diagnostics,[](lv_event_t*){diagnostic_requested=true;},LV_EVENT_CLICKED,nullptr);
-     auto pair=lv_button_create(screen);state.pair_button=pair;lv_obj_set_size(pair,290,32);lv_obj_align(pair,LV_ALIGN_CENTER,0,-12);
-     auto pair_label=lv_label_create(pair);lv_label_set_text(pair_label,"Pair trusted host");lv_obj_center(pair_label);
-     lv_obj_add_event_cb(pair,[](lv_event_t*){pair_requested=true;},LV_EVENT_CLICKED,nullptr);
-     state.connect_button=button(screen,"Connect",-76,connect_requested);state.mute_button=button(screen,"Mute",76,mute_requested);
-     state.confirm_button=button(screen,"Confirm code",-76,confirm_requested);state.reject_button=button(screen,"Reject",76,reject_requested);
-     lv_obj_add_flag(state.confirm_button,LV_OBJ_FLAG_HIDDEN);lv_obj_add_flag(state.reject_button,LV_OBJ_FLAG_HIDDEN);
-     auto listen=lv_button_create(screen);state.listen_button=listen;lv_obj_set_size(listen,290,48);lv_obj_align(listen,LV_ALIGN_CENTER,0,32);
-     auto label=lv_label_create(listen);lv_label_set_text(label,"Allow this conversation");lv_obj_center(label);
-     lv_obj_add_event_cb(listen,[](lv_event_t*){listen_requested=true;},LV_EVENT_CLICKED,nullptr);
+     auto pair=lv_button_create(screen);state.pair_button=pair;lv_obj_set_size(pair,290,44);lv_obj_align(pair,LV_ALIGN_CENTER,0,50);
+     auto pair_label=lv_label_create(pair);lv_label_set_text(pair_label,"Pair");lv_obj_center(pair_label);
+     lv_obj_add_event_cb(pair,[](lv_event_t*){runtime().pair_ui.Click();},LV_EVENT_CLICKED,nullptr);
     }
     state.message="Mira companion\nMuted - pair a trusted host\nCamera and motion inactive";
 }
 bool CloseView() {
     diagnostic_requested=false;
-    auto& state=runtime();bool usb_closed=state.provisioner.Close();
+    auto& state=runtime();state.pair_ui.Reset();bool usb_closed=state.provisioner.Close();
     diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::NumericCloseEnter);state.numeric_pairing.Cancel();diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::NumericCloseExit);state.numeric_until=0;state.numeric_request={};state.numeric_connected=false;state.connect_gate.Cancel();state.matching_consent.Cancel();
     pair_requested=false;connect_requested=false;listen_requested=false;mute_requested=false;confirm_requested=false;reject_requested=false;
     {std::lock_guard<std::mutex> lock(grant_mutex);if(pending_grant)std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');pending_grant.reset();}
@@ -191,6 +184,12 @@ void TickView() {
     auto& wifi_started=state.wifi_started;auto& grant_connected=state.grant_connected;
     auto& connect_gate=state.connect_gate;auto& message=state.message;auto status=state.status;
     uint64_t now=esp_timer_get_time()/1000;
+    switch(state.pair_ui.Take(state.numeric_pairing.Code(),state.numeric_request.request,state.numeric_pairing.AudioRequested())) {
+        case PairUiAction::Action::Pair:pair_requested=true;break;
+        case PairUiAction::Action::Confirm:confirm_requested=true;break;
+        case PairUiAction::Action::Stale:message="Pairing changed - compare code again";break;
+        case PairUiAction::Action::None:break;
+    }
     if(reject_requested.exchange(false))mute_requested=true;
     if(state.numeric_until){
         state.numeric_pairing.Tick(now);
@@ -205,12 +204,12 @@ void TickView() {
         if(diagnostic_requested.exchange(false)) {
             bool pending=false;{std::lock_guard<std::mutex> lock(grant_mutex);pending=pending_grant.has_value();}
             bool eligible=!grant_connected&&!state.numeric_until&&!pending&&!provisioner.Active()&&tasks.IsStopped()&&CurrentAudioOwner()==AudioOwner::None;
-            message=provisioner.ExportDiagnostics(eligible)?"Diagnostics exported - no audio":"Diagnostics need fully stopped audio and USB";
+            provisioner.ExportDiagnostics(eligible);message=provisioner.ExportMessage();
         }
         if(pair_requested.exchange(false)) {
             connect_gate.Cancel();
             bool pending=false; {std::lock_guard<std::mutex> lock(grant_mutex);pending=pending_grant.has_value();}
-            if(grant_connected || pending) message="Mira companion\nMuted - tap Mute before pairing";
+            if(grant_connected || pending) message="Mira companion\nMuted - use Back to stop before pairing";
             else {
                 state.numeric_pairing.Cancel();state.numeric_request={};state.numeric_until=0;state.numeric_connected=false;state.matching_consent.Cancel();
                 bool opened=provisioner.Open();
@@ -259,7 +258,7 @@ void TickView() {
                     if(pending_grant)std::fill(pending_grant->credential.begin(),pending_grant->credential.end(),'\0');
                     pending_grant.reset();staged=false;
                 }
-                message=staged?"Mira companion\nMuted - grant staged; tap Connect":"Mira companion\nMuted - grant or acknowledgement rejected";
+                message=staged?"Mira companion\nMuted - grant staged; explicit session authorization required":"Mira companion\nMuted - grant or acknowledgement rejected";
             } else if(result==ProvisioningRead::Rejected) message="Mira companion\nMuted - pairing expired or rejected";
             fields.Clear();
         }
@@ -269,7 +268,7 @@ void TickView() {
             bool have_grant=false;{std::lock_guard<std::mutex> lock(grant_mutex);have_grant=pending_grant.has_value();}
             connect_gate.Request(usb_closed&&have_grant);
             if(!usb_closed||!have_grant)state.matching_consent.Cancel();
-            if(!usb_closed)message="Mira companion\nMuted - USB cleanup pending; tap Mute";
+            if(!usb_closed)message="Mira companion\nMuted - USB cleanup pending; use Back to stop";
             else if(!have_grant)message="Mira companion\nMuted - trusted host grant required";
             else if(!wifi_started){wifi_started=StartSavedWifi();message=wifi_started?"Mira companion\nConnecting saved Wi-Fi":"Mira companion\nMuted - Wi-Fi unavailable";}
             else if(!connected){esp_wifi_connect();message="Mira companion\nConnecting saved Wi-Fi";}
@@ -299,7 +298,7 @@ void TickView() {
             socket.Tick();using S=CompanionSocket::State;
             switch(socket.GetState()) {
                 case S::AwaitingBegin:message="Mira companion\nMuted - waiting for host session";break;
-                case S::ConsentRequired:message="Mira companion\nMuted - tap Allow to listen";break;
+                case S::ConsentRequired:message="Mira companion\nMuted - explicit session authorization required";break;
                 case S::Arming:message="Mira companion\nMuted - waiting for host approval";break;
                 case S::Listening:message="Mira companion\nListening";break;
                 case S::Speaking:message="Mira companion\nSpeaking";break;
@@ -312,16 +311,13 @@ void TickView() {
         {LvglLockGuard lock;diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::LvglAcquired);
             if(export_ready)lv_obj_remove_state(state.diagnostic_button,LV_STATE_DISABLED);else lv_obj_add_state(state.diagnostic_button,LV_STATE_DISABLED);
             bool compare=!state.numeric_pairing.Code().empty();
-            for(auto item:{state.pair_button,state.listen_button,state.connect_button,state.mute_button}){if(compare)lv_obj_add_flag(item,LV_OBJ_FLAG_HIDDEN);else lv_obj_remove_flag(item,LV_OBJ_FLAG_HIDDEN);}
-            for(auto item:{state.confirm_button,state.reject_button}){if(compare)lv_obj_remove_flag(item,LV_OBJ_FLAG_HIDDEN);else lv_obj_add_flag(item,LV_OBJ_FLAG_HIDDEN);}
-            if(state.numeric_pairing.Confirmed())lv_obj_add_state(state.confirm_button,LV_STATE_DISABLED);else lv_obj_remove_state(state.confirm_button,LV_STATE_DISABLED);
-            auto confirm_label=lv_obj_get_child(state.confirm_button,0);
-            lv_label_set_text(confirm_label,state.numeric_pairing.AudioRequested()?"Confirm & connect":"Confirm pairing");
-            if(state.numeric_pairing.AudioRequested() && state.numeric_pairing.Confirmed()) {
-                lv_obj_add_flag(state.connect_button,LV_OBJ_FLAG_HIDDEN);lv_obj_add_flag(state.listen_button,LV_OBJ_FLAG_HIDDEN);
-            }
+            state.pair_ui.Render(state.numeric_pairing.Code(),state.numeric_request.request,state.numeric_pairing.AudioRequested());
+            if(compare&&state.numeric_pairing.Confirmed())lv_obj_add_state(state.pair_button,LV_STATE_DISABLED);
+            else lv_obj_remove_state(state.pair_button,LV_STATE_DISABLED);
+            auto pair_label=lv_obj_get_child(state.pair_button,0);
+            lv_label_set_text(pair_label,compare?(state.numeric_pairing.AudioRequested()?"Pair & authorize mic/speaker":"Pair - confirm code"):"Pair");
             lv_obj_set_width(status,compare?290:240);lv_obj_set_height(status,compare?110:54);
-            std::string display=compare?"Compare code: "+state.numeric_pairing.Code()+(state.numeric_pairing.AudioRequested()?"\nConfirm permits local mic/speaker\nfor this temporary session":"\nPairing only - audio stays muted")+(state.numeric_pairing.Confirmed()?"\nRobot confirmed - confirm on Mac":"\nConfirm on Mac and robot"):message;lv_label_set_text(status,display.c_str());
+            std::string display=compare?"Compare code: "+state.numeric_pairing.Code()+(state.numeric_pairing.AudioRequested()?"\nConfirm permits local mic/speaker\nfor this temporary session":"\nPairing only - audio stays muted")+(state.numeric_pairing.Confirmed()?"\nRobot confirmed - confirm on Mac":"\nCompare on Mac, then tap Pair"):message;lv_label_set_text(status,display.c_str());
         }
         diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::LvglReleased);
  }

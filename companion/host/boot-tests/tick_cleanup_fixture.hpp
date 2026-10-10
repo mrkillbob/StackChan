@@ -10,6 +10,7 @@
 #include <thread>
 #include <algorithm>
 #include "companion/diagnostics.h"
+#include "companion/pair_ui_action.hpp"
 namespace companion::diagnostic {void Stage(Task,StageCode){}void Sample(Task){}void Fault(Task,FaultCode,int32_t){}void CountTick(){}void CountHeartbeat(bool){}}
 struct lv_obj_t{};
 constexpr int LV_OBJ_FLAG_HIDDEN=1,LV_STATE_DISABLED=2;
@@ -32,7 +33,7 @@ bool StartSavedWifi(){return false;}bool StageAuthorizedGrant(AuthorizedGrant){r
 struct NumericUsbRequest{std::string request;uint32_t boot_nonce=1;};
 enum class NumericUsbRead{None,Accepted,Rejected};enum class ProvisioningRead{None,Accepted,Rejected};
 struct ProvisioningFields{std::string uri,device,credential,request;void Clear(){}};
-struct Provisioner{bool ExportDiagnostics(bool){return false;}bool Close(){return true;}bool Active(){return false;}bool Numeric(){return true;}bool Open(){return false;}NumericUsbRead PollNumeric(NumericUsbRequest&){return NumericUsbRead::None;}ProvisioningRead Poll(ProvisioningFields&){return ProvisioningRead::None;}bool CompleteAccepted(bool,const std::string&){return false;}};
+struct Provisioner{const char* ExportMessage(){return "USB flush unconfirmed - check host capture";}bool ExportDiagnostics(bool){return false;}bool Close(){return true;}bool Active(){return false;}bool Numeric(){return true;}bool Open(){return false;}NumericUsbRead PollNumeric(NumericUsbRequest&){return NumericUsbRead::None;}ProvisioningRead Poll(ProvisioningFields&){return ProvisioningRead::None;}bool CompleteAccepted(bool,const std::string&){return false;}};
 struct NumericGrant{std::string request,credential;uint64_t expires_at_ms=0;bool audio_requested=false;};
 struct NumericPairing{
  std::mutex mutex;std::condition_variable condition;bool block=false,entered=false,released=false;
@@ -51,7 +52,7 @@ public:enum class State{Disconnected,AwaitingBegin,ConsentRequired,Arming,Listen
 };
 static uint64_t ms(){return clock_ms;}
 ACTUAL_SOCKET_TICK
-struct Runtime{Provisioner provisioner;NumericPairing numeric_pairing;NumericUsbRequest numeric_request;uint64_t numeric_until=120000;bool numeric_connected=true;Tasks tasks;CompanionSocket socket{tasks};bool wifi_started=true,grant_connected=true;ConnectGate connect_gate;Consent matching_consent;lv_obj_t ui;lv_obj_t* status=&ui;lv_obj_t* diagnostic_button=&ui;lv_obj_t *pair_button=&ui,*listen_button=&ui,*connect_button=&ui,*mute_button=&ui,*confirm_button=&ui,*reject_button=&ui;const char* message="Speaking";};
+struct Runtime{Provisioner provisioner;NumericPairing numeric_pairing;NumericUsbRequest numeric_request;uint64_t numeric_until=120000;bool numeric_connected=true;Tasks tasks;CompanionSocket socket{tasks};bool wifi_started=true,grant_connected=true;ConnectGate connect_gate;Consent matching_consent;PairUiAction pair_ui;lv_obj_t ui;lv_obj_t* status=&ui;lv_obj_t* diagnostic_button=&ui;lv_obj_t *pair_button=&ui,*listen_button=&ui,*connect_button=&ui,*mute_button=&ui,*confirm_button=&ui,*reject_button=&ui;const char* message="Speaking";};
 Runtime& runtime(){static Runtime state;return state;}
 constexpr bool STACKCHAN_COMPANION_TRUSTED_USB_PROVISIONING=false;
 ACTUAL_TICK_VIEW
