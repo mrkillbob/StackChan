@@ -1,4 +1,11 @@
-# Public audio device direction remains blocked
+# Directional audio source implemented; installation pending
+
+The reviewed [AudioServerPlugIn candidate](host/directional-hal/README.md) now
+provides genuine input-only Microphone and output-only Speaker objects, paired
+with hidden Feed/Return transport endpoints. Actual SDK bundle/native/UI builds
+and synthetic enumeration/PCM/lifecycle tests qualify the source. The candidate
+has not been installed or loaded into coreaudiod, and current OS listings remain
+unchanged. The existing worker/profile still uses its original transport.
 
 The user's observed defect is accurate: BOTH StackChan names appear in BOTH
 input and output lists. Each current aggregate exposes two input channels, two
@@ -19,19 +26,20 @@ channel mask. A separate read-only query reports the four existing alias/scope
 CanBeDefaultDevice properties are not settable. No setter, capture, playback,
 permission change or default-route write was attempted.
 
-The source mitigation inspects actual scope/channel/stream enumeration, rejects
-the duplex topology for both public roles, and stops recreating the known-wrong
-aliases. The app reports that dedicated directional devices are unavailable;
-Sync's internal transport is unchanged. AudioEndpointDirectionChecks covers
+The app source inspects actual scope/channel/stream enumeration, rejects the
+duplex topology for both public roles, and never recreates the known-wrong
+aliases. It now checks HALv2 UID/owner provenance and visibility rather than
+requiring aggregate subdevices. A failed metadata read cannot certify absence
+of legacy aliases. Sync's internal transport is unchanged. AudioEndpointDirectionChecks covers
 correct input-only/output-only shapes, the actual duplex counterexample,
 reversed scopes, extra opposite streams and failed/incomplete metadata.
 
-This does not fix current OS enumeration or install new endpoints. A distinct
-supported device/backing implementation is required. A HAL device implementation
-would be a new integration and installation scope; process taps or system/private
-API tricks have not been substituted. Its permissions, lifecycle, transport
-mapping and actual signal path need review before replacing existing devices.
-No universal claim that macOS direction filtering is impossible is made here.
+This does not fix current OS enumeration or install new endpoints. The separate
+HAL implementation is now complete in source and independently reviewed for
+offline scope. Installing it, reloading the audio service, migrating only exact
+owned legacy aliases, and checking actual OS scopes require separate approval.
+Real scheduling, latency and signal path remain unqualified. No process tap,
+private API, privacy bypass or third-party driver dependency is substituted.
 
 Installation remains held on this requirement. The firmware/source tests and
 opaque backup do not establish live audio acceptance. Any actual robot audio

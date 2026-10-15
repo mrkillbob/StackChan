@@ -1,5 +1,6 @@
 #include "pcm_ring.hpp"
 #include "checked_unit.hpp"
+#include "directional_devices.hpp"
 #include <AudioUnit/AudioUnit.h>
 #include <CoreAudio/CoreAudio.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -130,6 +131,14 @@ OSStatus configure(companion::CheckedUnit<AudioUnit>& state,AudioDeviceID id,boo
     state.needs_uninitialize=true; // an attempted initialization may need teardown even on failure
     return AudioUnitInitialize(unit);
 }
+int open_devices(AudioDeviceID out,AudioDeviceID in,void** result) {
+    if(!result)return kAudio_ParamError;*result=nullptr;
+    if(out==kAudioObjectUnknown || in==kAudioObjectUnknown || out==in)return kAudio_ParamError;
+    auto* b=new Bridge();auto status=configure(b->output,out,false,*b);
+    if(!status)status=configure(b->input,in,true,*b);
+    if(status){uint32_t retained=0;if(close_bridge(b,&retained)==0)delete b;else *result=b;return status;}
+    *result=b;return noErr;
+}
 }
 extern "C" {
 // No IO is opened at library load. This explicit call must only be made in an approved physical test.
@@ -137,18 +146,14 @@ int sc_open(const char* to_voice,const char* from_voice,void** result) {
     if(!result) return kAudio_ParamError; *result=nullptr;
     // Deliberately restrict prototype IO to the already inventoried virtual buses.
     if(!to_voice || !from_voice || std::strcmp(to_voice,"Pro Tools Audio Bridge 2-A_UID") || std::strcmp(from_voice,"Pro Tools Audio Bridge 2-B_UID")) return kAudio_ParamError;
-    auto out=device(to_voice),in=device(from_voice);
-    if(out==kAudioObjectUnknown || in==kAudioObjectUnknown || out==in) return kAudio_ParamError;
-    auto* b=new Bridge();
-    auto status=configure(b->output,out,false,*b);
-    if(!status)status=configure(b->input,in,true,*b);
-    if(status){
-        uint32_t retained=0;
-        if(close_bridge(b,&retained)==0)delete b;
-        else *result=b; // caller owns partial-open cleanup, including on error
-        return status;
-    }
-    *result=b; return noErr;
+    return open_devices(device(to_voice),device(from_voice),result);
+}
+// Additive, explicit opt-in. Never selected by sc_open, defaults, profile, or UID
+// fallback. Opening still requires separate physical-test/runtime approval.
+int sc_open_directional(void** result) {
+    if(!result)return kAudio_ParamError;*result=nullptr;
+    return open_devices(companion::directional::resolve(companion::directional::feed),
+                        companion::directional::resolve(companion::directional::returned),result);
 }
 int sc_start(void* ptr) {
     if(!ptr) return kAudio_ParamError; auto& b=*static_cast<Bridge*>(ptr);

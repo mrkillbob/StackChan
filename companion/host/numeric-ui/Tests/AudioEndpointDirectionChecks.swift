@@ -18,6 +18,15 @@ import Foundation
   let inputs=observed.indices.filter { let x=observed[$0];return microphone.accepts(inputChannels:x.0,outputChannels:x.1,inputStreams:x.2,outputStreams:x.3) }
   let outputs=observed.indices.filter { let x=observed[$0];return speaker.accepts(inputChannels:x.0,outputChannels:x.1,inputStreams:x.2,outputStreams:x.3) }
   assert(inputs == [1] && outputs == [2])
+  let current = Array(DirectionalAudioCatalog.publicUIDs)
+  assert(DirectionalAudioCatalog.accepts(current))
+  assert(DirectionalAudioCatalog.accepts(current + ["unrelated.device"]))
+  assert(!DirectionalAudioCatalog.accepts(nil)) // enumeration failure is unknown
+  assert(!DirectionalAudioCatalog.accepts([]))
+  assert(!DirectionalAudioCatalog.accepts([current[0]]))
+  for forbidden in DirectionalAudioCatalog.forbiddenVisibleUIDs {
+   assert(!DirectionalAudioCatalog.accepts(current + [forbidden]))
+  }
   print("PASS public direction/enumeration gates; duplex aliases rejected; no audio IO")
  }
 }

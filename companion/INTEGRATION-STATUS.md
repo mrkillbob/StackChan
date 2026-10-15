@@ -19,8 +19,15 @@ properties are not settable. The app source now checks actual channel/stream
 directions and refuses to recreate or certify the duplex aliases. Internal
 transport remains robot microphone -> worker output on2-A -> Mac input, and Mac
 output ->2-B -> worker input -> robot speaker. No display-name swap or route change
-is used as a substitute. A supported directional device implementation remains a
-product/installation blocker; see [audio direction](AUDIO-DIRECTION.md).
+is used as a substitute. A supported directional AudioServerPlugIn is now
+implemented and independently reviewed in source: public input-only Microphone,
+output-only Speaker and hidden Feed/Return. Actual SDK bundle/native/UI builds,
+five sanitized C++ binaries, nine native-adapter Python checks and the expanded
+pure Swift direction/catalog checks pass. Source tests include deterministic
+peer-producer Stop-before-publication retirement. Existing route defaults remain;
+the new native path requires explicit opt-in. Installation, exact-owned legacy
+alias migration, real OS enumeration, scheduling/latency and signal qualification
+remain product/installation gates; see [audio direction](AUDIO-DIRECTION.md).
 
 Validation on the current source includes the real ESP-IDF5.5.4 app build,
 2,523-file prior integration review plus scoped final deltas,111 audited Python

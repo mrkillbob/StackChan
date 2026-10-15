@@ -1,5 +1,13 @@
 # Native audio implementation slice
 
+An additive, source-qualified [directional HAL candidate](../directional-hal/README.md)
+now supports explicit `sc_open_directional` / `open_directional_for_approved_test`.
+It resolves and verifies hidden Feed/Return endpoints by exact UID; ordinary
+`sc_open`, current worker/profile, and legacy route constants remain unchanged.
+The new bundle/library are not installed or activated. Opening IO still requires
+separate approval and existing physical consent. Resolver mocks, adapter mocks
+and existing callback/diagnostic sanitizer checks pass with this addition.
+
 Architecture: robot audio → existing Opus/resampler worker → native AUHAL output on **Pro Tools Audio Bridge 2-A_UID** → the existing Mira native Voice input. Mira output → **Pro Tools Audio Bridge 2-B_UID** → native AUHAL input → existing resampler/Opus worker → robot speaker. No model/session API is substituted. Native Voice remains the conversation owner; the bridge owns transport epochs only.
 
 `coreaudio_bridge.cpp` implements the two public AUHAL instances described by [Apple TN2091](https://developer.apple.com/library/archive/technotes/tn2091/_index.html). Only those two exact inventoried virtual UIDs are accepted. Client format is mono signed PCM16 48kHz on physical channel one, other output channels disabled; physical rate must already be 48kHz. No default device, device rate, permissions or persistent settings are written. Library load performs no IO. `sc_open` and `sc_start` are explicit physical-test operations, not invoked by synthetic tests.

@@ -43,6 +43,18 @@ class NativeHostAdapter:
         self._check(self.lib.sc_open(TO_VOICE.encode(),FROM_VOICE.encode(),C.byref(self.handle)))
         try: self._check(self.lib.sc_start(self.handle))
         except Exception: self.close(); raise
+    def open_directional_for_approved_test(self):
+        """Explicit HAL candidate opt-in; ordinary worker/profile never calls this.
+
+        Uses hidden Feed output -> public Microphone input, public Speaker output
+        -> hidden Return input. Installing a driver and opening IO need approval.
+        """
+        if self.handle.value: raise RuntimeError('already open')
+        function = self.lib.sc_open_directional
+        function.argtypes = [C.POINTER(C.c_void_p)]; function.restype = C.c_int
+        self._check(function(C.byref(self.handle)))
+        try: self._check(self.lib.sc_start(self.handle))
+        except Exception: self.close(); raise
     def begin(self,epoch):
         self._require()
         if type(epoch) is not int or not self.epoch<epoch<=0xffffffff: raise ValueError('new uint32 epoch required')
