@@ -9,6 +9,7 @@
 #include <uitk/short_namespace.hpp>
 #include <hal/hal.h>
 #include <cstdint>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string_view>
@@ -90,7 +91,7 @@ private:
     uint32_t _last_tick = 0;
     bool _is_first_in   = false;
 
-    AppConfigEvent _last_app_config_event = AppConfigEvent::None;
+    std::atomic<AppConfigEvent> _last_app_config_event{AppConfigEvent::None};
     int _app_config_signal_id             = -1;
 
     struct StateAppDownloadData {

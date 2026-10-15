@@ -1,3 +1,4 @@
+#include <apps/stock_shell/navigation.h>
 /*
  * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
  *
@@ -7,6 +8,7 @@
 #include <memory>
 #include <mooncake_log.h>
 #include <nvs_flash.h>
+#include <board.h>
 
 static std::unique_ptr<Hal> _hal_instance;
 static const std::string_view _tag = "HAL";
@@ -18,6 +20,27 @@ Hal& GetHAL()
         _hal_instance = std::make_unique<Hal>();
     }
     return *_hal_instance.get();
+}
+
+bool Hal::initCompanion()
+{
+    // Errors preserve NVS rather than erasing pairing, Wi-Fi or calibration.
+    if (nvs_flash_init() != ESP_OK) return false;
+    xiaozhi_board_init(); // Board/display/touch only under companion build.
+    io_expander_init(); // Stopped boot explicitly de-energizes external motor power.
+    setServoPowerEnabled(false);
+    setLaserEnabled(false);
+    lvgl_init();
+    rtc_init(); // Read existing clock and timezone without starting a network.
+    return true;
+}
+
+bool Hal::prepareStockFeatureHardware(bool motion, bool camera) {
+    static bool peripherals=false, servos=false;
+    if(!peripherals){head_touch_init();io_expander_init();imu_init();peripherals=true;}
+    if(motion&&!servos){setServoPowerEnabled(true);delay(200);servo_init();servos=true;}
+    if(camera && !Board::GetInstance().GetCamera())return false;
+    return true;
 }
 
 void Hal::init()
@@ -84,6 +107,10 @@ std::string Hal::getFactoryMacString(std::string divider)
 
 void Hal::reboot()
 {
+#ifdef STACKCHAN_COMPANION_BOOT
+    stock_shell::SaveSetupReturnForReset();
+    setServoPowerEnabled(false);setLaserEnabled(false);showRgbColor(0,0,0);
+#endif
     esp_restart();
 }
 
@@ -179,6 +206,12 @@ static void _stackchan_update_task(void* param)
 void Hal::startXiaozhi()
 {
     mclog::tagInfo(_tag, "start xiaozhi");
+#ifdef STACKCHAN_COMPANION_BOOT
+    if(!prepareStockFeatureHardware(true,true)) {
+        while(true) delay(1000); // persistent Stop / Home remains available
+    }
+    xiaozhi_mcp_init();
+#endif
 
     auto& motion = GetStackChan().motion();
     motion.setAutoAngleSyncEnabled(true);
@@ -327,13 +360,21 @@ static std::string_view _warm_boot_nvs_key = "app_index";
 
 void Hal::requestWarmReboot(int appIndex)
 {
+#ifdef STACKCHAN_COMPANION_BOOT
+    setServoPowerEnabled(false);
+    setLaserEnabled(false);
+    showRgbColor(0,0,0);
+#endif
     mclog::tagInfo(_tag, "warm reboot request to app index: {}", appIndex);
 
+#ifndef STACKCHAN_COMPANION_BOOT
     {
         Settings settings(_warm_boot_nvs_ns.data(), true);
         settings.SetInt(_warm_boot_nvs_key.data(), appIndex);
     }
 
+
+#endif
     delay(100);
     esp_restart();
 }
