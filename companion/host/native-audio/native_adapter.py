@@ -44,7 +44,7 @@ class NativeHostAdapter:
         try: self._check(self.lib.sc_start(self.handle))
         except Exception: self.close(); raise
     def open_directional_for_approved_test(self):
-        """Explicit HAL candidate opt-in; ordinary worker/profile never calls this.
+        """Explicit HAL opt-in, selected only by a trusted directional worker binding.
 
         Uses hidden Feed output -> public Microphone input, public Speaker output
         -> hidden Return input. Installing a driver and opening IO need approval.

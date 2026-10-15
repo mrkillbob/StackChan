@@ -58,6 +58,12 @@ route restoration or capture shutdown on actual hardware. See
 for the historical design context; current qualification evidence takes precedence
 over earlier installed-image and certificate descriptions in those documents.
 
-Current audio direction blocker: both existing public aliases expose both stream
-directions. The app now checks actual channels/streams and does not create or
-certify those duplex aliases. See [audio direction](../../AUDIO-DIRECTION.md).
+The candidate requests the genuine public v2 Microphone/Speaker endpoints. Route
+availability uses the complete read-only four-endpoint plugin/provenance,
+direction and visible-catalog verifier; duplex aliases cannot satisfy it. The
+worker also requires an explicit owner-only directional binding and matching
+native-library hash. An old binding intentionally rejects the candidate UI's new
+route; prepare and review app/binding/library adoption together. Existing installed
+apps/profiles are not replaced by a source build. A separate staged app identifier
+can be used for a bounded acceptance window without assuming existing privacy
+grants transfer. See [native backend selection](../native-audio/README.md).

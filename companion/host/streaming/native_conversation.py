@@ -17,6 +17,21 @@ from transport_diagnostics import project_native_audio
 ROOT = config.ROOT
 LIBRARY = config.LIBRARY
 LIBRARY_HASH = config.LIBRARY_HASH
+NATIVE_AUDIO_BACKEND = config.NATIVE_AUDIO_BACKEND
+NATIVE_AUDIO_TEST_SECONDS = config.NATIVE_AUDIO_TEST_SECONDS
+
+def _test_duration():
+    value = NATIVE_AUDIO_TEST_SECONDS
+    if value is not None and (NATIVE_AUDIO_BACKEND != 'directional_hal_v2' or type(value) is not int or not 1 <= value <= 15):
+        raise PermissionError('invalid trusted native test duration')
+    return value
+
+def _backend_route():
+    if NATIVE_AUDIO_BACKEND == 'legacy_bridge_v1':
+        return ('Pro Tools Audio Bridge 2-A_UID', 'Pro Tools Audio Bridge 2-B_UID')
+    if NATIVE_AUDIO_BACKEND == 'directional_hal_v2':
+        return ('local.mrkillbob.StackChan.hal.microphone.v2', 'local.mrkillbob.StackChan.hal.speaker.v2')
+    raise PermissionError('unsupported trusted native backend')
 
 @dataclass(frozen=True)
 class NativeRoute:
@@ -41,15 +56,15 @@ class HostAudioDeviceRoute:
     """OS audio endpoints. Physical Listen supplies capture consent separately."""
     input_uid: str
     output_uid: str
-    duration_seconds: None = None
+    duration_seconds: int | None = None
 
     @classmethod
     def from_dict(cls, value):
         if type(value) is not dict or set(value) != {'input_uid', 'output_uid'}:
             raise PermissionError('host audio endpoint route required')
-        if value.get('input_uid') != 'Pro Tools Audio Bridge 2-A_UID' or value.get('output_uid') != 'Pro Tools Audio Bridge 2-B_UID':
+        if (value.get('input_uid'), value.get('output_uid')) != _backend_route():
             raise PermissionError('unsupported host audio route')
-        return cls(value['input_uid'], value['output_uid'])
+        return cls(value['input_uid'], value['output_uid'], _test_duration())
 
 class NativeVoiceBridge(CodecHostBridge):
     """Drain real return PCM every20ms; gate turn-taking without storing speech."""
@@ -143,7 +158,9 @@ class NativeVoiceBridge(CodecHostBridge):
 class NativeConversationSession(StreamingSession):
     def __init__(self,*args,duration_seconds=60,**kwargs):
         super().__init__(*args,**kwargs)
-        self.duration_seconds=duration_seconds;self.started_at=None
+        test_seconds=_test_duration()
+        self.duration_seconds=(test_seconds if duration_seconds is None else min(test_seconds,duration_seconds)) if test_seconds is not None else duration_seconds
+        self.started_at=None
         self.on_complete=lambda:None;self.suppressed_mic_packets=0;self.backpressure_mic_packets=0
         self.backpressure_mic_streak=0
         # A mic packet is 60 ms; five consecutive queue misses bound a silent uplink to 300 ms.
@@ -314,6 +331,7 @@ class DeferredNativeBridge:
 def _build_native_bridge():
     """Native library, codec allocation and CoreAudio startup happen at Listen."""
     config.require_native()
+    _backend_route()  # reject unknown trusted selections before library/codec access
     if hashlib.sha256(LIBRARY.read_bytes()).hexdigest()!=LIBRARY_HASH:
         raise RuntimeError('reviewed native audio library changed')
     from native_adapter import NativeHostAdapter
@@ -323,7 +341,10 @@ def _build_native_bridge():
         for create in (lambda:OpusCodec(16000),lambda:OpusCodec(24000),lambda:Resampler(16000,48000),lambda:Resampler(48000,24000)):
             components.append(create())
         bridge=NativeVoiceBridge(adapter,*components)
-        adapter.open_for_approved_test()
+        if NATIVE_AUDIO_BACKEND == 'directional_hal_v2':
+            adapter.open_directional_for_approved_test()
+        else:
+            adapter.open_for_approved_test()
         return bridge
     except BaseException:
         owner=bridge if bridge is not None else _PartialCloseGroup([adapter,*components])

@@ -33,6 +33,23 @@ class PublicConfigChecks(unittest.TestCase):
             with self.assertRaises(ValueError):module().require()
             fixture['uri']='wss://192.168.42.10:18443/companion/audio';path.write_text(json.dumps(fixture));path.chmod(0o644)
             with self.assertRaises(ValueError):module().require()
+    def test_directional_selection_is_explicit_and_owner_only(self):
+        fixture=dict(device='stackchan-001122334455',host='192.168.42.10',port=18443,uri='wss://192.168.42.10:18443/companion/audio',ca_sha256='a'*64,expiry=2000000000,cert_sha256='b'*64,cert_begin=1900000000,cert_end=2000000000,native_library_sha256='c'*64)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'bindings.json';path.write_text(json.dumps(fixture));path.chmod(0o600);os.environ['STACKCHAN_BINDING_CONFIG']=str(path)
+            config=module();config.require();self.assertEqual(config.NATIVE_AUDIO_BACKEND,'legacy_bridge_v1')
+            selected=dict(fixture,native_audio_backend='directional_hal_v2',native_library_path='/synthetic/candidate.dylib')
+            path.write_text(json.dumps(selected));config=module();config.require();self.assertEqual(config.NATIVE_AUDIO_BACKEND,'directional_hal_v2');self.assertEqual(config.LIBRARY,Path('/synthetic/candidate.dylib'))
+            # Syntactic selection never reads/loads the missing library or opens IO.
+            for changed in [dict(selected,native_audio_backend='legacy_bridge_v1'),dict(selected,native_audio_backend='unknown'),dict(selected,native_library_path='relative.dylib'),dict(selected,native_library_path='/a/../b.dylib'),dict(selected,native_library_path='/a\nb.dylib'),dict(selected,native_library_sha256='invalid'),dict(fixture,native_audio_backend='directional_hal_v2'),dict(fixture,native_library_path='/synthetic/lib.dylib')]:
+                path.write_text(json.dumps(changed))
+                with self.assertRaises(ValueError):module().require()
+            for duration in (0,16,True,'10'):
+                path.write_text(json.dumps(dict(selected,native_audio_test_seconds=duration)))
+                with self.assertRaises(ValueError):module().require()
+            path.write_text(json.dumps(dict(selected,native_audio_test_seconds=10)));config=module();config.require();self.assertEqual(config.NATIVE_AUDIO_TEST_SECONDS,10)
+            path.write_text(json.dumps(selected));path.chmod(0o644)
+            with self.assertRaises(ValueError):module().require()
     def test_duplicate_config_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'bindings.json';path.write_text('{"device":"one","device":"two"}');path.chmod(0o600)

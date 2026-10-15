@@ -136,6 +136,11 @@ private final class ProvenanceMetadataMock {
   for forbidden in DirectionalAudioCatalog.forbiddenVisibleUIDs {
    assert(!DirectionalAudioCatalog.accepts(current + [forbidden]))
   }
+  let route = AudioDeviceRoute(endpointsAvailable: true).workerPayload()
+  let audio = route?["audio_route"] as? [String: String]
+  assert(audio?["input_uid"] == "local.mrkillbob.StackChan.hal.microphone.v2")
+  assert(audio?["output_uid"] == "local.mrkillbob.StackChan.hal.speaker.v2")
+  assert(AudioDeviceRoute(endpointsAvailable: false).workerPayload() == nil)
   provenanceChecks()
   print("PASS public direction/enumeration gates; duplex aliases rejected; no audio IO")
  }
