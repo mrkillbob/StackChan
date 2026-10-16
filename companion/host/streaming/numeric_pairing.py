@@ -59,6 +59,7 @@ class NumericPairing:
         self.deadline=self.challenge_deadline=self.ack_deadline=None
         self.mac=self.robot=False;self._issued=False;self._revoked=False
         self._grant=None;self._sent=False;self.audio_allowed=False;self.revocation_failed=False
+        self._wireless=False;self._expected_boot=None
     @property
     def audio_requested(self):return self._audio_requested
     def status(self,message=None):
@@ -78,9 +79,23 @@ class NumericPairing:
         if now>=deadline:raise PairingError('expired')
         self.request=request;self.boot_nonce=boot_nonce;self.deadline=deadline
         self.state='waiting_robot';self.status()
+    def prepare_wireless(self,*,expected_boot_nonce=None,started_at=None,deadline_budget_seconds=120):
+        if self.state!='idle' or type(deadline_budget_seconds) is not int or not 1<=deadline_budget_seconds<=120:
+            raise PairingError('invalid_preparation')
+        if expected_boot_nonce is not None and (type(expected_boot_nonce) is not int or not 1<=expected_boot_nonce<=0xffffffff):
+            raise PairingError('invalid_preparation')
+        now=self.clock()
+        if started_at is None:started_at=now
+        if type(started_at) not in (int,float) or not math.isfinite(started_at) or not 0<=started_at<=now:raise PairingError('invalid_deadline')
+        deadline=started_at+deadline_budget_seconds
+        if now>=deadline:raise PairingError('expired')
+        self._wireless=True;self._expected_boot=expected_boot_nonce
+        self.deadline=deadline
+        self.state='waiting_robot';self.status()
+
     def numeric_frame(self):
         self.tick()
-        if self.state!='waiting_robot':raise PairingError('invalid_state')
+        if self.state!='waiting_robot' or self._wireless:raise PairingError('invalid_state')
         return struct.pack('>4sB16sI',b'SCNP',1,bytes.fromhex(self.request),self.boot_nonce)
     def tick(self):
         if self.state in ('idle','cancelled','expired','failed','closed'):return
@@ -104,11 +119,13 @@ class NumericPairing:
         fields={'type','version','request_id','device','device_nonce','boot_nonce','capabilities'}
         if type(value) is not dict or set(value)!=fields or value['type']!='pair.hello' or type(value['version']) is not int or value['version']!=1:
             raise PairingError('invalid_message')
-        if value['device']!=DEVICE or value['request_id']!=self.request or type(value['request_id']) is not str or not HEX.fullmatch(value['request_id']):
-            raise PairingError('stale_context')
-        if type(value['boot_nonce']) is not int or value['boot_nonce']!=self.boot_nonce:raise PairingError('reset_detected')
+        if value['device']!=DEVICE or not fresh_hex(value['request_id']):raise PairingError('stale_context')
+        if type(value['boot_nonce']) is not int or not 1<=value['boot_nonce']<=0xffffffff:raise PairingError('reset_detected')
+        if not self._wireless and (value['request_id']!=self.request or value['boot_nonce']!=self.boot_nonce):raise PairingError('reset_detected' if value['boot_nonce']!=self.boot_nonce else 'stale_context')
+        if self._expected_boot is not None and value['boot_nonce']!=self._expected_boot:raise PairingError('reset_detected')
         if not fresh_hex(value['device_nonce']) or value['capabilities']!=['microphone','speaker']:
             raise PairingError('invalid_message')
+        if self._wireless:self.request=value['request_id'];self.boot_nonce=value['boot_nonce']
         self.device_nonce=value['device_nonce'];self.host_nonce=self.nonce_factory();self.code=self.code_factory()
         if not fresh_hex(self.host_nonce) or type(self.code) is not str or not re.fullmatch('[0-9]{6}',self.code):raise PairingError('invalid_entropy')
         self.challenge_deadline=min(self.deadline,self.clock()+60)
@@ -150,8 +167,8 @@ class NumericPairing:
         self.audio_allowed=True;self.state='paired';self.code=None;self.status()
     def cancel(self,state='cancelled',message='cancelled'):
         self.audio_allowed=False;self.code=None;self._grant=None
-        if self._issued and not self._revoked:
-            try:self.revoke();self._revoked=True
+        if (self._issued or self.revocation_failed) and not self._revoked:
+            try:self.revoke();self._revoked=True;self.revocation_failed=False
             except Exception:
                 self.revocation_failed=True;self.state='failed';self.status('revocation_failed')
                 raise PairingError('revocation_failed') from None
@@ -177,8 +194,12 @@ class NumericGateway:
                 await self.transport.handle(socket)
                 if self.pairing.state not in ('cancelled','expired','failed','closed'):
                     result=getattr(self.transport,'last_result',None)
-                    complete=type(result) is dict and result.get('outcome')=='complete' and all(result.get(key) is True for key in ('consent_received','cue_complete','mic_complete'))
-                    self.pairing.cancel('closed' if complete else 'failed','audio_complete' if complete else 'audio_transport_failed')
+                    diagnostics=result.get('diagnostics') if type(result) is dict else None
+                    cleanup_count=diagnostics.get('cleanup_fault_count') if type(diagnostics) is dict else 0
+                    cleanup_failed=type(result) is dict and (result.get('outcome')=='complete_with_cleanup_fault' or (type(cleanup_count) is int and cleanup_count>0))
+                    complete=type(result) is dict and result.get('outcome')=='complete' and not cleanup_failed and (all(result.get(key) is True for key in ('consent_received','cue_complete','mic_complete')) or (result.get('native_conversation') is True and result.get('conversation_complete') is True and result.get('consent_received') is True))
+                    message='audio_cleanup_failed' if cleanup_failed else ('audio_complete' if complete else 'audio_transport_failed')
+                    self.pairing.cancel('closed' if complete else 'failed',message)
                 return
             if socket.request.path!='/companion/pair' or self._candidate:raise PairingError('candidate_already_selected')
             self._candidate=True
@@ -207,20 +228,30 @@ class NumericGateway:
         except asyncio.CancelledError:
             raise
         except Exception:
-            if socket.request.path=='/companion/pair' and self.pairing.state not in ('cancelled','expired','failed','closed'):
+            if socket.request.path=='/companion/pair' and self.pairing.state not in ('cancelled','expired','failed','closed') and not (self._audio and getattr(self.transport,'completion_started',False)):
                 self.pairing.cancel('failed','pair_connection_closed')
         finally:
             if pending:
                 pending.cancel();await asyncio.gather(pending,return_exceptions=True)
-            if socket.request.path=='/companion/pair' and self.pairing.state not in ('cancelled','expired','failed','closed'):
+            if socket.request.path=='/companion/pair' and self.pairing.state not in ('cancelled','expired','failed','closed') and not (self._audio and getattr(self.transport,'completion_started',False)):
                 self.pairing.cancel('failed','pair_connection_closed')
-            self.sockets.discard(socket)
             try:await asyncio.wait_for(socket.close(),.5)
             except Exception:pass
+            else:self.sockets.discard(socket)
     async def close(self):
-        if self.pairing.state not in ('cancelled','expired','failed','closed'):
-            self.pairing.cancel()
-        try:
-            await asyncio.wait_for(asyncio.gather(*(socket.close() for socket in tuple(self.sockets)),return_exceptions=True),.75)
-        except Exception:
-            pass
+        if self.pairing.revocation_failed or self.pairing.state not in ('cancelled','expired','failed','closed'):
+            try:
+                self.pairing.cancel()
+            except Exception:
+                if not getattr(self.pairing,'revocation_failed',False):raise
+        sockets=tuple(self.sockets)
+        results=await asyncio.wait_for(asyncio.gather(*(socket.close() for socket in sockets),return_exceptions=True),.75)
+        failures=[]
+        for socket,result in zip(sockets,results):
+            if isinstance(result,BaseException):failures.append(result)
+            else:self.sockets.discard(socket)
+        transport_close=getattr(self.transport,'close',None)
+        if callable(transport_close):
+            try:await transport_close()
+            except BaseException as failure:failures.append(failure)
+        if failures:raise failures[0]

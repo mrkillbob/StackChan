@@ -4,14 +4,18 @@ Use CodecHostBridge for already-tested Opus/resampling; no Python callback runs
 on a CoreAudio thread. One serialized worker/control owner required.
 """
 import ctypes as C
+from streaming_session import AudioBackpressure
 
 TO_VOICE = 'Pro Tools Audio Bridge 2-A_UID'
 FROM_VOICE = 'Pro Tools Audio Bridge 2-B_UID'
+UPLINK_QUEUE_CAPACITY = 7680
 
 class NativeHostAdapter:
     def __init__(self, library):
         self.lib=C.CDLL(str(library)); self.handle=C.c_void_p()
         self.epoch=0; self.muted=True; self.playing=False
+        self.uplink_backpressure_dropped=0
+        self.close_status=0;self.retained_units=0;self.close_errors={}
         specs={
             'sc_open':([C.c_char_p,C.c_char_p,C.POINTER(C.c_void_p)],C.c_int),
             'sc_start':([C.c_void_p],C.c_int),
@@ -25,6 +29,8 @@ class NativeHostAdapter:
             'sc_counter':([C.c_void_p,C.c_int,C.c_int],C.c_uint64),
             'sc_diagnostic':([C.c_void_p,C.c_int],C.c_uint64),
             'sc_close':([C.c_void_p],None),
+            'sc_close_checked':([C.POINTER(C.c_void_p),C.POINTER(C.c_uint32)],C.c_int),
+            'sc_close_unit_status':([C.c_void_p,C.c_int,C.c_int],C.c_int),
         }
         for name,(args,result) in specs.items():
             function=getattr(self.lib,name); function.argtypes=args; function.restype=result
@@ -70,16 +76,35 @@ class NativeHostAdapter:
         self._require()
         keys={'output_callbacks':0,'output_frames':1,'output_consumed_frames':2,'input_callbacks':3,'input_frames':4,'output_queue_frames':5,'input_queue_frames':6}
         result={key:self.lib.sc_diagnostic(self.handle,value) for key,value in keys.items()}
-        result.update(error=self.lib.sc_error(self.handle),output_dropped=self.lib.sc_counter(self.handle,0,0),input_dropped=self.lib.sc_counter(self.handle,1,0),output_underruns=self.lib.sc_counter(self.handle,0,2),input_underruns=self.lib.sc_counter(self.handle,1,2))
+        # Both sources count mono48k PCM sample frames in robot_to_voice.
+        native_output_dropped=self.lib.sc_counter(self.handle,0,0)
+        software_output_dropped=getattr(self,'uplink_backpressure_dropped',0)
+        result.update(error=self.lib.sc_error(self.handle),
+                      output_dropped=min(0x7fffffffffffffff,native_output_dropped+software_output_dropped),
+                      input_dropped=self.lib.sc_counter(self.handle,1,0),
+                      output_underruns=self.lib.sc_counter(self.handle,0,2),
+                      input_underruns=self.lib.sc_counter(self.handle,1,2))
         return result
     def robot_pcm(self,epoch,pcm):
         self._require()
         if type(pcm) is not bytes or not pcm or len(pcm)%2 or len(pcm)>11520: raise ValueError('bounded PCM16 chunk <=120ms')
         if epoch!=self.epoch or self.muted or self.playing: return False
+        frames=len(pcm)//2
+        queued=self.lib.sc_diagnostic(self.handle,5)
+        if type(queued) is not int or not 0<=queued<=UPLINK_QUEUE_CAPACITY:
+            raise RuntimeError('bounded native uplink queue unavailable')
+        # One render callback consumes this SPSC ring; it cannot increase the
+        # observed occupancy between the snapshot and push. Reject whole framesets
+        # before sc_push so a full ring never accepts a partial PCM packet.
+        if frames>UPLINK_QUEUE_CAPACITY-queued:
+            self.uplink_backpressure_dropped=min(0x7fffffffffffffff,
+                self.uplink_backpressure_dropped+frames)
+            raise AudioBackpressure('bounded native uplink queue full')
         for start in range(0,len(pcm),4096):
             chunk=pcm[start:start+4096]
             samples=(C.c_int16*(len(chunk)//2)).from_buffer_copy(chunk)
-            if self.lib.sc_push(self.handle,epoch,samples,len(samples))!=len(samples): return False
+            if self.lib.sc_push(self.handle,epoch,samples,len(samples))!=len(samples):
+                raise RuntimeError('native uplink queue changed during bounded push')
         return True
     def robot_output_pcm(self,epoch,frames):
         self._require()
@@ -93,6 +118,16 @@ class NativeHostAdapter:
         self._require()
         if epoch!=self.epoch: return False
         self._check(self.lib.sc_mute(self.handle,epoch)); self.muted=True; self.playing=False; return True
+    def stop_and_confirm_closed(self):
+        self.muted=True;self.playing=False
+        if not self.handle.value:return True
+        retained=C.c_uint32()
+        self.close_status=self.lib.sc_close_checked(C.byref(self.handle),C.byref(retained))
+        self.retained_units=retained.value
+        self.close_errors={} if not self.handle.value else {f'{direction}_{phase}':self.lib.sc_close_unit_status(self.handle,direction,phase) for direction in (0,1) for phase in (0,1,2)}
+        if self.close_status==0 and self.handle.value:
+            raise RuntimeError('checked close succeeded without clearing native handle')
+        return self.close_status==0 and not self.handle.value
     def close(self):
-        if self.handle.value: self.lib.sc_close(self.handle); self.handle=C.c_void_p()
-        self.muted=True; self.playing=False
+        if not self.stop_and_confirm_closed():
+            raise RuntimeError(f'CoreAudio cleanup incomplete: status {self.close_status}, retained mask {self.retained_units}')

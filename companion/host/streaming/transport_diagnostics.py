@@ -1,12 +1,23 @@
 """Fixed-schema diagnostics; no exception text, source, locals or audio retention."""
 import os
 import time
-TYPES={'TimeoutError','PermissionError','ValueError','BufferError','OSError','ConnectionError','OverflowError','RuntimeError','CancelledError','UnicodeDecodeError','KeyError','TransportComplete','ConnectionClosed','ConnectionClosedError','ConnectionClosedOK','OtherError'}
+TYPES={'TimeoutError','PermissionError','ValueError','BufferError','AudioBackpressure','SustainedAudioBackpressure','OSError','ConnectionError','OverflowError','RuntimeError','CancelledError','UnicodeDecodeError','KeyError','TransportComplete','ConnectionClosed','ConnectionClosedError','ConnectionClosedOK','OtherError'}
 PHASES={'authorization','startup','admission','session_create','authority','duration','receive','control','control_send','audio_receive','playback_state','playback_send','audio_pull','audio_send','session_cleanup','receive_cleanup','socket_cleanup','statistics','complete'}
 CONTROLS={'none','unknown','begin','ack','consent','heartbeat','interrupt'}
-FILES={'gateway_connection.py','transport_test.py','streaming_session.py','codec.py','gateway_admission.py','connection.py','protocol.py','frames.py'}
-FUNCTIONS={'__init__','_cue_valid','run_connection','handle','_authorized','control','parse_control','receive','playing','outgoing','outgoing_opus','receive_opus','decode','encode','authenticate','statistics','send','recv','close','ensure_open','begin','_active','interrupt'}
+FILES={'gateway_connection.py','transport_test.py','streaming_session.py','codec.py','gateway_admission.py','connection.py','protocol.py','frames.py','native_adapter.py','native_conversation.py'}
+FUNCTIONS={'__init__','_cue_valid','run_connection','handle','_authorized','control','parse_control','receive','playing','outgoing','outgoing_opus','receive_opus','decode','encode','authenticate','statistics','send','recv','close','ensure_open','begin','_active','interrupt','robot_pcm','poll_voice','pull_pcm'}
 COUNTS={'heartbeat_count':0x7fffffff,'sent_speaker_packets':0x7fffffff,'cleanup_fault_count':3,'connection_elapsed_ms':900000,'consent_elapsed_ms':900000,'heartbeat_remaining_ms':2000}
+
+NATIVE_COUNTS=('input_callbacks','output_callbacks','input_frames','output_frames',
+               'output_consumed_frames','input_queue_frames','output_queue_frames',
+               'input_dropped','output_dropped','input_underruns','output_underruns')
+def project_native_audio(value):
+    """Numeric callback/queue evidence only; no PCM or exception content."""
+    if type(value) is not dict:return {}
+    result={key:value[key] for key in NATIVE_COUNTS if type(value.get(key)) is int and 0<=value[key]<=0x7fffffffffffffff}
+    error=value.get('error')
+    if type(error) is int and -0x80000000<=error<=0x7fffffff:result['error']=error
+    return result
 
 def _fault_projection(value):
     if type(value) is not dict:return None

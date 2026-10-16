@@ -13,7 +13,7 @@ import ssl
 import struct
 import time
 from gateway_admission import authorize_audio_request
-from gateway_connection import run_connection
+from gateway_connection import run_connection, TransportComplete
 from transport_diagnostics import TransportDiagnostics
 from streaming_session import StreamingSession, decode_frame
 
@@ -22,9 +22,6 @@ PORT = 18443
 DEVICE = 'stackchan-80456b561404'
 MAX_LISTENER_SECONDS = 120
 MAX_CUE_FRAMES = 24000 * 10
-
-class TransportComplete(Exception):
-    """Expected end of the bounded microphone-count phase."""
 
 def _cue_valid(cue):
     if type(cue) is not bytes or not cue or len(cue) % 2 or len(cue) > MAX_CUE_FRAMES * 2:
@@ -163,12 +160,14 @@ class TransportSession(StreamingSession):
         self.armed = self.acknowledged = False
         self.deadline = clock() + 2
         self.transport_deadline = clock() + MAX_LISTENER_SECONDS
+        self.on_complete=lambda:None
 
     def _authorized(self):
         super()._authorized()
         if self.clock() >= self.transport_deadline:
             raise TimeoutError('transport-test connection deadline')
         if self.bridge.completed:
+            self.on_complete()
             raise TransportComplete('bounded transport microphone phase completed')
 
     def begin(self, request_id):
@@ -236,6 +235,7 @@ class TransportGateway:
             outcome='no_connection')
         self.last_result['diagnostics'] = TransportDiagnostics(clock).snapshot()
         self._used = False
+        self.completion_started=False
 
     def process_request(self, connection, request):
         try:
@@ -260,6 +260,7 @@ class TransportGateway:
             session = TransportSession(self.registry, self.sessions, grant.credential, grant.device_id, self.cue,
                 transport_approved=True, mic_duration=self.mic_duration, clock=self.clock)
             self._used = True
+            session.on_complete=lambda:setattr(self,'completion_started',True)
             started = True
             await run_connection(socket, session, duration=MAX_LISTENER_SECONDS, diagnostics=diagnostics)
         except TransportComplete:
@@ -285,7 +286,8 @@ class TransportGateway:
                 except BaseException as failure:
                     diagnostics.fault(failure,'statistics',cleanup=True)
                     outcome = 'fault'
-            if diagnostics.snapshot().get('cleanup_fault_count',0):outcome = 'fault'
+            if diagnostics.snapshot().get('cleanup_fault_count',0):
+                outcome = 'complete_with_cleanup_fault' if outcome == 'complete' else 'fault'
             result.update(outcome=outcome,diagnostics=diagnostics.snapshot())
             self.last_result = result
 

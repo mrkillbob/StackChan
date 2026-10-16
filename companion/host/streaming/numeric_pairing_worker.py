@@ -23,22 +23,32 @@ from numeric_pairing import NumericPairing,NumericGateway,PairingError,parse_com
 from pairing_receipt import decode_receipt,READY,REJECTED,EXPIRED
 
 ROOT=Path('/Users/mikedemott/Developer/AgentWork/StackChan')
-CERT_HASH='7950b01015dc2f80338ec4f35581039213539eac0e6e67f4cadd0207232f3411'
-CERT_BEGIN=1791540049;CERT_END=1791626449
-STATES={'idle','opening','usb_ready','waiting_robot','comparing','waiting_confirmation','staging','paired','cancelled','expired','failed','closed'}
+CERT_HASH='50efad262ca4e04cba6fcdc619277b10546354bf1724e399ac4c31431acf7888'
+CERT_BEGIN=1791743530;CERT_END=1791750790
+STATES={'idle','opening','usb_ready','waiting_robot','comparing','waiting_confirmation','staging','paired','restoring','cancelled','expired','failed','closed'}
 
-DIAGNOSTIC_REASONS={'expired','cancelled','closed','pair_connection_closed','receipt_missing','reset_detected','window_changed','rejected','setup_or_transport_failed','transport_lost','approval_required','approval_consumed','paused','audio_complete','audio_transport_failed'}
+DIAGNOSTIC_REASONS={'expired','cancelled','closed','pair_connection_closed','receipt_missing','reset_detected','window_changed','rejected','setup_or_transport_failed','transport_lost','approval_required','approval_consumed','paused','audio_complete','audio_transport_failed','cleanup_unconfirmed','ready_missing','certificate_expired','certificate_changed','lan_unavailable','grant_failed','revocation_failed','audio_cleanup_failed','audio_backpressure'}
+
+# Fixed labels only. Raw exception strings never cross the worker/UI boundary.
+UI_MESSAGES=DIAGNOSTIC_REASONS | {'usb_open_may_reset','verify_robot_then_physical_pair',
+    'physical_pair_required','invalid_command','input_failed','invalid_message','invalid_receipt',
+    'unsupported_receipt','unpinned_files','incomplete_write','invalid_state','closed',
+    'input_limit','invalid_transport','invalid_preparation','invalid_deadline',
+    'physical_confirmation_required','stale_context','invalid_context','candidate_already_selected',
+    'invalid_staged_receipt','invalid_entropy','audio_denied','unexpected_receipt'}
 
 def _transport_projection(value):
     if type(value) is not dict:return None
     result={'identity_verified':False,'robot_playback_verified':False,'transport_only':True}
-    for key in ('consent_received','cue_complete','mic_complete'):
+    for key in ('consent_received','cue_complete','mic_complete','native_conversation','conversation_complete'):
         if type(value.get(key)) is bool:result[key]=value[key]
-    for key in ('cue_frames','speaker_packets','speaker_frames','decoded_mic_packets','decoded_mic_frames','suppressed_mic_packets','decoded_mic_peak','decoded_mic_energy'):
+    for key in ('cue_frames','speaker_packets','speaker_frames','decoded_mic_packets','decoded_mic_frames','suppressed_mic_packets','backpressure_mic_packets','decoded_mic_peak','decoded_mic_energy','microphone_packets','native_return_frames'):
         count=value.get(key)
         if type(count) is int and 0<=count<=0x7fffffffffffffff:result[key]=count
-    if value.get('outcome') in ('no_connection','fault','complete','interrupted'):result['outcome']=value['outcome']
-    from transport_diagnostics import project_diagnostics
+    if value.get('outcome') in ('no_connection','fault','complete','complete_with_cleanup_fault','interrupted'):result['outcome']=value['outcome']
+    from transport_diagnostics import project_diagnostics,project_native_audio
+    native_audio=project_native_audio(value.get('native_audio'))
+    if native_audio:result['native_audio']=native_audio
     diagnostics=project_diagnostics(value.get('diagnostics'))
     if diagnostics:result['diagnostics']=diagnostics
     return result
@@ -49,22 +59,28 @@ def _robot_boot_projection(nonce,reason):
     return {}
 
 class NumericWorker:
-    def __init__(self,*,approved=False,paused,serial_factory,runtime_loader,emit,clock=time.monotonic,sleep=asyncio.sleep,consume_approval=lambda:None,audio_enabled=False):
+    def __init__(self,*,approved=False,paused,serial_factory,runtime_loader,emit,clock=time.monotonic,sleep=asyncio.sleep,consume_approval=lambda:None,audio_enabled=False,transport_mode="usb"):
+        if transport_mode not in ("usb","wifi"):raise PairingError("invalid_transport")
+        self.transport_mode=transport_mode
         self.audio_enabled=audio_enabled;self.audio_authorized=False;self.last_transport_result=None
         self.first_terminal_result=None;self._attempt_authorized=False
         self.robot_boot_nonce=self.robot_reset_reason=None
         self.approved=approved;self.paused=paused;self.serial_factory=serial_factory;self.runtime_loader=runtime_loader
         self.emit=emit;self.clock=clock;self.sleep=sleep;self.consume_approval=consume_approval
         self.state='idle';self.port=None;self.pairing=None;self.gateway=None;self.task=None;self._closed=False
-        self._deadline=None;self._usb_buffer=b'';self.cleanup_blocked=False;self._terminal_status=None
+        self._deadline=None;self._usb_buffer=b'';self.cleanup_blocked=False;self._terminal_status=None;self._restoring_published=False;self._activity_status=None
     def status(self,state,message=None):
         self.state=state;value={'state':state}
         if message:value['message']=message
         self._publish(value)
     def _publish(self,value):
+        value=dict(value)
+        if 'message' in value and (type(value['message']) is not str or value['message'] not in UI_MESSAGES):
+            value['message']='setup_or_transport_failed'
         self.state=value['state']
-        if value['state'] in ('failed','expired','cancelled','closed') and (self.port is not None or self.gateway is not None or self.cleanup_blocked):
+        if value['state'] in ('failed','expired','cancelled','closed') and value.get('message')!='cleanup_unconfirmed' and (self.port is not None or self.gateway is not None or self.cleanup_blocked):
             self._terminal_status=value
+            self._show_restoring()
         else:
             if value['state'] in ('failed','expired','cancelled','closed') and self._attempt_authorized and self.first_terminal_result is None:
                 first={'state':value['state'],'audio_enabled':self.audio_authorized}
@@ -77,6 +93,23 @@ class NumericWorker:
                 if transport is not None:first['transport']=transport
                 self.first_terminal_result=first
             self.emit(value)
+    def _show_restoring(self):
+        if not self._restoring_published:
+            self._restoring_published=True
+            self.emit({'state':'restoring'})
+    def _show_activity(self):
+        if not self.audio_authorized or self.pairing is None or self.pairing.state!='paired':return
+        transport=self.gateway.transport if self.gateway is not None else None
+        activity=getattr(transport,'activity_state','physical_consent')
+        if activity not in ('physical_consent','conversation'):activity='physical_consent'
+        audio_remaining=getattr(transport,'audio_remaining',None) if activity=='conversation' else None
+        if type(audio_remaining) is not int or not 0<=audio_remaining<=60:audio_remaining=None
+        snapshot=(activity,audio_remaining)
+        if snapshot==self._activity_status:return
+        self._activity_status=snapshot
+        value={'state':'paired','acknowledged':True,'activity':activity}
+        if audio_remaining is not None:value['audio_remaining']=audio_remaining
+        self._publish(value)
     def pairing_status(self,value):
         self._publish(value)
     async def command(self,command):
@@ -130,45 +163,52 @@ class NumericWorker:
             except FileExistsError:raise PairingError('approval_consumed') from None
             self.audio_authorized=self.audio_enabled;self.last_transport_result=None;self._attempt_authorized=True
             self.robot_boot_nonce=self.robot_reset_reason=None
-            self._deadline=self.clock()+180;self.pairing=None;self.gateway=None;self._usb_buffer=b'';self._terminal_status=None
-            self.status('opening','usb_open_may_reset')
-            self.port=self.serial_factory()  # Configured closed, DTR/RTS false.
-            try:self.port.open()
-            except Exception:raise PairingError('transport_lost') from None
-            await self._drain()
-            self.status('usb_ready','verify_robot_then_physical_pair')
-            self.status('waiting_robot','physical_pair_required')
-            ready=await self._receipt()
-            ready_received_at=self.clock()
-            if ready.status==REJECTED:raise PairingError('rejected')
-            if ready.status==EXPIRED:raise PairingError('expired')
-            if ready.status!=READY:raise PairingError('unsupported_receipt')
-            if not _robot_boot_projection(ready.boot_nonce,ready.reset_reason):raise PairingError('invalid_receipt')
-            self.robot_boot_nonce=ready.boot_nonce;self.robot_reset_reason=ready.reset_reason
-            if expected_boot_nonce is not None and ready.boot_nonce!=expected_boot_nonce:raise PairingError('reset_detected')
-            # Runtime verification/key loading and listener happen only AFTER Ready.
+            self._deadline=self.clock()+180;self.pairing=None;self.gateway=None;self._usb_buffer=b'';self._terminal_status=None;self._restoring_published=False;self._activity_status=None
+            if self.transport_mode=='usb':
+                self.status('opening','usb_open_may_reset')
+                self.port=self.serial_factory()  # Configured closed, DTR/RTS false.
+                try:self.port.open()
+                except Exception:raise PairingError('transport_lost') from None
+                await self._drain()
+                self.status('usb_ready','verify_robot_then_physical_pair')
+                self.status('waiting_robot','physical_pair_required')
+                ready=await self._receipt()
+                ready_received_at=self.clock()
+                if ready.status==REJECTED:raise PairingError('rejected')
+                if ready.status==EXPIRED:raise PairingError('expired')
+                if ready.status!=READY:raise PairingError('unsupported_receipt')
+                if not _robot_boot_projection(ready.boot_nonce,ready.reset_reason):raise PairingError('invalid_receipt')
+                self.robot_boot_nonce=ready.boot_nonce;self.robot_reset_reason=ready.reset_reason
+                if expected_boot_nonce is not None and ready.boot_nonce!=expected_boot_nonce:raise PairingError('reset_detected')
+            else:
+                ready_received_at=self.clock();self._deadline=ready_received_at+120
+                self.status('waiting_robot','physical_pair_required')
+            # USB requires Ready; Wi-Fi requires its separately approved physical pairing window.
             if self.paused():raise PairingError('paused')
             runtime=self.runtime_loader()
             self.pairing=NumericPairing(issuer=runtime.issue,revoke=runtime.revoke,emit=self.pairing_status,clock=self.clock,audio_requested=self.audio_authorized)
-            self.pairing.prepare(uuid.uuid4().hex,ready.boot_nonce,started_at=ready_received_at,deadline_budget_seconds=118)
+            if self.transport_mode=='usb':self.pairing.prepare(uuid.uuid4().hex,ready.boot_nonce,started_at=ready_received_at,deadline_budget_seconds=118)
+            else:self.pairing.prepare_wireless(expected_boot_nonce=expected_boot_nonce,started_at=ready_received_at,deadline_budget_seconds=118)
             self.pairing.tick()
             self.gateway=NumericGateway(self.pairing,runtime.transport,audio_enabled=self.audio_authorized)
             async with runtime.listener(self.gateway):
                 self.pairing.tick()
-                write_numeric_once(self.port,self.pairing.numeric_frame())
+                if self.transport_mode=='usb':write_numeric_once(self.port,self.pairing.numeric_frame())
                 while self.clock()<self._deadline:
                     self.pairing.tick()
                     if self.pairing.state in ('failed','cancelled','expired','closed'):break
-                    # A new Ready indicates reset/window replacement. Never retry.
-                    data=self._read();self._usb_buffer+=data
-                    marker=self._usb_buffer.find(b'SCPS')
-                    if marker>=0 and len(self._usb_buffer)-marker>=22:
-                        seen=decode_receipt(self._usb_buffer[marker:marker+22])
-                        if seen.status==READY:raise PairingError('reset_detected' if seen.boot_nonce!=ready.boot_nonce else 'window_changed')
-                        if seen.status==REJECTED:raise PairingError('rejected')
-                        if seen.status==EXPIRED:raise PairingError('expired')
-                        raise PairingError('unexpected_receipt')
-                    if len(self._usb_buffer)>4096:raise PairingError('input_limit')
+                    self._show_activity()
+                    if self.transport_mode=='usb':
+                        # A new Ready indicates reset/window replacement. Never retry.
+                        data=self._read();self._usb_buffer+=data
+                        marker=self._usb_buffer.find(b'SCPS')
+                        if marker>=0 and len(self._usb_buffer)-marker>=22:
+                            seen=decode_receipt(self._usb_buffer[marker:marker+22])
+                            if seen.status==READY:raise PairingError('reset_detected' if seen.boot_nonce!=ready.boot_nonce else 'window_changed')
+                            if seen.status==REJECTED:raise PairingError('rejected')
+                            if seen.status==EXPIRED:raise PairingError('expired')
+                            raise PairingError('unexpected_receipt')
+                        if len(self._usb_buffer)>4096:raise PairingError('input_limit')
                     await self.sleep(.05)
                 else:raise PairingError('expired')
         except asyncio.CancelledError:
@@ -188,29 +228,60 @@ class NumericWorker:
             if self.pairing:self.pairing.cancel('failed','setup_or_transport_failed')
             else:self.status('failed','setup_or_transport_failed')
         finally:
+            if self.port is not None or self.gateway is not None:self._show_restoring()
+            cleanup_issues=set()
             try:
-                if self.gateway:await self.gateway.close()
+                if self.gateway:
+                    await self.gateway.close()
+                    if not self.pairing.revocation_failed:self.gateway=None
             except Exception:
-                self.cleanup_blocked=True
+                self.cleanup_blocked=True;cleanup_issues.add('audio')
             finally:
-                self.gateway=None
-                if self.pairing and self.pairing.revocation_failed:self.cleanup_blocked=True
+                if self.pairing and self.pairing.revocation_failed:
+                    self.cleanup_blocked=True;cleanup_issues.add('grant')
                 if self.port is not None:
                     try:
                         self.port.close()
-                        if self.port.is_open is not False:self.cleanup_blocked=True
+                        if self.port.is_open is not False:
+                            self.cleanup_blocked=True;cleanup_issues.add('usb')
                         else:self.port=None
-                    except Exception:self.cleanup_blocked=True
-                if not self.cleanup_blocked and self.audio_authorized and runtime is not None:
-                    try:self.last_transport_result=_transport_projection(getattr(runtime.transport,'last_result',None))
-                    except Exception:self.last_transport_result=None
-                if not self.cleanup_blocked and self._terminal_status is not None:
+                    except Exception:self.cleanup_blocked=True;cleanup_issues.add('usb')
+                if self.audio_authorized and runtime is not None:
+                    try:
+                        raw_result=getattr(runtime.transport,'last_result',None)
+                        self.last_transport_result=_transport_projection(raw_result)
+                    except Exception:
+                        raw_result=None;self.last_transport_result=None
+                    diagnostics=raw_result.get('diagnostics') if type(raw_result) is dict else None
+                    cleanup_count=diagnostics.get('cleanup_fault_count') if type(diagnostics) is dict else 0
+                    cleanup_failed=type(raw_result) is dict and (raw_result.get('outcome')=='complete_with_cleanup_fault' or (type(cleanup_count) is int and cleanup_count>0))
+                    if cleanup_failed:
+                        self.cleanup_blocked=True;cleanup_issues.add('audio')
+                if self._terminal_status is not None and self._terminal_status.get('message')=='audio_transport_failed':
+                    diagnostics=self.last_transport_result.get('diagnostics') if type(self.last_transport_result) is dict else None
+                    fault=diagnostics.get('fault') if type(diagnostics) is dict else None
+                    if type(fault) is dict and fault.get('type')=='SustainedAudioBackpressure':
+                        self._terminal_status['message']='audio_backpressure'
+                if cleanup_issues:
+                    value=dict(self._terminal_status or {'state':'failed'})
+                    value['state']='failed';value['message']='cleanup_unconfirmed'
+                    value['cleanup']=sorted(cleanup_issues)
+                    self._terminal_status=value
+                if self._terminal_status is not None and (not self.cleanup_blocked or self._terminal_status.get('message')=='cleanup_unconfirmed'):
                     value=self._terminal_status;self._terminal_status=None
                     self._publish(value)
     async def close(self):
         self._closed=True
         if self.task and not self.task.done():self.task.cancel()
         await self.wait()
+        if self.gateway is not None:
+            await self.gateway.close();self.gateway=None
+        if self.port is not None:
+            self.port.close()
+            if self.port.is_open is not False:raise PairingError('cleanup_unconfirmed')
+            self.port=None
+        if self.pairing and self.pairing.revocation_failed:self.pairing.cancel('closed','closed')
+        self.cleanup_blocked=False
         if not self.cleanup_blocked:
             if self.pairing:self.pairing.cancel('closed','closed')
             self.status('closed','closed')
@@ -241,7 +312,8 @@ def _serial_factory(port):
     connection.dtr=False;connection.rts=False;connection.port=port
     return connection
 
-def _runtime(args):
+def _runtime(args, native_route=None):
+    _validated_audio_mode(args,native_route)
     # Public certificate hash/date/IP checks precede any private key loading.
     cert=ROOT/'.tools/local-companion-tls/server.pem';key=cert.with_name('server-key.pem')
     cue=ROOT/'.tools/native-call-preparation/transport-speaker-cue.wav'
@@ -250,33 +322,61 @@ def _runtime(args):
     if cert.stat().st_size>8192 or hashlib.sha256(cert.read_bytes()).hexdigest()!=CERT_HASH:raise PairingError('certificate_changed')
     if subprocess.check_output(['/usr/sbin/ipconfig','getifaddr','en1'],timeout=2,text=True).strip()!=HOST:raise PairingError('lan_unavailable')
     context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.minimum_version=ssl.TLSVersion.TLSv1_2;context.load_cert_chain(cert,key)
+    for path in (ROOT/'.tools/bridge-python',Path('/Users/mikedemott/Homelab/src'),Path(__file__).resolve().parents[1]/'native-audio',ROOT/'bridge/host-adapter',ROOT/'bridge/local-endpoint'):
+        if str(path) not in sys.path:sys.path.insert(0,str(path))
+    from home_lab.devices import DeviceRegistry
+    registry=DeviceRegistry()
+    return _Runtime(context,registry,_audio_transport(args,registry,native_route))
+
+def _validated_audio_mode(args,native_route):
+    mode=getattr(args,'audio_mode','transport_test')
+    if mode not in ('transport_test','native_conversation'):raise PairingError('approval_required')
+    if mode=='native_conversation':
+        from native_conversation import NativeRoute
+        if not isinstance(native_route,NativeRoute) or native_route.duration_seconds!=60:raise PairingError('approval_required')
+    elif native_route is not None:raise PairingError('approval_required')
+    return mode
+
+def _audio_transport(args,registry,native_route):
+    """Select exactly the disclosed/approved mode; construction starts no IO."""
+    mode=_validated_audio_mode(args,native_route)
+    from home_lab.sessions import ConversationSessions
+    if mode=='native_conversation':
+        from native_conversation import native_gateway
+        return native_gateway(registry,ConversationSessions(),native_route)
+    cue=ROOT/'.tools/native-call-preparation/transport-speaker-cue.wav'
     if cue.stat().st_size>600000 or hashlib.sha256(cue.read_bytes()).hexdigest()!='8c70a511b8e9dc570c277e3286343ed52077315158485a106c494557364d22b9':raise PairingError('cue_changed')
     with wave.open(str(cue),'rb') as source:
         if (source.getnchannels(),source.getsampwidth(),source.getframerate())!=(1,2,24000) or not 1<=source.getnframes()<=240000:raise PairingError('invalid_cue')
         pcm=source.readframes(source.getnframes())
-    for path in (ROOT/'.tools/bridge-python',Path('/Users/mikedemott/Homelab/src')):
-        if str(path) not in sys.path:sys.path.insert(0,str(path))
-    from home_lab.devices import DeviceRegistry
-    from home_lab.sessions import ConversationSessions
     from transport_test import TransportGateway
-    registry=DeviceRegistry();transport=TransportGateway(registry,ConversationSessions(),pcm,transport_approved=args.approved_test is True and args.approved_audio is True)
-    return _Runtime(context,registry,transport)
+    return TransportGateway(registry,ConversationSessions(),pcm,transport_approved=args.approved_test is True and args.approved_audio is True)
 
 def _output(value):
     # Only fixed state/message labels, comparison number and boolean/counts.
     print(json.dumps(value,separators=(',',':')),flush=True)
 
-def _consume_approval(*,audio_enabled=False):
+def _consume_approval(*,audio_enabled=False,native_route_sink=None,requested_mode="transport_test",requested_transport="usb"):
     # Exactly one human Pair click consumes the approved check, even on failure.
     approval=json.loads((ROOT/'notes/NUMERIC-PAIRING-RUNTIME-AUTHORIZATION.json').read_text())
     if approval.get('approved') is not True or approval.get('audio_allowed') is not audio_enabled or not time.time()<approval.get('valid_until_unix',0):
         raise PairingError('approval_required')
-    if type(audio_enabled) is not bool:raise PairingError('approval_required')
+    if type(audio_enabled) is not bool or requested_transport not in ('usb','wifi') or approval.get('transport','usb')!=requested_transport:raise PairingError('approval_required')
     expected=approval.get('expected_boot_nonce')
-    if (audio_enabled or expected is not None) and (type(expected) is not int or not 1<=expected<=0xffffffff):raise PairingError('approval_required')
+    if ((audio_enabled and requested_transport=="usb") or expected is not None) and (type(expected) is not int or not 1<=expected<=0xffffffff):raise PairingError('approval_required')
+    mode=approval.get('audio_mode','transport_test')
+    if mode not in ('transport_test','native_conversation') or mode!=requested_mode:raise PairingError('approval_required')
+    if mode=='native_conversation':
+        if not audio_enabled or approval.get('native_conversation_allowed') is not True or native_route_sink is None:raise PairingError('approval_required')
+        try:
+            from native_conversation import NativeRoute
+            native_route=NativeRoute.from_dict(approval.get('native_route'))
+        except (PermissionError,ValueError):raise PairingError('approval_required') from None
+    else:native_route=None
     marker='NUMERIC-PAIRING-AUDIO-CHECK-CONSUMED' if audio_enabled else 'NUMERIC-PAIRING-CHECK-CONSUMED'
     with (ROOT/'.tools'/marker).open('x') as receipt:
-        receipt.write(json.dumps({'consumed_unix':time.time(),'pid':os.getpid(),'audio_allowed':audio_enabled})+'\n')
+        receipt.write(json.dumps({'consumed_unix':time.time(),'pid':os.getpid(),'audio_allowed':audio_enabled,'transport':requested_transport})+'\n')
+    if native_route_sink is not None:native_route_sink(native_route)
     return expected
 
 def _append_history(metadata):
@@ -324,7 +424,8 @@ def _status_metadata(value,*,audio_enabled=False,transport_result=None,first_ter
     _output(value)
 
 async def _run(args):
-    worker=NumericWorker(approved=args.approved_test,paused=lambda:(ROOT/'.tools/TRANSPORT-PAIRING-PAUSED').exists(),serial_factory=lambda:_serial_factory(args.port),runtime_loader=lambda:_runtime(args),emit=lambda value:_status_metadata(value,audio_enabled=worker.audio_authorized,transport_result=worker.last_transport_result,first_terminal_result=worker.first_terminal_result,robot_boot_nonce=worker.robot_boot_nonce,robot_reset_reason=worker.robot_reset_reason),consume_approval=lambda:_consume_approval(audio_enabled=args.approved_audio),audio_enabled=args.approved_audio)
+    route=[None]
+    worker=NumericWorker(approved=args.approved_test,paused=lambda:(ROOT/'.tools/TRANSPORT-PAIRING-PAUSED').exists(),serial_factory=lambda:_serial_factory(args.port),runtime_loader=lambda:_runtime(args,route[0]),emit=lambda value:_status_metadata(value,audio_enabled=worker.audio_authorized,transport_result=worker.last_transport_result,first_terminal_result=worker.first_terminal_result,robot_boot_nonce=worker.robot_boot_nonce,robot_reset_reason=worker.robot_reset_reason),consume_approval=lambda:_consume_approval(audio_enabled=args.approved_audio,native_route_sink=lambda value:route.__setitem__(0,value),requested_mode=args.audio_mode,requested_transport=args.transport),audio_enabled=args.approved_audio,transport_mode=args.transport)
     worker.status('idle')
     loop=asyncio.get_running_loop();reader=asyncio.StreamReader(limit=2048);protocol=asyncio.StreamReaderProtocol(reader)
     pipe=None;monitor=None
@@ -356,6 +457,8 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--approved-test',action='store_true')
     parser.add_argument('--approved-audio',action='store_true',help='Separate audio approval; requires matching one-use audio authorization and --approved-test.')
+    parser.add_argument('--audio-mode',choices=('transport_test','native_conversation'),default='transport_test',help='Must match the one-use authorization and displayed GUI disclosure; native never falls back to transport test.')
+    parser.add_argument('--transport',choices=('usb','wifi'),default='usb',help='Independent pairing transport; Wi-Fi never constructs a serial port.')
     parser.add_argument('--port',default='/dev/cu.usbmodem31201')
     parser.add_argument('--cert',default=str(ROOT/'.tools/local-companion-tls/server.pem'))
     parser.add_argument('--key',default=str(ROOT/'.tools/local-companion-tls/server-key.pem'))

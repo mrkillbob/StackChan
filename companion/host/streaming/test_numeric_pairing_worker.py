@@ -111,6 +111,50 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(worker.cleanup_blocked)
         self.assertFalse(any(x['state'] in ('cancelled','closed') for x in self.events))
         with self.assertRaises(Exception):await worker.command('retry')
+    async def test_all_cleanup_faults_are_preserved_and_block_retry(self):
+        from contextlib import asynccontextmanager
+        port=self.port;clock=self.clock;sent=False
+        ready=struct.pack('>4sBB16s',b'SCPS',1,1,struct.pack('>II8s',91,1,bytes(8)))
+        def read(cap):
+            nonlocal sent
+            if clock.now>=2 and not sent:
+                sent=True
+                return ready
+            return b''
+        port.read=read
+        cleanup_result={'outcome':'complete_with_cleanup_fault','native_conversation':True,
+                        'conversation_complete':True,'consent_received':True,
+                        'diagnostics':{'cleanup_fault_count':1,'cleanup_fault':{'type':'RuntimeError','phase':'session_cleanup','stack':[]}}}
+        class Runtime:
+            transport=SimpleNamespace(last_result=cleanup_result)
+            def issue(self,ttl):return 'synthetic'
+            def revoke(self):pass
+            @asynccontextmanager
+            async def listener(self,gateway):yield
+        worker=w.NumericWorker(approved=True,audio_enabled=True,paused=lambda:False,
+            serial_factory=lambda:port,runtime_loader=Runtime,emit=self.events.append,
+            clock=clock,sleep=self.sleep,consume_approval=lambda:91)
+        await worker.command('prepare')
+        for _ in range(1000):
+            if worker.gateway is not None and any(type(x) is tuple for x in port.events):break
+            await asyncio.sleep(0)
+        self.assertIsNotNone(worker.gateway)
+        worker.pairing.cancel('failed','audio_cleanup_failed')
+        worker.pairing.revocation_failed=True
+        def failed_revoke():raise RuntimeError('synthetic grant revoke failure')
+        worker.pairing.revoke=failed_revoke
+        def failed_usb_close():raise OSError('synthetic usb close failure')
+        port.close=failed_usb_close
+        await worker.wait()
+        self.assertTrue(worker.cleanup_blocked)
+        self.assertFalse(port.closed)
+        self.assertIs(worker.port,port)
+        self.assertEqual(self.events[-1]['state'],'failed')
+        self.assertEqual(self.events[-1]['message'],'cleanup_unconfirmed')
+        self.assertEqual(self.events[-1]['cleanup'],['audio','grant','usb'])
+        self.assertEqual(worker.first_terminal_result['reason'],'cleanup_unconfirmed')
+        with self.assertRaises(Exception):await worker.command('retry')
+
     async def test_consumption_failure_denies_before_usb(self):
         calls=[]
         def denied():calls.append('consume');raise RuntimeError('already consumed synthetic')
@@ -159,7 +203,7 @@ class ApprovalMetadataTests(unittest.TestCase):
     def test_consumption_is_once_and_receipt_nonsecret(self):
         self.authorization();w._consume_approval()
         path=self.root/'.tools/NUMERIC-PAIRING-CHECK-CONSUMED';receipt=json.loads(path.read_text())
-        self.assertEqual(set(receipt),{'consumed_unix','pid','audio_allowed'});self.assertIs(receipt['audio_allowed'],False)
+        self.assertEqual(set(receipt),{'consumed_unix','pid','audio_allowed','transport'});self.assertIs(receipt['audio_allowed'],False)
         with self.assertRaises(FileExistsError):w._consume_approval()
     def test_racing_consumers_only_one_succeeds(self):
         from concurrent.futures import ThreadPoolExecutor

@@ -19,6 +19,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             b=Bridge();bridges.append(b)
             return QualifiedProvider(b,arms.append,lambda:closed.append(True),'synthetic-session',True,'synthetic_fixture')
         runtime=RemoteGateway(registry,ConversationSessions(),provider,fixture=True)
+        self.assertEqual(runtime.activity_state,'physical_consent')
         async with asyncio.timeout(5):
             async with runtime.listener(port=0) as server:
                 uri=f'ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/companion/audio'
@@ -36,10 +37,10 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                     for _ in range(10):
                         if bridges[0].input:break
                         await asyncio.sleep(.01)
-                    self.assertEqual(len(bridges[0].input),1);self.assertEqual(arms,[1])
+                    self.assertEqual(len(bridges[0].input),1);self.assertEqual(arms,[1]);self.assertEqual(runtime.activity_state,'conversation')
                     registry.revoke(device)
                     await asyncio.wait_for(ws.wait_closed(),.5)
-            self.assertFalse(runtime._active);self.assertEqual(closed,[True]);self.assertEqual(bridges[0].input,[])
+            self.assertFalse(runtime._active);self.assertEqual(closed,[True]);self.assertEqual(bridges[0].input,[]);self.assertEqual(runtime.activity_state,'physical_consent')
     async def test_production_no_adapter_returns_503(self):
         registry=DeviceRegistry();device,token=registry.redeem_pairing_code(registry.create_pairing_code(),device_id='synthetic',label='Synthetic',capabilities=('microphone','speaker'))
         # Fixture socket only; no production TLS listener is opened.

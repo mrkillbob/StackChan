@@ -8,6 +8,7 @@ import asyncio
 import json
 import struct
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 try:
     import numeric_pairing as n
@@ -213,6 +214,22 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
             async def close(self):pass
         await gateway.handle(Socket())
         self.assertFalse(gateway._audio)
+    async def test_audio_cleanup_fault_is_failed_not_success(self):
+        pairing=SimpleNamespace(state='paired',audio_requested=True,audio_allowed=True,cancel_calls=[])
+        def cancel(state,message):pairing.cancel_calls.append((state,message));pairing.state=state
+        pairing.cancel=cancel
+        class Transport:
+            last_result={'outcome':'complete_with_cleanup_fault','native_conversation':True,
+                         'conversation_complete':True,'consent_received':True,
+                         'diagnostics':{'cleanup_fault_count':1}}
+            async def handle(self,socket):pass
+        class Request:path='/companion/audio'
+        class Socket:
+            request=Request()
+            async def close(self):pass
+        await n.NumericGateway(pairing,Transport(),audio_enabled=True).handle(Socket())
+        self.assertEqual(pairing.cancel_calls,[('failed','audio_cleanup_failed')])
+
     async def test_partial_numeric_write_no_retry_and_close(self):
         self.assertIsNotNone(n)
         class Port:
@@ -318,6 +335,43 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
                     transport.release.set();pair_task.cancel()
                     if audio_task:audio_task.cancel()
                     await asyncio.gather(pair_task,*([audio_task] if audio_task else []),return_exceptions=True)
+    async def test_gateway_close_closes_sockets_when_grant_revocation_fails(self):
+        pairing=SimpleNamespace(state='paired',revocation_failed=False,audio_allowed=True)
+        def cancel():
+            pairing.revocation_failed=True
+            pairing.audio_allowed=False
+            raise n.PairingError('revocation_failed')
+        pairing.cancel=cancel
+        class Socket:
+            closed=False
+            async def close(self):self.closed=True
+        socket=Socket();gateway=n.NumericGateway(pairing,object());gateway.sockets.add(socket)
+        await gateway.close()
+        self.assertTrue(pairing.revocation_failed)
+        self.assertTrue(socket.closed)
+
+    async def test_failed_handler_close_retained_and_reported_during_revoke_failure(self):
+        pairing=SimpleNamespace(state='paired',revocation_failed=False,audio_allowed=True)
+        def cancel():
+            pairing.revocation_failed=True
+            pairing.audio_allowed=False
+            raise n.PairingError('revocation_failed')
+        pairing.cancel=cancel
+        class Request:path='/invalid'
+        class Socket:
+            request=Request()
+            def __init__(self):self.close_calls=0
+            async def close(self):
+                self.close_calls+=1
+                raise RuntimeError('synthetic socket close failure')
+        socket=Socket();gateway=n.NumericGateway(pairing,object())
+        await gateway.handle(socket)
+        self.assertIn(socket,gateway.sockets)
+        with self.assertRaises(RuntimeError):await gateway.close()
+        self.assertTrue(pairing.revocation_failed)
+        self.assertIn(socket,gateway.sockets)
+        self.assertEqual(socket.close_calls,2)
+
     async def test_cleanup_preserves_expired_cause(self):
         core=n.NumericPairing(issuer=lambda ttl:'fixture',revoke=lambda:None);core.prepare(REQ,91);core.cancel('expired','expired')
         gateway=n.NumericGateway(core,object());await gateway.close()

@@ -9,7 +9,11 @@ from streaming_session import parse_control
 from transport_diagnostics import TransportDiagnostics
 
 
-async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, diagnostics=None):
+class TransportComplete(Exception):
+    """Expected finite audio/conversation completion; cleanup remains diagnosed."""
+
+
+async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, diagnostics=None, retain_cleanup=None):
     """Own one receive task, service 20 ms audio ticks, and fail closed on exit.
     Existing session authority/watchdog is checked even when the peer is silent.
     Blocking codec/provider work must be bounded by the supplied adapter.
@@ -60,7 +64,12 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
             if now >= next_tick:
                 if session.armed:
                     diagnostics.set_phase('playback_state')
-                    speaking = session.bridge.adapter.playing
+                    packets = None
+                    pump = getattr(session, 'audio_tick', None)
+                    if callable(pump):
+                        speaking, packets = pump(960)
+                    else:
+                        speaking = session.bridge.adapter.playing
                     if type(speaking) is not bool:
                         raise ValueError('explicit provider playback state required')
                     state = (session.epoch, speaking)
@@ -75,7 +84,7 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
                         continue
                     # 960 mono48k samples = 20 ms. Codec output is bounded per tick.
                     diagnostics.set_phase('audio_pull')
-                    packets = session.outgoing(960)
+                    if packets is None:packets = session.outgoing(960)
                     if type(packets) is not list or len(packets) > 2:
                         raise BufferError('outgoing packet bound exceeded')
                     for packet in packets:
@@ -97,6 +106,7 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
         except BaseException as failure:
             diagnostics.fault(failure,'session_cleanup',cleanup=True)
             cleanup = failure
+            if retain_cleanup is not None:retain_cleanup('session',session)
         if receive is not None:
             receive.cancel()
             try:
@@ -109,5 +119,6 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
         except BaseException as failure:
             diagnostics.fault(failure,'socket_cleanup',cleanup=True)
             if cleanup is None:cleanup = failure
+            if retain_cleanup is not None:retain_cleanup('socket',socket)
         if primary is None and cleanup is not None:
             raise cleanup

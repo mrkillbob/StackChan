@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 @main struct LifecycleChecks {
  static func pump(_ seconds: Double = 3, _ condition: () -> Bool) {
   let deadline = Date().addingTimeInterval(seconds)
@@ -6,7 +7,10 @@ import Foundation
   precondition(condition(), "bounded fixture did not complete")
  }
  static func fake(_ code: String) -> Process {
-  let p=Process();p.executableURL=URL(fileURLWithPath:"/usr/bin/python3");p.arguments=["-u","-c",code];return p
+  let p=Process();p.executableURL=URL(fileURLWithPath:"/usr/bin/python3")
+  let group=getpgrp()
+  p.arguments=["-B","-u","-c","import os\nos.setpgid(0, \(group))\nif os.getpgrp() != \(group): raise RuntimeError('fixture group mismatch')\n"+code]
+  return p
  }
  static func main() {
   let root=URL(fileURLWithPath:"/tmp")
@@ -16,6 +20,16 @@ import Foundation
   assert(scoped.audioApproved)
   let denied=PairingController(approved:false,root:root,audioApproved:true)
   assert(!denied.audioApproved)
+  let native = PairingController(approved:true,root:root,audioApproved:true,audioMode:.nativeConversation)
+  assert(native.audioDisclosure.contains("original dot voice call"))
+  assert(native.audioDisclosure.contains("call's audio plays on StackChan"))
+  assert(!native.audioDisclosure.contains("discarded"))
+  assert(native.audioSubtitle.contains("Original dot call"))
+  assert(Array(native.workerLaunchArguments.suffix(3)) == ["--approved-audio","--audio-mode","native_conversation"])
+  assert(scoped.audioDisclosure.contains("counted and discarded locally"))
+  assert(scoped.audioDisclosure.contains("No audio recording or forwarding"))
+  assert(Array(scoped.workerLaunchArguments.suffix(3)) == ["--approved-audio","--audio-mode","transport_test"])
+  assert(!inert.workerLaunchArguments.contains("--approved-audio"))
   let normal="""
 import sys,json
 for line in sys.stdin:
@@ -43,6 +57,17 @@ for line in sys.stdin:
   assert(!single.canPrimary && single.primaryTitle == "New approval needed")
   single.primary();assert(single.phase == .cancelled)
   var singleStopped=false;single.shutdown{closed in singleStopped=closed};pump{singleStopped}
+  let cleanup="""
+import sys,json
+sys.stdin.readline()
+print(json.dumps({'state':'failed','message':'cleanup_unconfirmed','cleanup':['audio','grant','usb']}),flush=True)
+"""
+  let blocked=PairingController(approved:true,root:root,processFactory:{fake(cleanup)},oneAttempt:false)
+  blocked.primary();pump{blocked.phase == .failed && blocked.cleanupIssues == [.audio,.grant,.usb]}
+  assert(!blocked.canPrimary && blocked.primaryTitle == "Cleanup needed")
+  assert(blocked.instruction.contains("Do not try again") && blocked.instruction.contains("microphone and speaker routes are restored"))
+  assert(blocked.instruction.contains("pairing grant was revoked") && blocked.instruction.contains("USB pairing session is closed"))
+  var blockedStopped=false;blocked.shutdown{closed in blockedStopped=closed};pump{blockedStopped}
   let invalid="""
 import sys,json,time
 sys.stdin.readline()

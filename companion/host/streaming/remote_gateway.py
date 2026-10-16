@@ -4,9 +4,15 @@ account or TLS credentials. Existing-Mira attachment adapter is not supplied.
 """
 from dataclasses import dataclass, field
 from gateway_admission import authorize_audio_request
-from gateway_connection import run_connection
+from gateway_connection import run_connection, TransportComplete
+from transport_diagnostics import TransportDiagnostics
 from streaming_session import StreamingSession
 
+
+class ProviderCleanupError(RuntimeError):
+    """Factory failure carrying the exact partial owner, never media or secrets."""
+    def __init__(self,provider):
+        super().__init__('provider setup cleanup unconfirmed');self.provider=provider
 
 @dataclass
 class QualifiedProvider:
@@ -19,10 +25,29 @@ class QualifiedProvider:
 
 
 class RemoteGateway:
-    def __init__(self, registry, sessions, provider_factory=None, *, fixture=False):
+    def __init__(self, registry, sessions, provider_factory=None, *, fixture=False, session_factory=StreamingSession):
         self.registry = registry; self.sessions = sessions
         self.provider_factory = provider_factory; self.fixture = fixture
         self._active = set()
+        self._retained = {}
+        self.session_factory=session_factory
+        self.last_result={'outcome':'no_connection','native_conversation':True}
+        self.completion_started=False
+        self._activity_session=None
+
+    @property
+    def activity_state(self):
+        # Read-only observation of accepted physical consent, never a grant.
+        return 'conversation' if self._activity_session is not None and self._activity_session.armed is True else 'physical_consent'
+
+    @property
+    def audio_remaining(self):
+        session=self._activity_session
+        if session is None or session.armed is not True:return None
+        started=getattr(session,'started_at',None);duration=getattr(session,'duration_seconds',None)
+        if type(started) not in (int,float) or type(duration) is not int or not 1<=duration<=60:return None
+        import math
+        return max(0,min(60,math.ceil(duration-(session.clock()-started))))
 
     def process_request(self, connection, request):
         try:
@@ -35,31 +60,71 @@ class RemoteGateway:
 
     async def handle(self, socket):
         provider = None; session = None; device_id = None; driver_started = False
+        diagnostics=TransportDiagnostics();outcome='fault';retained=[]
         try:
             grant = authorize_audio_request(self.registry, socket.request.path, list(socket.request.headers.raw_items()))
             if grant.device_id in self._active or self.provider_factory is None:
                 raise PermissionError('device busy or route unavailable')
             self._active.add(grant.device_id); device_id = grant.device_id
-            provider = self.provider_factory(grant.device_id)
+            try:provider = self.provider_factory(grant.device_id)
+            except ProviderCleanupError as failure:
+                retained.append(('provider',failure.provider))
+                diagnostics.fault(failure,'session_cleanup',cleanup=True)
+                raise
             expected = 'synthetic_fixture' if self.fixture else 'existing_mira'
             if not isinstance(provider, QualifiedProvider) or provider.identity_verified is not True or provider.kind != expected:
                 raise PermissionError('qualified conversation adapter required')
             if type(provider.session_reference) is not str or not 1 <= len(provider.session_reference) <= 128:
                 raise PermissionError('verified conversation reference required')
-            session = StreamingSession(self.registry, self.sessions, provider.bridge,
+            session = self.session_factory(self.registry, self.sessions, provider.bridge,
                 grant.credential, grant.device_id, provider.arm,
                 fixture=self.fixture, native_session_ref=provider.session_reference)
+            session.on_complete=lambda:setattr(self,'completion_started',True)
+            self._activity_session=session
             driver_started = True
-            await run_connection(socket, session)
-        except Exception:
+            await run_connection(socket, session,diagnostics=diagnostics,retain_cleanup=lambda kind,resource:retained.append((kind,resource)))
+        except TransportComplete:
+            diagnostics.expected_complete();outcome='complete'
+        except Exception as failure:
+            diagnostics.fault(failure)
             # No token, raw media or provider exception is exposed to the peer.
             await socket.close(code=1008, reason='Companion route closed')
         finally:
             try:
-                if session is not None and not driver_started:session.close()
-                if provider is not None and isinstance(provider, QualifiedProvider):provider.close()
+                if session is not None and not driver_started:
+                    try:session.close()
+                    except BaseException as failure:
+                        retained.append(('session',session));diagnostics.fault(failure,'session_cleanup',cleanup=True)
+                if provider is not None and isinstance(provider, QualifiedProvider):
+                    try:provider.close()
+                    except BaseException as failure:
+                        retained.append(('provider',provider));diagnostics.fault(failure,'session_cleanup',cleanup=True)
             finally:
-                if device_id is not None:self._active.discard(device_id)
+                if self._activity_session is session:self._activity_session=None
+                if device_id is not None:
+                    if retained:self._retained[device_id]=retained
+                    else:self._active.discard(device_id)
+                stats=session.statistics() if session is not None and hasattr(session,'statistics') else {}
+                if outcome=='complete' and diagnostics.snapshot().get('cleanup_fault_count',0):outcome='complete_with_cleanup_fault'
+                self.last_result=dict(stats,outcome=outcome,conversation_complete=self.completion_started,diagnostics=diagnostics.snapshot())
+
+    async def close(self):
+        """Retry only retained owned resources; release device only after success."""
+        import asyncio
+        first_error=None
+        for device_id,resources in tuple(self._retained.items()):
+            remaining=[]
+            for kind,resource in resources:
+                try:
+                    if kind=='socket':await asyncio.wait_for(resource.close(),.25)
+                    else:resource.close()
+                except BaseException as failure:
+                    remaining.append((kind,resource))
+                    if first_error is None:first_error=failure
+            if remaining:self._retained[device_id]=remaining
+            else:
+                del self._retained[device_id];self._active.discard(device_id)
+        if first_error is not None:raise first_error
 
     def listener(self, *, host='127.0.0.1', port=8766, ssl_context=None, trusted_tls_proxy=False):
         """Return a lazy serve context. Only entering it binds a socket.

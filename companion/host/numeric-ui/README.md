@@ -1,4 +1,10 @@
-# Local StackChan matching-number window
+# StackChan Companion
+
+The visible flow includes manual original-call readiness, matching-number pairing,
+accepted physical microphone consent, bounded conversation and verified restoration.
+See [offline boundaries and next-trial gates](COMPANION-OFFLINE.md) and
+[HomeLab/Apple status and draft seams](HOME-INTEGRATION.md). Remember/Forget is an
+unsaved preference preview; durable enrollment and integration execution are disabled.
 
 USB and verified Wi-Fi TLS carry pairing; there is no Bluetooth transport.
 Click Pair StackChan, then physically tap Pair on the muted robot.
@@ -28,6 +34,9 @@ companion/host/numeric-ui/script/build_and_run.sh run
 ```
 
 Build output is in the dedicated project `.tools/numeric-ui/StackChanPairing.app`.
+Use `STACKCHAN_UI_BUILD_ROOT` for an isolated build-only output and
+`STACKCHAN_OFFLINE_BUILD_ROOT` for isolated fixture binaries/module cache.
+Coordinate finite offline checks with the existing local CI resource owner before running them.
 The script uses installed Xcode Swift; it installs no dependencies and starts no
 GitHub Actions. Offline tests use owned synthetic subprocesses without USB or LAN
 listeners. The worker anchors its deadline at robot Ready and uses a 118-second budget,
