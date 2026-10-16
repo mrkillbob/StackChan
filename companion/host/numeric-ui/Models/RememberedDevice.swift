@@ -63,12 +63,17 @@ struct RememberedPairing {
     mutating func requestRemember(_ enabled: Bool) {
         requested=enabled; feedback=enabled ? .requested : .preferenceCleared
     }
+    /// True when the last review read failed: stored state is unknown, so nothing may be
+    /// treated as absent, cleared or trusted.
+    private(set) var storageStateUnknown = false
     mutating func loadForReview() {
-        do { record=try storage.readForReview() }
-        catch { feedback = .unavailable }
+        do { record=try storage.readForReview(); storageStateUnknown=false }
+        catch { record=nil; storageStateUnknown=true; feedback = .unavailable }
     }
     func requiresReenrollment(_ candidate: DurableRobotIdentity) -> Bool { record?.identity != candidate }
     mutating func forget() {
+        // Unknown storage must not be reported as "cleared"; no revoke/remove is attempted blind.
+        if storageStateUnknown { requested=false; feedback = .unavailable; return }
         guard let existing=record else { requested=false; feedback = .preferenceCleared; return }
         do { try revoker.revoke(existing) }
         catch { feedback = .revocationRequired; return }

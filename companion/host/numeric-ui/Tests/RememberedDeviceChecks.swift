@@ -1,7 +1,7 @@
 import Foundation
 final class MockStore: RememberedDeviceStorage {
- var saved: RememberedRobot?; var removed=0; var failRemove=false
- func readForReview() throws -> RememberedRobot? { saved }
+ var saved: RememberedRobot?; var removed=0; var failRemove=false; var failRead=false
+ func readForReview() throws -> RememberedRobot? { if failRead { throw RememberedDeviceError.unavailable }; return saved }
  func remove(_ reference: String) throws { if failRemove { throw RememberedDeviceError.unavailable }; removed+=1; saved=nil }
 }
 final class MockRevoker: DeviceTrustRevoking {
@@ -26,6 +26,21 @@ final class MockRevoker: DeviceTrustRevoking {
   assert(!model.mayAuthorizeSession)
   var disabled=RememberedPairing();disabled.requestRemember(true);disabled.loadForReview()
   assert(disabled.record==nil && !disabled.activationAvailable)
+  // Failed review read: stale record dropped, state unknown, no blind revoke/remove, no false "cleared".
+  store.saved=record;model.loadForReview();assert(model.record==record && !model.storageStateUnknown)
+  let before=(revoker.calls,store.removed)
+  disabled.forget();assert(disabled.feedback == .unavailable && disabled.storageStateUnknown)
+  store.failRead=true;model.loadForReview()
+  assert(model.storageStateUnknown && model.record==nil)
+  model.forget();assert(model.feedback == .unavailable)
+  assert(revoker.calls==before.0 && store.removed==before.1)
+  store.failRead=false;model.loadForReview()
+  assert(!model.storageStateUnknown && model.record==record && !model.mayAuthorizeSession)
+  var unreadable=RememberedPairing();unreadable.loadForReview()
+  assert(unreadable.storageStateUnknown && unreadable.record==nil && !unreadable.mayAuthorizeSession)
+  unreadable.requestRemember(true);unreadable.forget()
+  assert(!unreadable.requested && unreadable.feedback == .unavailable)
+  assert(revoker.calls==before.0 && store.removed==before.1)
   print("PASS mocked remembered-device identity, opt-in, revoke-before-forget, failure retention and reenrollment; no secure storage/credentials")
  }
 }
