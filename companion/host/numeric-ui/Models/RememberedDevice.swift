@@ -22,12 +22,25 @@ struct RememberedRobot: Equatable {
         self.identity=identity; self.secureItemReference=secureItemReference
     }
 }
-enum RememberedDeviceError: Error { case unavailable }
+enum RememberedDeviceError: Error { case unavailable, enrollmentDisabled, preferenceRequired }
 protocol RememberedDeviceStorage {
     func readForReview() throws -> RememberedRobot?
     func remove(_ reference: String) throws
 }
 protocol DeviceTrustRevoking { func revoke(_ record: RememberedRobot) throws }
+/// Future adapter boundary. A production implementation must perform the reviewed
+/// robot challenge and persist only its verified enrollment result to approved storage.
+/// The current build never calls this interface.
+protocol RememberedDeviceEnrolling {
+    func enroll() throws -> RememberedRobot
+}
+struct UnavailableRememberedDeviceEnroller: RememberedDeviceEnrolling {
+    func enroll() throws -> RememberedRobot { throw RememberedDeviceError.unavailable }
+}
+/// Deliberately compile-time disabled until protocol, Keychain and revocation approvals land.
+enum RememberedDeviceEnrollmentFeature {
+    static let enabled = false
+}
 struct UnavailableRememberedDeviceStorage: RememberedDeviceStorage {
     func readForReview() throws -> RememberedRobot? { throw RememberedDeviceError.unavailable }
     func remove(_ reference: String) throws { throw RememberedDeviceError.unavailable }
@@ -51,14 +64,16 @@ enum RememberedDeviceFeedback {
 struct RememberedPairing {
     private let storage: RememberedDeviceStorage
     private let revoker: DeviceTrustRevoking
+    private let enroller: RememberedDeviceEnrolling
     private(set) var record: RememberedRobot?
     private(set) var requested=false
     private(set) var feedback: RememberedDeviceFeedback = .unavailable
     var activationAvailable: Bool { false }
     var mayAuthorizeSession: Bool { false }
     init(storage: RememberedDeviceStorage = UnavailableRememberedDeviceStorage(),
-         revoker: DeviceTrustRevoking = UnavailableDeviceTrustRevoker()) {
-        self.storage=storage; self.revoker=revoker
+         revoker: DeviceTrustRevoking = UnavailableDeviceTrustRevoker(),
+         enroller: RememberedDeviceEnrolling = UnavailableRememberedDeviceEnroller()) {
+        self.storage=storage; self.revoker=revoker; self.enroller=enroller
     }
     mutating func requestRemember(_ enabled: Bool) {
         requested=enabled; feedback=enabled ? .requested : .preferenceCleared
@@ -69,6 +84,13 @@ struct RememberedPairing {
     mutating func loadForReview() {
         do { record=try storage.readForReview(); storageStateUnknown=false }
         catch { record=nil; storageStateUnknown=true; feedback = .unavailable }
+    }
+    /// Source-only future seam. The disabled guard runs before any enrollment or storage
+    /// adapter. `requested` is only a volatile preference and is not persistent consent.
+    func enrollIfEnabled() throws -> RememberedRobot {
+        guard requested else { throw RememberedDeviceError.preferenceRequired }
+        guard RememberedDeviceEnrollmentFeature.enabled else { throw RememberedDeviceError.enrollmentDisabled }
+        return try enroller.enroll()
     }
     func requiresReenrollment(_ candidate: DurableRobotIdentity) -> Bool { record?.identity != candidate }
     mutating func forget() {

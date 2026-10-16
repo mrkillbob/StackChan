@@ -8,11 +8,29 @@ final class MockRevoker: DeviceTrustRevoking {
  var calls=0; var fail=false
  func revoke(_ record: RememberedRobot) throws { calls+=1; if fail { throw RememberedDeviceError.unavailable } }
 }
+final class MockEnrollment: RememberedDeviceEnrolling {
+ var calls=0
+ let result: RememberedRobot
+ init(_ result: RememberedRobot) { self.result=result }
+ func enroll() throws -> RememberedRobot { calls+=1; return result }
+}
 @main struct RememberedDeviceChecks {
  static func main() {
   let identity=DurableRobotIdentity(deviceKeyDigest:String(repeating:"a",count:64),hostKeyDigest:String(repeating:"b",count:64),trustProfileDigest:String(repeating:"c",count:64))!
   assert(DurableRobotIdentity(deviceKeyDigest:"80456b561404",hostKeyDigest:String(repeating:"b",count:64),trustProfileDigest:String(repeating:"c",count:64))==nil)
   let record=RememberedRobot(identity:identity,secureItemReference:"fixture-reference")!
+  let enrollment=MockEnrollment(record)
+  var enrollmentPreview=RememberedPairing(enroller:enrollment)
+  enrollmentPreview.requestRemember(true)
+  do { _ = try enrollmentPreview.enrollIfEnabled(); assertionFailure("enrollment must stay gated") }
+  catch RememberedDeviceError.enrollmentDisabled { }
+  catch { assertionFailure("unexpected enrollment error: \(error)") }
+  assert(!RememberedDeviceEnrollmentFeature.enabled && enrollment.calls==0)
+  let noPreference=RememberedPairing(enroller:enrollment)
+  do { _ = try noPreference.enrollIfEnabled(); assertionFailure("preference required") }
+  catch RememberedDeviceError.preferenceRequired { }
+  catch { assertionFailure("unexpected preference error: \(error)") }
+  assert(enrollment.calls==0)
   let store=MockStore();let revoker=MockRevoker();var model=RememberedPairing(storage:store,revoker:revoker)
   model.requestRemember(true);assert(model.requested && !model.activationAvailable && store.saved==nil)
   model.forget();assert(!model.requested && revoker.calls==0 && store.removed==0)
