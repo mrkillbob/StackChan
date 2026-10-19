@@ -1,0 +1,94 @@
+name: StackChan CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, mira-desk-integration, claude/todo20-companion-lifecycle]
+  workflow_dispatch:
+
+# PR-controlled code runs only on disposable GitHub-hosted runners.
+# No secrets, self-hosted runners, PR-target events, publishing or hardware IO.
+permissions:
+  contents: read
+
+concurrency:
+  group: stackchan-ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  firmware-host:
+    name: Firmware host tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare exact host fixture dependencies
+        run: python3 scripts/ci/prepare_host_dependencies.py
+      - run: |
+          cmake -S firmware/tests -B "$RUNNER_TEMP/firmware-tests" -DCMAKE_BUILD_TYPE=Debug
+          cmake --build "$RUNNER_TEMP/firmware-tests" --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/firmware-tests" --output-on-failure --no-tests=error --output-junit "$RUNNER_TEMP/firmware-tests.xml"
+          python3 - "$RUNNER_TEMP/firmware-tests.xml" <<'PYTEST'
+          import sys, xml.etree.ElementTree as ET
+          skipped = ET.parse(sys.argv[1]).findall(".//testcase/skipped")
+          if skipped:
+              raise SystemExit(f"Required firmware fixtures skipped: {len(skipped)}")
+          PYTEST
+
+  companion-python:
+    name: Companion Python offline checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Syntax and synthetic public trust fixtures
+        env:
+          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/python-cache
+        run: |
+          python3 -m compileall -q companion/host
+          python3 -m unittest discover -s companion/host/offline-public -v
+          python3 companion/host/numeric-ui/script/test_fixture_custody.py
+
+  companion-swift:
+    name: Companion Swift offline checks
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compile every offline fixture
+        env:
+          STACKCHAN_OFFLINE_BUILD_ROOT: ${{ runner.temp }}/companion-offline
+        run: bash companion/host/numeric-ui/script/test_offline.sh --compile-only
+      - name: Run pure model fixtures
+        env:
+          STACKCHAN_OFFLINE_BUILD_ROOT: ${{ runner.temp }}/companion-offline
+        run: |
+          "$STACKCHAN_OFFLINE_BUILD_ROOT/AudioEndpointDirectionChecks"
+          "$STACKCHAN_OFFLINE_BUILD_ROOT/StatusChecks"
+          "$STACKCHAN_OFFLINE_BUILD_ROOT/RememberedDeviceChecks"
+
+  required:
+    name: All required checks pass
+    needs: [firmware-host, companion-python, companion-swift]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every lane to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ["RESULTS"])
+          failed = {name: job["result"] for name, job in results.items() if job["result"] != "success"}
+          if failed:
+              raise SystemExit(f"Required lanes did not succeed: {failed}")
+          print("All required checks passed")
+          PY

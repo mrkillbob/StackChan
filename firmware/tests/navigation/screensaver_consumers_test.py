@@ -89,13 +89,25 @@ int main(){
    player.onRender(0);
    if(elapsed==0&&!canvas.hidden&&!player._effect_failed&&canvas.invalidations)++playback_visible;
    assert(guarded.front()==0xa55a&&guarded.back()==0xa55a);
-   if(!canvas.hidden){assert(!player._effect_error);player.onRender(0.06f);assert(!player._effect_failed);}
+   if(!canvas.hidden){
+    assert(!player._effect_error);
+    const auto first_frame=guarded;
+    player.onRender(0.06f);
+    assert(!player._effect_failed&&player._animation_ms==elapsed+60);
+    // Visible but frozen consumers must fail too. Gears changes geometry each
+    // frame; intentionally static catalog entries have no such requirement.
+    if(std::string(effect_catalog::Name(uint16_t(id-1)))=="Gears")assert(guarded!=first_frame);
+   }
    Preview preview;preview.id_=id;preview.canvas_=&canvas;preview.count_=&count;
    preview.pixels_=guarded.data()+1;preview.thumbnail_=thumbnail.data();
    canvas={};effect_catalog::Reset(uint16_t(id-1));tick=0;
    preview.preview(elapsed);
    if(elapsed==0&&!canvas.hidden&&!preview.preview_failed_&&canvas.invalidations)++preview_visible;
-   if(!canvas.hidden){preview.preview(elapsed+60);assert(!preview.preview_failed_);}
+   if(!canvas.hidden){
+    const auto first_frame=guarded;
+    preview.preview(elapsed+60);assert(!preview.preview_failed_);
+    if(std::string(effect_catalog::Name(uint16_t(id-1)))=="Gears")assert(guarded!=first_frame);
+   }
    if(std::any_of(thumbnail.begin(),thumbnail.end(),[](uint16_t v){return v!=0;}))++painted;
    assert(guarded.front()==0xa55a&&guarded.back()==0xa55a);
   }

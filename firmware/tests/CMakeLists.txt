@@ -4,6 +4,8 @@ project(stackchan_firmware_tests LANGUAGES CXX)
 
 enable_testing()
 
+include(HostPolicyTests.cmake)
+
 add_executable(motion_math_test
     motion_math_test.cpp
     ../main/stackchan/motion/motion_math.cpp
