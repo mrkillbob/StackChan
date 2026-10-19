@@ -113,12 +113,14 @@ int main() {
                     self.assertNotEqual(checked.returncode, 0)
             (fixture / setup).write_text(original)
             view = "firmware/main/apps/app_launcher/view/screensaver.cpp"
-            (fixture / view).write_bytes(subprocess.check_output(
-                ["git", "-C", str(REPO), "show",
-                 "4a24491761ffab19f3df758c93ebbdada4c29ddc:" + view]))
-            checked = run(sys.executable, str(
-                fixture / "companion/host/boot-tests/verify_stock_menu_hierarchy.py"))
-            self.assertNotEqual(checked.returncode, 0)
+            for revision in ("4a24491761ffab19f3df758c93ebbdada4c29ddc",
+                             "25c65868841bdf8d640dffac66543265fc2e9137"):
+                with self.subTest(reverted_screensaver=revision):
+                    (fixture / view).write_bytes(subprocess.check_output(
+                        ["git", "-C", str(REPO), "show", revision + ":" + view]))
+                    checked = run(sys.executable, str(
+                        fixture / "companion/host/boot-tests/verify_stock_menu_hierarchy.py"))
+                    self.assertNotEqual(checked.returncode, 0)
 
 
 if __name__ == "__main__":

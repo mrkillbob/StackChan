@@ -7,7 +7,6 @@
 #include <companion/settings_policy.hpp>
 #endif
 #include <esp_heap_caps.h>
-#include <esp_timer.h>
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -33,7 +32,7 @@ class ScreensaverWorker final:public WorkerBase {
         lv_label_set_text_fmt(title_,"%u / %u  %s",view::saver::AllowedOrdinal(id_),view::saver::AllowedCount,view::saver::Name(style));
         lv_label_set_text(toggle_,selection_.selected(id_)?"Deselect":"Select");
         lv_label_set_text(order_,selection_.order==view::saver::Order::Random?"Random":"Sequential");
-        if(preview_failed_)lv_label_set_text(count_,"Slow: use < / >");
+        if(preview_failed_)lv_label_set_text(count_,"Preview unavailable");
         else if(selection_.count())lv_label_set_text_fmt(count_,"%u selected",selection_.count());
         else lv_label_set_text(count_,"Empty: Save uses DVD");
     }
@@ -57,7 +56,9 @@ class ScreensaverWorker final:public WorkerBase {
     }
     void preview(uint32_t elapsed){
         if(preview_failed_||!pixels_||!thumbnail_||!canvas_)return;
-        if(id_){if(!effect_catalog::Render(uint16_t(id_-1),elapsed,pixels_,320,240,[]{return uint64_t(esp_timer_get_time());})){preview_failed_=true;lv_obj_add_flag(canvas_,LV_OBJ_FLAG_HIDDEN);lv_label_set_text(count_,"Slow: use < / >");return;}}
+        // Complete the frame before scaling it. The old wall-clock cutoff could
+        // expire during clears and permanently hide every otherwise valid preview.
+        if(id_){if(!effect_catalog::Render(uint16_t(id_-1),elapsed,pixels_,320,240)){preview_failed_=true;lv_obj_add_flag(canvas_,LV_OBJ_FLAG_HIDDEN);lv_label_set_text(count_,"Preview unavailable");return;}}
         else {
             // Local preview of the stock DVD slide, without loading a screen.
             std::fill_n(pixels_,320*240,uint16_t(0));

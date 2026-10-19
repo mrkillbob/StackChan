@@ -9,7 +9,7 @@ screensaver_views={"firmware/main/apps/app_launcher/view/view.h"}
 # Reviewed navigation view/lifecycle snapshots. Inline hashes keep this check
 # self-contained without requiring the unpublished source candidate's Git object.
 navigation_views={
- "firmware/main/apps/app_launcher/view/screensaver.cpp":"31662b79f2a8ccd246b78a3b5a6d27bb265eaa8ebe969e3f60bfda1c256f415a",
+ "firmware/main/apps/app_launcher/view/screensaver.cpp":"52900c120f8e1d1460b29e0f830cf2c5b1b3df2bbe526dfd2420dfd8449097af",
  "firmware/main/apps/common/toast/toast.cpp":"27aba8cce159c046fcf31374990a1598f9fc0a489a368d76b93481504ced03ca",
  "firmware/main/apps/common/toast/toast.h":"d6ea6796042b15bc14e0a468ba1c7df93280c3fd820fc1a60b58385f940709e2",
 }

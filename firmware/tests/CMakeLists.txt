@@ -28,6 +28,8 @@ foreach(target category_test raster_test catalog_bounded_test runtime_stop_test)
     add_test(NAME ${target} COMMAND $<TARGET_FILE:${target}>)
 endforeach()
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME screensaver_consumers_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/screensaver_consumers_test.py)
 add_test(NAME launcher_navigation_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/launcher_test.py)
 add_test(NAME generated_teardown_test COMMAND ${Python3_EXECUTABLE}
