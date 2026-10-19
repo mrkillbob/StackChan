@@ -67,7 +67,7 @@ print(json.dumps({'state':'failed','message':'cleanup_unconfirmed','cleanup':['a
   assert(!blocked.canPrimary && blocked.primaryTitle == "Cleanup needed")
   assert(blocked.instruction.contains("Do not try again") && blocked.instruction.contains("microphone and speaker routes are restored"))
   assert(blocked.instruction.contains("pairing grant was revoked") && blocked.instruction.contains("USB pairing session is closed"))
-  var blockedStopped=false;blocked.shutdown{closed in blockedStopped=closed};pump{blockedStopped}
+  var blockedStopped:Bool?=nil;blocked.shutdown{closed in blockedStopped=closed};pump{blockedStopped != nil};assert(blockedStopped == false)
   let invalid="""
 import sys,json,time
 sys.stdin.readline()
@@ -95,8 +95,8 @@ sys.stdin.readline();print(json.dumps({'state':'waiting_robot'}),flush=True)
 while True:time.sleep(0.1)
 """
   let d=PairingController(approved:true,root:root,processFactory:{fake(stubborn)})
-  d.primary();pump{d.phase == .waiting_robot};var stubbornClosed=false;d.shutdown{closed in stubbornClosed=closed}
-  pump(9){stubbornClosed};assert(!d.cleanupPending)
+  d.primary();pump{d.phase == .waiting_robot};var stubbornClosed:Bool?=nil;d.shutdown{closed in stubbornClosed=closed}
+  pump(9){stubbornClosed != nil};assert(stubbornClosed == false && d.cleanupPending,"forced worker kill is not a confirmed clean release")
   print("PASS nativeUI real-pipe fixtures: preview, repeatedclick, confirm, cancel/retry, malformedstatus cleanup, stalepartial isolation, EOF closure and TERM-resistant workerKILL; nohardware/network")
  }
 }

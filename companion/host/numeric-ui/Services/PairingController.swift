@@ -71,6 +71,7 @@ final class PairingController: ObservableObject {
     private var shutdownDone: ((Bool) -> Void)?
     private var generation = UUID()
     private var requiresProcessExit = false
+    private var lastWorkerExitConfirmed: Bool?
     private var receivedUptime = ProcessInfo.processInfo.systemUptime
     private let processFactory: (() -> Process)?
     init(approved: Bool, root: URL, processFactory: (() -> Process)? = nil, audioApproved: Bool = false, oneAttempt: Bool = true, audioMode: CompanionAudioMode = .transportTest, restorationVerifier: SessionRestorationVerifying? = nil, audioRouteAvailability: @escaping () -> Bool = { AudioRouteCatalog.requiredEndpointsAvailable() }) { self.restorationVerifier = restorationVerifier; self.audioMode = audioMode; self.oneAttempt = oneAttempt; self.approved = approved; self.audioApproved = approved && audioApproved; self.root = root; self.processFactory = processFactory; self.audioRouteAvailability = audioRouteAvailability }
@@ -156,36 +157,36 @@ final class PairingController: ObservableObject {
         if !approved { return "Prepared preview. Pairing needs approval for one temporary USB/Wi-Fi check." }
         if !cleanupIssues.isEmpty {
             var checks = [String]()
-            if cleanupIssues.contains(.audio) { checks.append("confirm the original microphone and speaker routes are restored, keeping StackChan muted") }
+            if cleanupIssues.contains(.audio) { checks.append("confirm the original microphone and speaker routes are restored and the worker has released audio") }
             if cleanupIssues.contains(.grant) { checks.append("verify the temporary pairing grant was revoked") }
             if cleanupIssues.contains(.usb) { checks.append("verify the USB pairing session is closed") }
             return "Cleanup is not confirmed. Do not try again until you " + checks.joined(separator: ", and ") + "."
         }
         if stage == .restoring {
-            return "The local session is stopping or closed. Keep StackChan muted. The operator must independently verify original microphone/speaker routes and owned process, USB and listener closure. This app cannot yet verify that supervisor receipt."
+            return "The local session is stopping or closed. Microphone capture state is unknown until worker release is confirmed. The operator must independently verify original microphone/speaker routes and owned process, USB and listener closure. This app cannot yet verify that supervisor receipt."
         }
         if requiresOriginalCall && phase == .idle {
             return "After the operator completes the approved route preparation, start a fresh voice call in this same original dot conversation. Confirm it is open below. Automatic call launch is unavailable."
         }
         if let recovery = recovery { return recovery.guidance }
-        if phase.terminal && oneAttempt { return "Session ended. Keep StackChan muted. A fresh approved check is needed before another attempt." }
+        if phase.terminal && oneAttempt { return "Session ended. Microphone capture state is unknown until cleanup is verified. A fresh approved check is needed before another attempt." }
         switch phase {
-        case .idle: return "Ready now. Open Companion on StackChan and leave it muted. Click Pair StackChan to begin."
+        case .idle: return "Ready now. Open Companion on StackChan and leave physical Listen off. Click Pair StackChan to begin."
         case .opening: return "Opening USB before pairing. Wait for the robot to settle."
         case .usb_ready, .waiting_robot: return "Keep USB connected. On the robot, tap Pair."
         case .comparing, .waiting_confirmation:
             if audioApproved { return confirmationSent ? "Confirm the same number on StackChan only if both numbers match. Its Pair & authorize mic/speaker button gives physical consent for the temporary microphone and speaker session." : "Compare this number with the correct StackChan screen. Confirm on both only if they match. The robot’s Pair & authorize mic/speaker button gives physical consent for the temporary microphone and speaker session." }
             return confirmationSent ? "Confirm the same number on StackChan. Only accept if both numbers match." : "Compare this number with the correct StackChan screen. Confirm on both only if they match."
         case .staging: return "Both confirmations received. Waiting for StackChan’s acknowledgement."
-        case .restoring: return "Closing temporary access. Keep StackChan muted while cleanup is verified."
+        case .restoring: return "Closing temporary access. Keep physical Listen off while cleanup is verified."
         case .paired:
-            if audioApproved && audioMode == .nativeConversation && activity == .conversation {
-                return "Physical mic consent was accepted. Your original call audio is being bridged for this bounded trial. Mira identity, conversation continuity and physical playback still need human confirmation. Use Cancel or the physical stop to end."
+            if activity == .conversation {
+                return "The worker reports conversation activity. Microphone capture state is unknown; physical playback and call destination are not verified here. Use Cancel or the physical stop to end."
             }
-            return audioApproved ? "Pairing confirmed. Waiting for the robot’s physical microphone consent acknowledgement from its matching-number confirmation. Use Cancel on this Mac or Back on StackChan to stop." : "Pairing acknowledged. Keep StackChan muted. Audio needs separate approval."
+            return audioApproved ? "Pairing confirmed. Waiting for the robot’s physical microphone consent acknowledgement from its matching-number confirmation. Use Cancel on this Mac or Back on StackChan to stop." : "Pairing acknowledged. Leave physical Listen off. Audio needs separate approval."
         case .cancelled: return "Cancelled. Any temporary grant is revoked. Retry starts a fresh attempt."
         case .expired: return "The session expired. Retry starts a fresh attempt; no previous grant is reused."
-        case .failed: return "Pairing stopped. Check the robot is muted and connected before a fresh retry."
+        case .failed: return "Pairing stopped. Microphone capture state is unknown; verify worker cleanup and leave physical Listen off before a fresh retry."
         case .closed: return "Session closed. Temporary access ended."
         }
     }
@@ -207,6 +208,7 @@ final class PairingController: ObservableObject {
             phase = .failed; recovery = .setup; return
         }
         let activeGeneration = UUID(); generation = activeGeneration; buffer.removeAll(); requiresProcessExit = false
+        lastWorkerExitConfirmed = nil
         if processFactory == nil {
         process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/python3.14")
         process.arguments = persistentMode ? rememberedWorkerLaunchArguments : workerLaunchArguments
@@ -229,10 +231,13 @@ final class PairingController: ObservableObject {
                 self.generation = UUID()
                 self.buffer.removeAll()
                 self.output?.readabilityHandler = nil; self.output = nil; self.input = nil; self.child = nil
+                let released = process.terminationReason == .exit && process.terminationStatus == 0 && self.cleanupIssues.isEmpty
+                self.lastWorkerExitConfirmed = released
+                if self.phase == .cancelled { self.updateRememberedReleaseStatus(released) }
                 if self.phase.busy { self.phase = .failed; self.code = nil; self.recovery = self.recovery ?? .workerExit }
-                self.cleanupPending = false; self.requiresProcessExit = false
+                self.cleanupPending = !released; self.requiresProcessExit = false
                 self.refreshRestoration()
-                let done = self.shutdownDone; self.shutdownDone = nil; done?(!self.persistentMode || self.cleanupIssues.isEmpty)
+                let done = self.shutdownDone; self.shutdownDone = nil; done?(released)
             }
         }
         do { try process.run(); child = process; input = incoming.fileHandleForWriting; output = outgoing.fileHandleForReading }
@@ -248,9 +253,15 @@ final class PairingController: ObservableObject {
             if (requiresProcessExit && !status.phase.terminal && status.phase != .restoring) || (cleanupPending && !status.phase.terminal && status.phase != .restoring) { continue }
             phase = status.phase; code = status.code; remaining = status.remaining
             if persistentMode {
-                if phase == .paired { rememberedStatus = status.activity == nil ? "Pairing stored. Select the StackChan audio devices in your Voice app, then choose Use StackChan." : "Audio listener ready. Press Listen on StackChan to enable microphone and speaker." }
-                if phase == .cancelled { rememberedStatus = "Use StackChan stopped. Audio is closed; wireless trust remains saved unless you chose Forget." }
-                if phase == .failed { rememberedStatus = "Operation failed. Keep StackChan muted and verify cleanup before retrying." }
+                if phase == .paired {
+                    rememberedStatus = status.activity == nil
+                        ? "Pairing stored. Select the StackChan audio devices in your Voice app, then choose Use StackChan."
+                        : "Audio listener ready. " + MiraPresentation.workerAudioStatus(status.activity)
+                }
+                if phase == .cancelled {
+                    rememberedStatus = "Use StackChan stop was requested. Worker release is not confirmed; microphone capture state is unknown. Wireless trust remains saved unless you chose Forget."
+                }
+                if phase == .failed { rememberedStatus = "Operation failed. Microphone capture state is unknown; verify cleanup before retrying." }
                 if phase == .closed { rememberedStatus = "Listener closed. Remembered trust is still saved." }
             }
             activity = status.activity; audioRemaining = status.audioRemaining
@@ -273,6 +284,12 @@ final class PairingController: ObservableObject {
         phase = .failed; code = nil; recovery = .protocolFailure; cleanupPending = true
         shutdown { [weak self] closed in self?.cleanupPending = !closed }
     }
+    private func updateRememberedReleaseStatus(_ released: Bool) {
+        guard persistentMode else { return }
+        rememberedStatus = released
+            ? "Use StackChan stopped. Worker process release is confirmed; wireless trust remains saved unless you chose Forget."
+            : "Use StackChan stop is not confirmed. Microphone capture state is unknown; verify cleanup before retrying. Wireless trust remains saved unless you chose Forget."
+    }
     private func send(_ command: String) {
         send(["command": command])
     }
@@ -291,7 +308,7 @@ final class PairingController: ObservableObject {
     }
     func cancel() { guard canCancel else { return }; cleanupPending = true; code = nil; send("cancel") }
     func shutdown(_ done: @escaping (Bool) -> Void) {
-        guard child != nil else { done(true); return }
+        guard child != nil else { done((lastWorkerExitConfirmed ?? true) && cleanupIssues.isEmpty); return }
         cleanupPending = true; requiresProcessExit = true; send("cancel"); try? input?.close(); input = nil
         stopAfterRequest(done)
     }
@@ -315,9 +332,13 @@ final class PairingController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self, weak process] in
             guard let self = self, self.generation == activeGeneration else { return }
             // Refuse app termination/retry until this exact child is known closed.
-            let closed = (process == nil || process?.isRunning == false) && (!self.persistentMode || self.cleanupIssues.isEmpty)
-            if closed { self.cleanupPending = false }
-            let completion = self.shutdownDone; self.shutdownDone = nil; completion?(closed)
+            let released = process.map { !$0.isRunning && $0.terminationReason == .exit && $0.terminationStatus == 0 } == true && self.cleanupIssues.isEmpty
+            if process?.isRunning == false {
+                self.lastWorkerExitConfirmed = released
+                self.cleanupPending = !released
+            }
+            if self.phase == .cancelled { self.updateRememberedReleaseStatus(released) }
+            let completion = self.shutdownDone; self.shutdownDone = nil; completion?(released)
         }
     }
 }

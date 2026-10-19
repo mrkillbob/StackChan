@@ -95,7 +95,14 @@ let supported = SameCallCapability.supported(routeID: "fixture", hangup: true, r
         check(life.muted && !life.physicalConsent && !life.captureMayArm, "all disarmed after close")
         route.up(1); check(life.presence == .closed, "late callback after close ignored")
         life.open(); check(life.presence == .closed, "no reopen without relaunch")
-        life.close { finished = $0 }; check(finished == true && res.log.count == 1, "close idempotent")
+        res.fail.insert("worker") // Simulates a fresh worker started later from the pairing page.
+        var secondRelease: Bool?; life.close(reason: .appQuit) { secondRelease = $0 }
+        check(secondRelease == false && res.log.count == 2 && life.presence == .cleanupIncomplete(["workerRelease"]),
+              "a closed lifecycle still rechecks an owned worker started afterward")
+        res.fail.remove("worker")
+        var retryRelease: Bool?; life.close(reason: .appQuit) { retryRelease = $0 }
+        check(retryRelease == true && res.log.count == 3 && life.presence == .closed,
+              "closed-session worker release can be retried and confirmed")
 
         // Startup cancellation: close while connecting, no hangup of non-call? (attempt is cancelled and hung up)
         let r2 = FixtureResources(), rt2 = FixtureRoute(supported)
