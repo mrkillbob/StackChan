@@ -65,15 +65,9 @@ class StockAgentApp : public mooncake::AppAbility {
             self->action_ = static_cast<int>(reinterpret_cast<intptr_t>(lv_obj_get_user_data(button)));
         }, LV_EVENT_CLICKED, this);
     }
-public:
-    StockAgentApp() {
-        AppAiAgent stock;
-        setAppInfo() = stock.getAppInfo();
-        setAppInfo().name = "Stackchan";
-    }
-    void onOpen() override {
-        waiting_network_=false;action_ = GetHAL().isAppConfiged() ? 2 : 0; // Tile opens directly after setup.
+    void ShowNotice(const char* text) {
         LvglLockGuard lock;
+        if(panel_){lv_label_set_text(notice_,text);return;}
         panel_ = lv_obj_create(lv_screen_active());
         lv_obj_set_size(panel_, 320, 240);
         lv_obj_set_pos(panel_, 0, 0);
@@ -84,14 +78,23 @@ public:
         lv_obj_set_style_text_font(panel_, &lv_font_montserrat_16, 0);
         Label(panel_, "Stackchan", 10, 10, 300);
         Label(panel_, "Uses cloud AI, microphone/wake word, camera and motors.\nStop / Home stops and returns Home.", 10, 43, 300);
-        notice_ = Label(panel_, !GetHAL().isAppConfiged() ? "Setup required: Settings > Setup & login.\nComplete Wi-Fi and account setup there." : (companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized())
-            ? "Network availability is checked before opening."
-            : "Wi-Fi setup: phone browser.\nStock vendor activation.\nWi-Fi changes are saved after connection.",
-            10, 128, 300);
+        notice_ = Label(panel_, text, 10, 128, 300);
         Button("Back", 10, 192, 90, 1);
         if(!GetHAL().isAppConfiged()){Button("Settings",112,192,198,3);return;}
         Button("Retry",112,192,96,2);
         Button("Settings",214,192,96,3);
+    }
+public:
+    StockAgentApp() {
+        AppAiAgent stock;
+        setAppInfo() = stock.getAppInfo();
+        setAppInfo().name = "Stackchan";
+    }
+    void onOpen() override {
+        waiting_network_=false;action_ = GetHAL().isAppConfiged() ? 2 : 0;
+        // The tile's existing launch checks run in onRunning. Do not paint a
+        // setup/retry screen that will be destroyed on the successful handoff.
+        if(!GetHAL().isAppConfiged())ShowNotice("Setup required: Settings > Setup & login.\nComplete Wi-Fi and account setup there.");
     }
     void onRunning() override {
         auto action = action_.exchange(0);
@@ -101,14 +104,12 @@ public:
         if (action != 2) return;
         if (!GetHAL().isAppConfiged()) return;
         if (companion::CurrentAudioOwner() != companion::AudioOwner::None) {
-            LvglLockGuard lock;
-            lv_label_set_text(notice_, "Audio is still stopping.\nReopen Stackchan when stopped.");
+            ShowNotice("Audio is still stopping.\nRetry when stopped, or return Home.");
             return;
         }
         if (!runtime_lifecycle::PrepareVendorNetwork()) {
             waiting_network_=true;
-            LvglLockGuard lock;
-            lv_label_set_text(notice_,"Stopping previous Wi-Fi.\nWaiting for confirmed cleanup.\nBack cancels opening Stackchan.");
+            ShowNotice("Stopping previous Wi-Fi.\nWaiting for confirmed cleanup.\nBack cancels opening Stackchan.");
             return;
         }
         waiting_network_=false;start_requested = true;
@@ -142,8 +143,8 @@ const char* SessionText() {
 }
 void SessionControls() {
     LvglLockGuard lock;
-    // A compact reveal affordance leaves the native face unobstructed. State and
-    // Stop/Home requests cancellation; its owner joins outside LVGL.
+    // State and Stop/Home remain directly available without a dropdown. Home
+    // requests cancellation; its owner joins outside LVGL.
     controls.Create(ReturnHome, SessionText);
 }
 }

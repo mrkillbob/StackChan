@@ -63,3 +63,6 @@ add_test(NAME nested_usb_close_test COMMAND ${Python3_EXECUTABLE}
 
 add_test(NAME usb_actor_close_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/usb_actor_close_test.py)
+
+add_test(NAME companion_entry_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/companion_entry_test.py)

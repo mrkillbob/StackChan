@@ -167,13 +167,16 @@ public:
   usb_pending_=false;usb_active_=false;usb_return_=false;
   closing_=controls_visible_=ready_ui_=false;rendered_epoch_=UINT32_MAX;{std::lock_guard<std::mutex> lock(action_mutex_);action_.reset();}
   local_notice_=State().CloseFeatures()?"":"USB cleanup pending.";scenes_.clear();scenes_result_.clear();
-  {LvglLockGuard lock;frame_=lv_obj_create(lv_screen_active());lv_obj_set_pos(frame_,0,0);lv_obj_set_size(frame_,320,240);lv_obj_set_style_pad_all(frame_,0,0);lv_obj_remove_flag(frame_,LV_OBJ_FLAG_SCROLLABLE);
+  {LvglLockGuard lock;frame_=lv_obj_create(lv_screen_active());lv_obj_add_flag(frame_,LV_OBJ_FLAG_HIDDEN);lv_obj_set_pos(frame_,0,0);lv_obj_set_size(frame_,320,240);lv_obj_set_style_pad_all(frame_,0,0);lv_obj_remove_flag(frame_,LV_OBJ_FLAG_SCROLLABLE);
    native_root_=lv_obj_create(frame_);lv_obj_set_pos(native_root_,0,0);lv_obj_set_size(native_root_,320,240);lv_obj_set_style_pad_all(native_root_,0,0);
    root_=lv_obj_create(frame_);lv_obj_set_pos(root_,0,0);stock_ui::Page(root_);lv_obj_set_style_pad_all(root_,0,0);lv_obj_remove_flag(root_,LV_OBJ_FLAG_SCROLLABLE);lv_obj_set_style_text_font(root_,&lv_font_montserrat_16,0);
    native_controls_=lv_obj_create(frame_);lv_obj_set_pos(native_controls_,188,2);lv_obj_set_size(native_controls_,132,40);lv_obj_set_style_pad_all(native_controls_,0,0);lv_obj_set_style_bg_opa(native_controls_,LV_OPA_TRANSP,0);lv_obj_set_style_border_width(native_controls_,0,0);lv_obj_remove_flag(native_controls_,LV_OBJ_FLAG_SCROLLABLE);
    native_actions_=lv_obj_create(frame_);lv_obj_set_pos(native_actions_,4,198);lv_obj_set_size(native_actions_,312,40);lv_obj_set_style_pad_all(native_actions_,0,0);lv_obj_set_style_bg_opa(native_actions_,LV_OPA_TRANSP,0);lv_obj_set_style_border_width(native_actions_,0,0);lv_obj_remove_flag(native_actions_,LV_OBJ_FLAG_SCROLLABLE);
   }
   companion::OpenView(native_root_);companion::PublicStatusOwner().Set(this,[](void* owner){return static_cast<JointApp*>(owner)->PublicStatusIdle();});Render();RenderNativeControls();ShowControls(false);
+  // Child builders release the LVGL lock independently. Publish only the final
+  // companion mode, after the hidden feature/setup controls are ready.
+  {LvglLockGuard lock;lv_obj_remove_flag(frame_,LV_OBJ_FLAG_HIDDEN);}
  }
  void onRunning()override{
   if(closing_){
