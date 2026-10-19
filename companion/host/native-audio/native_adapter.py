@@ -38,11 +38,17 @@ class NativeHostAdapter:
         if not self.handle.value: raise RuntimeError('device IO has not been explicitly opened')
     def _check(self,status):
         if status: raise RuntimeError(f'CoreAudio bridge status {status}')
-    def open_for_approved_test(self):
+    def open_for_approved_test(self,*,cancelled=None):
+        def check_cancelled():
+            if cancelled is not None and cancelled():raise RuntimeError('native startup cancelled')
+        check_cancelled()
         if self.handle.value: raise RuntimeError('already open')
         self._check(self.lib.sc_open(TO_VOICE.encode(),FROM_VOICE.encode(),C.byref(self.handle)))
-        try: self._check(self.lib.sc_start(self.handle))
-        except Exception: self.close(); raise
+        try:
+            check_cancelled()
+            self._check(self.lib.sc_start(self.handle))
+            check_cancelled()
+        except BaseException: self.close(); raise
     def begin(self,epoch):
         self._require()
         if type(epoch) is not int or not self.epoch<epoch<=0xffffffff: raise ValueError('new uint32 epoch required')

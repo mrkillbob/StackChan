@@ -2,16 +2,9 @@ import SwiftUI
 import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var controller: PairingController?
-    weak var lifecycle: CompanionLifecycle?
     func applicationDidFinishLaunching(_ notification: Notification) { NSApp.setActivationPolicy(.regular); NSApp.activate(ignoringOtherApps: true) }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Lifecycle close mutes/disarms and releases first (it drives controller.shutdown);
-        // a bare controller still shuts down if no lifecycle exists.
-        if let lifecycle = lifecycle {
-            lifecycle.close { closed in DispatchQueue.main.async { sender.reply(toApplicationShouldTerminate: closed) } }
-            return .terminateLater
-        }
         guard let controller = controller else { return .terminateNow }
         controller.shutdown { closed in DispatchQueue.main.async { sender.reply(toApplicationShouldTerminate: closed) } }
         return .terminateLater
@@ -24,13 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         root: URL(fileURLWithPath: "/Users/mikedemott/Developer/AgentWork/StackChan"),
         audioApproved: CommandLine.arguments.contains("--approved-audio"),
         audioMode: CommandLine.arguments.contains("--native-conversation") ? .nativeConversation : .transportTest)
-    @StateObject private var lifecycle = CompanionLifecycle(resources: WorkerAudioResources.shared)
     var body: some Scene {
         Window("StackChan Companion", id: "pairing") {
-            ContentView(controller: controller, lifecycle: lifecycle).onAppear {
-                delegate.controller = controller; delegate.lifecycle = lifecycle
-                WorkerAudioResources.shared.bind(controller)
-            }
+            ContentView(controller: controller).onAppear { delegate.controller = controller }
         }.windowResizability(.contentSize)
     }
 }

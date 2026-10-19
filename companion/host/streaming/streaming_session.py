@@ -59,7 +59,7 @@ class StreamingSession:
         self.epoch+=1;self.mic_seq=self.speaker_seq=0;self.armed=False;self.acknowledged=False
         self.bridge.begin(self.epoch);return self.hello()
     def hello(self):
-        return {'type':'begin','epoch':self.epoch,'turn_id':self.turn.id,'generation':self.turn.generation,'audio':{'uplink_rate':16000,'downlink_rate':24000,'channels':1,'frame_ms':60},'fixture':self.fixture}
+        return {'type':'begin','epoch':self.epoch,'turn_id':self.turn.id,'generation':self.turn.generation,'conversation_id':self.conversation.id,'turn_generation':str(self.turn.generation),'audio':{'uplink_rate':16000,'downlink_rate':24000,'channels':1,'frame_ms':60},'fixture':self.fixture}
     def control(self,value):
         self._authorized()
         kind=value.get('type')

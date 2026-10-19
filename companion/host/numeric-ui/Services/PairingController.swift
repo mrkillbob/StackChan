@@ -13,9 +13,49 @@ final class PairingController: ObservableObject {
     @Published private(set) var audioRemaining: Int?
     @Published private(set) var recovery: PairingRecovery?
     @Published private(set) var originalCallConfirmed = false
+    @Published private(set) var audioRouteEndpointsAvailable = false
     @Published private(set) var restorationConfirmed = false
     @Published private(set) var rememberRequested = false
     @Published private(set) var rememberFeedback: RememberedDeviceFeedback = .unavailable
+    private var forgetAwaitingAcknowledgement = false
+    @Published private(set) var persistentMode = false
+    @Published private(set) var rememberedStatus = "Ready for manual enrollment. No audio starts during enrollment."
+    private var audioDeviceRoute = AudioDeviceRoute(endpointsAvailable: false)
+    private let audioRouteAvailability: () -> Bool
+    private var candidateHost: URL { URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent() }
+    var workerLaunchEnvironment: [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        environment["PYTHONPATH"] = ["/Users/mikedemott/Homelab/src", root.appendingPathComponent("bridge/host-adapter").path,
+          root.appendingPathComponent("bridge/local-endpoint").path, root.appendingPathComponent(".tools/bridge-python").path,
+          candidateHost.appendingPathComponent("native-audio").path].joined(separator: ":")
+        return environment
+    }
+    var rememberedWorkerLaunchArguments: [String] { ["-B", candidateHost.appendingPathComponent("streaming/remembered_pairing_worker.py").path] }
+    var canEnrollRemembered: Bool { !cleanupPending && cleanupIssues.isEmpty && (child == nil || (persistentMode && (phase == .idle || phase.terminal))) }
+    var canConnectRemembered: Bool { canUseStackChan }
+    var canUseStackChan: Bool { audioDeviceRoute.canUseStackChan && !cleanupPending && cleanupIssues.isEmpty && (child == nil || (persistentMode && (phase == .idle || phase.terminal || (phase == .paired && activity == nil)))) }
+    func enrollRemembered() {
+        guard canEnrollRemembered else { return }
+        persistentMode = true
+        if child == nil { start() }
+        if child != nil { phase = .waiting_robot; rememberedStatus = "On StackChan, choose Pair and Remember. Compare the number and confirm on both screens."; send("enroll") }
+    }
+    func confirmRemembered() {
+        guard persistentMode, phase == .comparing, !confirmationSent else { return }
+        confirmationSent = true; send("confirm")
+    }
+    func refreshAudioRouteAvailability() {
+        let available = audioRouteAvailability()
+        audioDeviceRoute = AudioDeviceRoute(endpointsAvailable: available)
+        audioRouteEndpointsAvailable = available
+    }
+    func useStackChan() {
+        guard canUseStackChan, let payload = audioDeviceRoute.workerPayload() else { return }
+        persistentMode = true
+        if child == nil { start() }
+        if child != nil { phase = .opening; rememberedStatus = "Preparing the StackChan audio listener. Physical Listen is required to enable audio."; send(payload) }
+    }
     private var rememberedPairing = RememberedPairing()
     private let restorationVerifier: SessionRestorationVerifying?
     private(set) var attemptID = UUID()
@@ -33,7 +73,7 @@ final class PairingController: ObservableObject {
     private var requiresProcessExit = false
     private var receivedUptime = ProcessInfo.processInfo.systemUptime
     private let processFactory: (() -> Process)?
-    init(approved: Bool, root: URL, processFactory: (() -> Process)? = nil, audioApproved: Bool = false, oneAttempt: Bool = true, audioMode: CompanionAudioMode = .transportTest, restorationVerifier: SessionRestorationVerifying? = nil) { self.restorationVerifier = restorationVerifier; self.audioMode = audioMode; self.oneAttempt = oneAttempt; self.approved = approved; self.audioApproved = approved && audioApproved; self.root = root; self.processFactory = processFactory }
+    init(approved: Bool, root: URL, processFactory: (() -> Process)? = nil, audioApproved: Bool = false, oneAttempt: Bool = true, audioMode: CompanionAudioMode = .transportTest, restorationVerifier: SessionRestorationVerifying? = nil, audioRouteAvailability: @escaping () -> Bool = { AudioRouteCatalog.requiredEndpointsAvailable() }) { self.restorationVerifier = restorationVerifier; self.audioMode = audioMode; self.oneAttempt = oneAttempt; self.approved = approved; self.audioApproved = approved && audioApproved; self.root = root; self.processFactory = processFactory; self.audioRouteAvailability = audioRouteAvailability }
     var audioDisclosure: String {
         if audioMode == .nativeConversation {
             return "Microphone audio goes to your original dot voice call. That call's audio plays on StackChan. This app does not record audio. Match the number on both screens. The robot’s Pair & authorize mic/speaker confirmation gives physical consent for this temporary session."
@@ -44,16 +84,21 @@ final class PairingController: ObservableObject {
         audioMode == .nativeConversation ? "Original dot call · Microphone and speaker" : "Transport test · Local cue and microphone discard"
     }
     var workerLaunchArguments: [String] {
-        let worker = root.appendingPathComponent("src/upstream/companion/host/streaming/numeric_pairing_worker.py")
-        var args = ["-B", worker.path, "--approved-test", "--port", "/dev/cu.usbmodem31201",
-            "--cert", root.appendingPathComponent(".tools/local-companion-tls/server.pem").path,
-            "--key", root.appendingPathComponent(".tools/local-companion-tls/server-key.pem").path,
+        let worker = candidateHost.appendingPathComponent("streaming/numeric_pairing_worker.py")
+        var args = ["-B", worker.path, "--approved-test", "--persistent-trust", "--port", "/dev/cu.usbmodem31201",
+            "--cert", root.appendingPathComponent(".tools/persistent-companion/server.pem").path,
+            "--key", root.appendingPathComponent(".tools/persistent-companion/server-key.pem").path,
             "--cue", root.appendingPathComponent(".tools/native-call-preparation/transport-speaker-cue.wav").path]
         if audioApproved { args += ["--approved-audio", "--audio-mode", audioMode.rawValue] }
         return args
     }
     var requiresOriginalCall: Bool { audioApproved && audioMode == .nativeConversation && !originalCallConfirmed }
     var stage: CompanionStage {
+        if persistentMode {
+            if cleanupPending || !cleanupIssues.isEmpty { return .restoring }
+            if phase == .paired { return activity == .conversation ? .conversation : (activity == .physicalConsent ? .physicalConsent : .closed) }
+            return phase.terminal ? .closed : .pairing
+        }
         if !approved { return .preparing }
         if cleanupPending || phase == .restoring || !cleanupIssues.isEmpty { return .restoring }
         if phase.terminal {
@@ -65,7 +110,7 @@ final class PairingController: ObservableObject {
         return .pairing
     }
     var readyNow: Bool { approved && phase == .idle && !requiresOriginalCall && !cleanupPending && cleanupIssues.isEmpty }
-    var canAcknowledgeCall: Bool { approved && requiresOriginalCall && phase == .idle && !cleanupPending }
+    var canAcknowledgeCall: Bool { approved && requiresOriginalCall && !cleanupPending && cleanupIssues.isEmpty && (phase == .idle || (persistentMode && (phase == .paired || phase == .closed))) }
     func acknowledgeOriginalCall() {
         guard canAcknowledgeCall else { return }
         originalCallConfirmed = true
@@ -78,6 +123,17 @@ final class PairingController: ObservableObject {
     func setRememberRequested(_ enabled: Bool) {
         rememberedPairing.requestRemember(enabled)
         rememberRequested = rememberedPairing.requested; rememberFeedback = rememberedPairing.feedback
+    }
+    var canForgetRemembered: Bool {
+        if persistentMode && cleanupIssues == [.grant] { return true }
+        return !cleanupPending && cleanupIssues.isEmpty && (child == nil || persistentMode)
+    }
+    func forgetRemembered() {
+        guard canForgetRemembered else { return }
+        if child == nil { persistentMode = true; start() }
+        if persistentMode, child != nil {
+            forgetAwaitingAcknowledgement = true; send("forget"); rememberedStatus = "Revoking Mac trust and closing owned sessions. Also choose Forget on StackChan."; return
+        }
     }
     func forgetDevice() {
         rememberedPairing.forget()
@@ -93,9 +149,10 @@ final class PairingController: ObservableObject {
         if phase.terminal { return oneAttempt ? "New approval needed" : "Retry pairing" }
         return phase == .idle ? "Pair StackChan" : "Pairing…"
     }
-    var canPrimary: Bool { approved && !requiresOriginalCall && !requiresProcessExit && !cleanupPending && cleanupIssues.isEmpty && !(phase.terminal && stage == .restoring) && (phase == .idle || (phase.terminal && !oneAttempt) || canConfirm) }
-    var canCancel: Bool { approved && phase.busy && phase != .restoring && !cleanupPending }
+    var canPrimary: Bool { !persistentMode && approved && !requiresOriginalCall && !requiresProcessExit && !cleanupPending && cleanupIssues.isEmpty && !(phase.terminal && stage == .restoring) && (phase == .idle || (phase.terminal && !oneAttempt) || canConfirm) }
+    var canCancel: Bool { (approved || persistentMode) && phase.busy && phase != .restoring && !cleanupPending }
     var instruction: String {
+        if persistentMode { return rememberedStatus }
         if !approved { return "Prepared preview. Pairing needs approval for one temporary USB/Wi-Fi check." }
         if !cleanupIssues.isEmpty {
             var checks = [String]()
@@ -151,14 +208,10 @@ final class PairingController: ObservableObject {
         }
         let activeGeneration = UUID(); generation = activeGeneration; buffer.removeAll(); requiresProcessExit = false
         if processFactory == nil {
-        process.executableURL = URL(fileURLWithPath: "/Users/mikedemott/Homelab/.venv/bin/python")
-        process.arguments = workerLaunchArguments
+        process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/python3.14")
+        process.arguments = persistentMode ? rememberedWorkerLaunchArguments : workerLaunchArguments
         process.currentDirectoryURL = root
-        var environment = ProcessInfo.processInfo.environment
-        environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        environment["PYTHONPATH"] = ["/Users/mikedemott/Homelab/src", root.appendingPathComponent("bridge/host-adapter").path,
-          root.appendingPathComponent("bridge/local-endpoint").path, root.appendingPathComponent(".tools/bridge-python").path].joined(separator: ":")
-        process.environment = environment
+        process.environment = workerLaunchEnvironment
         }
         process.standardInput = incoming; process.standardOutput = outgoing
         // Raw exceptions/IO are never reflected into the UI or a log file.
@@ -179,7 +232,7 @@ final class PairingController: ObservableObject {
                 if self.phase.busy { self.phase = .failed; self.code = nil; self.recovery = self.recovery ?? .workerExit }
                 self.cleanupPending = false; self.requiresProcessExit = false
                 self.refreshRestoration()
-                let done = self.shutdownDone; self.shutdownDone = nil; done?(true)
+                let done = self.shutdownDone; self.shutdownDone = nil; done?(!self.persistentMode || self.cleanupIssues.isEmpty)
             }
         }
         do { try process.run(); child = process; input = incoming.fileHandleForWriting; output = outgoing.fileHandleForReading }
@@ -194,11 +247,25 @@ final class PairingController: ObservableObject {
             guard let status = PairingStatus.decode(line) else { failProtocol(); return }
             if (requiresProcessExit && !status.phase.terminal && status.phase != .restoring) || (cleanupPending && !status.phase.terminal && status.phase != .restoring) { continue }
             phase = status.phase; code = status.code; remaining = status.remaining
+            if persistentMode {
+                if phase == .paired { rememberedStatus = status.activity == nil ? "Pairing stored. Select the StackChan audio devices in your Voice app, then choose Use StackChan." : "Audio listener ready. Press Listen on StackChan to enable microphone and speaker." }
+                if phase == .cancelled { rememberedStatus = "Use StackChan stopped. Audio is closed; wireless trust remains saved unless you chose Forget." }
+                if phase == .failed { rememberedStatus = "Operation failed. Keep StackChan muted and verify cleanup before retrying." }
+                if phase == .closed { rememberedStatus = "Listener closed. Remembered trust is still saved." }
+            }
             activity = status.activity; audioRemaining = status.audioRemaining
             if let cause = status.recovery, recovery == nil { recovery = cause }
             if phase == .restoring { cleanupPending = true }
             if !status.cleanupIssues.isEmpty { cleanupIssues = status.cleanupIssues }
+            if persistentMode && forgetAwaitingAcknowledgement && status.rememberedForgetVerified {
+                cleanupIssues.remove(.grant)
+                forgetAwaitingAcknowledgement = false
+                rememberedStatus = "Mac trust revocation is confirmed. Also choose Forget on StackChan."
+            }
             receivedUptime = ProcessInfo.processInfo.systemUptime
+            if persistentMode && requiresProcessExit && status.rememberedCleanupVerified {
+                cleanupIssues.remove(.audio);cleanupIssues.remove(.grant)
+            }
             if phase.terminal { confirmationSent = false; cleanupPending = !cleanupIssues.isEmpty }
         }
     }
@@ -207,8 +274,11 @@ final class PairingController: ObservableObject {
         shutdown { [weak self] closed in self?.cleanupPending = !closed }
     }
     private func send(_ command: String) {
+        send(["command": command])
+    }
+    private func send(_ payload: [String: Any]) {
         guard let input = input,
-              let data = try? JSONSerialization.data(withJSONObject: ["command": command]) else { return }
+              let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         do { try input.write(contentsOf: data + Data([10])) }
         catch { phase = .failed; code = nil; recovery = recovery ?? .connection; cleanupPending = true; requiresProcessExit = true
             try? self.input?.close(); self.input = nil
@@ -237,12 +307,15 @@ final class PairingController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self, weak process] in
             guard let self = self, self.generation == activeGeneration,
                   let process = process, self.child === process, process.isRunning else { return }
+            // A remembered worker retains exact owners and retries checked close.
+            // Never kill that custody process merely because cleanup is slow.
+            guard !self.persistentMode else { return }
             Darwin.kill(process.processIdentifier, SIGKILL)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self, weak process] in
             guard let self = self, self.generation == activeGeneration else { return }
             // Refuse app termination/retry until this exact child is known closed.
-            let closed = process == nil || process?.isRunning == false
+            let closed = (process == nil || process?.isRunning == false) && (!self.persistentMode || self.cleanupIssues.isEmpty)
             if closed { self.cleanupPending = false }
             let completion = self.shutdownDone; self.shutdownDone = nil; completion?(closed)
         }

@@ -314,14 +314,24 @@ def _serial_factory(port):
 
 def _runtime(args, native_route=None):
     _validated_audio_mode(args,native_route)
-    # Public certificate hash/date/IP checks precede any private key loading.
-    cert=ROOT/'.tools/local-companion-tls/server.pem';key=cert.with_name('server-key.pem')
+    # New trust is an explicit public-profile selection, independent of remembered
+    # device state. Finite approval consumption remains unchanged in _prepare.
+    persistent_trust=getattr(args,'persistent_trust',False)
+    if type(persistent_trust) is not bool:raise PairingError('unpinned_files')
+    trust_directory=ROOT/('.tools/persistent-companion' if persistent_trust else '.tools/local-companion-tls')
+    cert=trust_directory/'server.pem';key=cert.with_name('server-key.pem')
     cue=ROOT/'.tools/native-call-preparation/transport-speaker-cue.wav'
     if Path(args.cert).resolve()!=cert or Path(args.key).resolve()!=key or Path(args.cue).resolve()!=cue:raise PairingError('unpinned_files')
-    if not CERT_BEGIN<=time.time()<CERT_END-130:raise PairingError('certificate_expired')
-    if cert.stat().st_size>8192 or hashlib.sha256(cert.read_bytes()).hexdigest()!=CERT_HASH:raise PairingError('certificate_changed')
+    if persistent_trust:
+        from remembered_pairing_worker import load_trust_profile
+        try:context,profile,_=load_trust_profile()
+        except Exception:raise PairingError('certificate_changed') from None
+        if not time.time()<profile['remember_until_unix']-130:raise PairingError('certificate_expired')
+    else:
+        if not CERT_BEGIN<=time.time()<CERT_END-130:raise PairingError('certificate_expired')
+        if cert.stat().st_size>8192 or hashlib.sha256(cert.read_bytes()).hexdigest()!=CERT_HASH:raise PairingError('certificate_changed')
+        context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.minimum_version=ssl.TLSVersion.TLSv1_2;context.load_cert_chain(cert,key)
     if subprocess.check_output(['/usr/sbin/ipconfig','getifaddr','en1'],timeout=2,text=True).strip()!=HOST:raise PairingError('lan_unavailable')
-    context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.minimum_version=ssl.TLSVersion.TLSv1_2;context.load_cert_chain(cert,key)
     for path in (ROOT/'.tools/bridge-python',Path('/Users/mikedemott/Homelab/src'),Path(__file__).resolve().parents[1]/'native-audio',ROOT/'bridge/host-adapter',ROOT/'bridge/local-endpoint'):
         if str(path) not in sys.path:sys.path.insert(0,str(path))
     from home_lab.devices import DeviceRegistry
@@ -456,6 +466,7 @@ async def _run(args):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--approved-test',action='store_true')
+    parser.add_argument('--persistent-trust',action='store_true',help='Explicit one-year public trust profile; independent of remembered device state and finite audio approval.')
     parser.add_argument('--approved-audio',action='store_true',help='Separate audio approval; requires matching one-use audio authorization and --approved-test.')
     parser.add_argument('--audio-mode',choices=('transport_test','native_conversation'),default='transport_test',help='Must match the one-use authorization and displayed GUI disclosure; native never falls back to transport test.')
     parser.add_argument('--transport',choices=('usb','wifi'),default='usb',help='Independent pairing transport; Wi-Fi never constructs a serial port.')

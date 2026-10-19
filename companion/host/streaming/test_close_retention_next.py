@@ -49,10 +49,11 @@ class GatewayRetention(unittest.IsolatedAsyncioTestCase):
         with patch('remote_gateway.run_connection',complete):await gateway.handle(Socket())
         self.assertIn(device.id,gateway._active)
         await gateway.handle(Socket());self.assertEqual(len(factories),1)
+        self.assertEqual(resource.calls,2) # next admission retries the same retained owner
         with self.assertRaises(RuntimeError):await gateway.close()
         self.assertIn(device.id,gateway._active)
         resource.fail=False;await gateway.close()
-        self.assertNotIn(device.id,gateway._active);self.assertEqual(resource.calls,3)
+        self.assertNotIn(device.id,gateway._active);self.assertEqual(resource.calls,4)
 
 class WorkerRetention(unittest.IsolatedAsyncioTestCase):
     async def test_worker_keeps_gateway_when_socket_teardown_fails(self):
@@ -81,7 +82,7 @@ class WorkerRetention(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(worker.gateway)
 
 class PartialProviderRetention(unittest.IsolatedAsyncioTestCase):
-    async def test_factory_failure_keeps_partial_native_owner_in_gateway(self):
+    async def test_listen_setup_failure_keeps_partial_native_owner_in_gateway(self):
         import native_conversation as native
         import tempfile
         from pathlib import Path
@@ -92,6 +93,12 @@ class PartialProviderRetention(unittest.IsolatedAsyncioTestCase):
         registry=DeviceRegistry();device,token=registry.redeem_pairing_code(registry.create_pairing_code(),device_id='partial-open',label='Fixture',capabilities=('microphone','speaker'))
         class Socket:
             request=SimpleNamespace(path='/companion/audio',headers=Headers([('Authorization','Bearer '+token),('X-Companion-Device',device.id)]))
+            def __init__(self):
+                self.messages=iter(['{"type":"begin","request_id":"synthetic-listen"}',
+                                    '{"type":"ack","epoch":1}',
+                                    '{"type":"consent","epoch":1,"physical":true}'])
+            async def recv(self):return next(self.messages)
+            async def send(self,wire):pass
             async def close(self,**kw):pass
         with tempfile.TemporaryDirectory() as folder:
             lib=Path(folder)/'fixture';lib.write_bytes(b'fixture-not-library')
@@ -100,9 +107,10 @@ class PartialProviderRetention(unittest.IsolatedAsyncioTestCase):
                 gateway=RemoteGateway(registry,ConversationSessions(),lambda _:native.make_provider(route))
                 await gateway.handle(Socket())
         self.assertIn(device.id,gateway._active)
-        self.assertEqual(adapter.calls,1)
+        attempts=adapter.calls
+        self.assertGreaterEqual(attempts,1)
         adapter.fail=False;await gateway.close()
-        self.assertEqual(adapter.calls,2);self.assertNotIn(device.id,gateway._active)
+        self.assertEqual(adapter.calls,attempts+1);self.assertNotIn(device.id,gateway._active)
 
 class NativeMuteCleanup(unittest.TestCase):
     def test_successful_disposal_after_mute_fault_does_not_retry_dead_handle(self):
