@@ -10,8 +10,8 @@ final class PairingControllerRobotLink: RobotLinkOpening {
     private var epoch: UInt64 = 0
     private var report: ((UInt64, RobotLinkEvent) -> Void)?
     private var wasLinked = false, wasConsented = false, localStop = false
-    /// Set by the app to forward the worker's physical-consent fact to the lifecycle.
-    var onConsent: ((UInt64) -> Void)?
+    /// Set by the app to forward physical-consent grants and revocations to the lifecycle.
+    var onConsentChanged: ((UInt64, Bool) -> Void)?
 
     func bind(_ controller: PairingController) { self.controller = controller }
     /// Called before this Mac's own Stop/Cancel so the resulting end is attributed to the user.
@@ -39,7 +39,12 @@ final class PairingControllerRobotLink: RobotLinkOpening {
         guard let report = report else { return }
         let linked = RobotLinkProjection.linked(phase: phase, activity: activity)
         if linked && !wasLinked { wasLinked = true; report(epoch, .connected) }
-        if RobotLinkProjection.consented(phase: phase, activity: activity) && !wasConsented { wasConsented = true; onConsent?(epoch) }
+        if let consented = RobotLinkProjection.consentTransition(
+            phase: phase, activity: activity, previouslyConsented: wasConsented
+        ) {
+            wasConsented = consented
+            onConsentChanged?(epoch, consented)
+        }
         if !linked && (wasLinked || phase.terminal) {
             let reason = RobotLinkProjection.lossReason(phase: phase, recovery: recovery, localStop: localStop)
             wasLinked = false; wasConsented = false; self.report = nil; cancellable = nil

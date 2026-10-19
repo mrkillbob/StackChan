@@ -470,6 +470,13 @@ final class CompanionLifecycle: ObservableObject {
         guard e == epoch, robotLinked, presence.isLive else { return }
         physicalConsent = true
     }
+    /// The worker returned to its physical-consent state, so the previous grant ended.
+    /// Keep the link/call presence, but disarm until fresh physical consent and an explicit
+    /// unmute arrive.
+    func robotConsentRevoked(epoch e: UInt64) {
+        guard e == epoch, robotLinked, presence.isLive else { return }
+        disarm()
+    }
     /// The user's statement about their own call (Path A). Ignored unless the route is manual.
     func attestCall(running: Bool) {
         guard let manual = route as? ManualCallAttesting, presence.isLive else { return }

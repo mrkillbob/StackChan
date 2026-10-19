@@ -6,6 +6,13 @@ import Foundation
 enum RobotLinkProjection {
     static func linked(phase: PairingPhase, activity: PairingActivity?) -> Bool { phase == .paired && activity != nil }
     static func consented(phase: PairingPhase, activity: PairingActivity?) -> Bool { linked(phase: phase, activity: activity) && activity == .conversation }
+    /// Returns a consent change only when the worker's current activity differs from the
+    /// adapter's last observation. Physical-consent activity while still paired revokes an
+    /// earlier conversation grant.
+    static func consentTransition(phase: PairingPhase, activity: PairingActivity?, previouslyConsented: Bool) -> Bool? {
+        let current = consented(phase: phase, activity: activity)
+        return current == previouslyConsented ? nil : current
+    }
     /// Fixed-label attribution of a link that ended. `localStop` is true when this Mac's own
     /// Stop/Cancel control caused it; the worker does not say which side stopped.
     static func lossReason(phase: PairingPhase, recovery: PairingRecovery?, localStop: Bool) -> CloseReason {

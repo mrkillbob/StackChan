@@ -38,7 +38,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 delegate.controller = controller; delegate.lifecycle = lifecycle
                 WorkerAudioResources.shared.bind(controller)
                 Self.robotLink.bind(controller)
-                Self.robotLink.onConsent = { [weak lifecycle = lifecycle] epoch in lifecycle?.robotConsentReported(epoch: epoch) }
+                Self.robotLink.onConsentChanged = { [weak lifecycle = lifecycle] epoch, consented in
+                    guard let lifecycle = lifecycle else { return }
+                    if consented { lifecycle.robotConsentReported(epoch: epoch) }
+                    else { lifecycle.robotConsentRevoked(epoch: epoch) }
+                }
             }
         }.windowResizability(.contentSize)
     }

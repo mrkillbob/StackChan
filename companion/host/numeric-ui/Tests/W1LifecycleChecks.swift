@@ -70,7 +70,7 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
 
 @main struct W1LifecycleChecks {
     static func main() {
-        trustMapping(); sqliteReader(); presenceAndManualRoute(); closeReasons(); reconnect(); micStrip(); projection()
+        trustMapping(); sqliteReader(); presenceAndManualRoute(); closeReasons(); reconnect(); micStrip(); projection(); consentRevocation()
         print("PASS W1 lifecycle: registry-backed trust (state/counts only), robot-vs-call presence, close reasons, bounded muted-only reconnect, microphone strip, ManualMacCallRoute; inert fixtures only")
     }
 
@@ -403,5 +403,38 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
         check(RobotLinkProjection.lossReason(phase: .cancelled, recovery: nil, localStop: true) == .userClosed, "local stop -> user_closed")
         check(RobotLinkProjection.lossReason(phase: .cancelled, recovery: nil, localStop: false) == .robotClosed, "unexplained stop -> robot_closed")
         check(RobotLinkProjection.lossReason(phase: .expired, recovery: nil, localStop: false) == .sessionLimit, "expired -> session_limit")
+    }
+
+    // MARK: consent revocation while the robot listener remains paired
+    static func consentRevocation() {
+        let grant = RobotLinkProjection.consentTransition(
+            phase: .paired, activity: .conversation, previouslyConsented: false
+        )
+        check(grant == true, "conversation activity grants consent once")
+        let noDuplicateGrant = RobotLinkProjection.consentTransition(
+            phase: .paired, activity: .conversation, previouslyConsented: true
+        )
+        check(noDuplicateGrant == nil, "unchanged consent is not reported again")
+        let revoke = RobotLinkProjection.consentTransition(
+            phase: .paired, activity: .physicalConsent, previouslyConsented: true
+        )
+        check(revoke == false, "return to physical-consent activity revokes the old consent")
+
+        let r = armedRig()
+        r.life.bridgeActivityReported(epoch: r.life.epoch, captureFlowing: true, playbackSuppressing: false)
+        check(r.life.captureMayArm && r.life.captureFlowing, "precondition: consented capture is armed and flowing")
+        r.life.robotConsentRevoked(epoch: r.life.epoch)
+        check(r.life.robotLinked && r.life.presence == .callAsserted, "consent revocation leaves the paired call session present")
+        check(!r.life.physicalConsent && r.life.muted && !r.life.captureMayArm && !r.life.captureFlowing,
+              "revocation immediately disarms capture and requires explicit unmute")
+        r.life.setMuted(false)
+        check(r.life.muted, "unmute is refused until fresh physical consent")
+        r.life.robotConsentRevoked(epoch: r.life.epoch - 1)
+        check(r.life.muted && !r.life.physicalConsent, "stale-epoch revocation cannot change the current session")
+        r.life.robotConsentReported(epoch: r.life.epoch)
+        check(r.life.muted && r.life.physicalConsent && !r.life.captureMayArm,
+              "fresh consent alone does not clear the forced mute")
+        r.life.setMuted(false)
+        check(r.life.captureMayArm, "fresh consent plus explicit unmute can arm again")
     }
 }
