@@ -763,8 +763,8 @@ void drawCubenetic() {
     
     // DNA connections to nearby individuals
     for (int j = i + 1; j < 16; j++) {
-      int dx = abs(population[i][0] - population[j][0]);
-      int dy = abs(population[i][1] - population[j][1]);
+      int dx = std::abs(population[i][0] - population[j][0]);
+      int dy = std::abs(population[i][1] - population[j][1]);
       int distance = dx + dy;
       
       if (distance < 50) {
@@ -1399,7 +1399,7 @@ void drawDnalogo() {
       gfx->fillCircle(x2, screenY, 3, helixColor2);
       
       // Connect base pairs when strands are close
-      if (abs(x1 - x2) < helixRadius) {
+      if (std::abs(x1 - x2) < helixRadius) {
         gfx->drawLine(x1, screenY, x2, screenY, 
                       gfx->color565(200, 200, 100));
         
@@ -2274,14 +2274,14 @@ void drawEuler2d() {
       float pressure = sin(x * 0.05 + fluidTime * 2) * cos(y * 0.05 + fluidTime);
       
       // Color based on fluid properties
-      int r = (int)(abs(vx) * 255);
-      int g = (int)(abs(vy) * 255);
+      int r = (int)(std::abs(vx) * 255);
+      int g = (int)(std::abs(vy) * 255);
       int b = (int)((pressure + 1) * 127);
       
       gfx->fillRect(x, y, 6, 6, gfx->color565(r, g, b));
       
       // Velocity vectors
-      if (abs(vx) > 0.3 || abs(vy) > 0.3) {
+      if (std::abs(vx) > 0.3 || std::abs(vy) > 0.3) {
         int endX = x + vx * 10;
         int endY = y + vy * 10;
         gfx->drawLine(x + 3, y + 3, endX, endY, WHITE);
@@ -2419,8 +2419,8 @@ void drawEsper() {
     
     for (int x = 0; x < gfx->width(); x += 4) {
       float waveValue = sin(x * 0.05 + wavePhase) * sin(wavePhase + wave);
-      if (abs(waveValue) > 0.5) {
-        int alpha = abs(waveValue) * 255;
+      if (std::abs(waveValue) > 0.5) {
+        int alpha = std::abs(waveValue) * 255;
         gfx->fillRect(x, waveY - 1, 2, 3, gfx->color565(alpha, alpha/3, alpha));
       }
     }
@@ -2674,7 +2674,7 @@ void drawExtrusionHelix2() {
       
       // Color based on depth and helix
       int r = helix == 0 ? 255 : 100;
-      int g = 100 + abs(z) * 3;
+      int g = 100 + std::abs(z) * 3;
       int b = helix == 1 ? 255 : 100;
       
       // Size based on depth
@@ -2815,7 +2815,7 @@ void drawExtrusionHelix4() {
           int otherX = centerX + cos(otherAngle) * otherRadius;
           
           // Only draw connection if helixes are close
-          if (abs(otherX - x) < 15) {
+          if (std::abs(otherX - x) < 15) {
             gfx->drawLine(x, y, otherX, y, gfx->color565(60, 60, 60));
           }
         }
@@ -3102,7 +3102,7 @@ void drawExtrusionTwistoid() {
         int prevScreenX = centerX + prevX * 0.8;
         int prevScreenY = centerY + prevY * 0.6 + prevZ * 0.3;
         
-        if (abs(screenX - prevScreenX) < 20 && abs(screenY - prevScreenY) < 20) {
+        if (std::abs(screenX - prevScreenX) < 20 && std::abs(screenY - prevScreenY) < 20) {
           gfx->drawLine(screenX, screenY, prevScreenX, prevScreenY, gfx->color565(r/4, g/4, b/4));
         }
       }
@@ -3823,7 +3823,7 @@ void drawFlipscreen3d() {
     // Only draw if screen is facing forward
     if (cosAngle > 0) {
       // Screen dimensions affected by rotation
-      int screenWidth = abs(cosAngle * 120);
+      int screenWidth = std::abs(cosAngle * 120);
       int screenHeight = 80;
       
       // Screen position
@@ -3898,8 +3898,8 @@ void drawFlipscreen3d() {
   // Motion blur effect
   for (int blur = 0; blur < 3; blur++) {
     float blurAngle = flipAngle + blur * 0.2;
-    if (abs(sin(blurAngle)) > 0.8) {
-      int blurWidth = abs(cos(blurAngle) * 40);
+    if (std::abs(sin(blurAngle)) > 0.8) {
+      int blurWidth = std::abs(cos(blurAngle) * 40);
       gfx->drawRect(centerX - blurWidth/2, centerY - 30, blurWidth, 60, 
                    gfx->color565(50, 50, 50));
     }
@@ -3951,7 +3951,7 @@ void drawFliptext() {
     if ((phase == 0 && flipProgress < 0.5) || (phase == 1 && flipProgress >= 0.5)) {
       
       // Calculate text flip transformation
-      float scaleY = abs(cos(textPhase * PI));
+      float scaleY = std::abs(cos(textPhase * PI));
       float skew = sin(textPhase * PI) * 0.3;
       
       // Text color changes during flip
@@ -3973,13 +3973,13 @@ void drawFliptext() {
         float charFlip = textPhase - charDelay;
         
         if (charFlip > 0) {
-          float charScale = abs(cos(charFlip * PI * 2));
+          float charScale = std::abs(cos(charFlip * PI * 2));
           int adjustedY = charY + (1.0 - charScale) * 10;
           
           // Character flip colors
           int r = intensity;
-          int g = intensity - abs(sin(charFlip * PI)) * 100;
-          int b = intensity + abs(sin(charFlip * PI)) * 50;
+          int g = intensity - std::abs(sin(charFlip * PI)) * 100;
+          int b = intensity + std::abs(sin(charFlip * PI)) * 50;
           
           gfx->setTextColor(gfx->color565(r, g, b));
           gfx->setTextSize(2);
@@ -6040,7 +6040,7 @@ void drawGlmatrix() {
     
     for (int row = 0; row < 20; row++) {
       // Calculate intensity based on distance from drop
-      int distance = abs(row - dropPos);
+      int distance = std::abs(row - dropPos);
       float intensity = 0;
       
       if (distance < 8) {
@@ -7054,7 +7054,7 @@ void drawHopalong() {
   b = 0.4 + cos(paramTime * 1.3) * 0.2;
   
   for (int i = 0; i < 500; i++) {
-    float newX = y - (x < 0 ? -1 : 1) * sqrt(abs(b * x - c));
+    float newX = y - (x < 0 ? -1 : 1) * sqrt(std::abs(b * x - c));
     float newY = a - x;
     
     x = newX;
@@ -7878,7 +7878,7 @@ void drawJuggle() {
     // Parabolic trajectory
     float t = fmod(ballTime, PI);
     float ballX = jugX + sin(ballTime * 2) * 40;
-    float ballY = jugY - 40 - abs(sin(t) * 50);
+    float ballY = jugY - 40 - std::abs(sin(t) * 50);
     
     uint16_t ballColor = (ball == 0) ? RED : (ball == 1) ? GREEN : BLUE;
     gfx->fillCircle(ballX, ballY, 3, ballColor);
@@ -7888,7 +7888,7 @@ void drawJuggle() {
       float prevT = t - i * 0.1;
       if (prevT > 0) {
         float prevX = jugX + sin((ballTime - i * 0.1) * 2) * 40;
-        float prevY = jugY - 40 - abs(sin(prevT) * 50);
+        float prevY = jugY - 40 - std::abs(sin(prevT) * 50);
         gfx->drawPixel(prevX, prevY, gfx->color565(
           (ballColor >> 11) << 3,
           ((ballColor >> 5) & 0x3F) << 2,
@@ -8418,7 +8418,7 @@ void drawSonar() {
     int objY = centerY + sin(objAngle) * objDistance;
     
     // Pulse when sweep passes over
-    float angleDiff = abs(sweepAngle - objAngle);
+    float angleDiff = std::abs(sweepAngle - objAngle);
     if (angleDiff > PI) angleDiff = 2*PI - angleDiff;
     
     if (angleDiff < 0.3) {
@@ -8652,7 +8652,7 @@ void drawSpheremonics() {
         gfx->drawPixel(sx, sy, color);
         
         // Add some thickness
-        if (abs(harmonic) > 0.3) {
+        if (std::abs(harmonic) > 0.3) {
           gfx->drawPixel(sx + 1, sy, color);
           gfx->drawPixel(sx, sy + 1, color);
         }
@@ -8804,7 +8804,7 @@ void drawSproingies() {
     float bouncePhase = sproingTime * 2 + sproing * PI / 2.5;
     
     int baseX = 30 + sproing * 50;
-    int bounceHeight = abs(sin(bouncePhase)) * 80;
+    int bounceHeight = std::abs(sin(bouncePhase)) * 80;
     int sproingY = gfx->height() - 30 - bounceHeight;
     
     // Spring body
@@ -8814,7 +8814,7 @@ void drawSproingies() {
       int segY = sproingY + segmentRatio * bounceHeight * 0.3;
       
       // Compression effect - spring gets squished when bouncing
-      float compression = (1.0 - abs(sin(bouncePhase))) * 0.5 + 0.5;
+      float compression = (1.0 - std::abs(sin(bouncePhase))) * 0.5 + 0.5;
       int segX = baseX + sin(segmentRatio * PI * 4 + sproingTime) * 8 * compression;
       
       uint16_t springColor = gfx->color565(100, 200, 100);
@@ -9202,10 +9202,10 @@ void drawPong() {
   
   // Ball collision with paddles
   if (ballX <= 15 && ballY >= paddle1Y && ballY <= paddle1Y + 40) {
-    ballVX = abs(ballVX);
+    ballVX = std::abs(ballVX);
   }
   if (ballX >= gfx->width() - 15 && ballY >= paddle2Y && ballY <= paddle2Y + 40) {
-    ballVX = -abs(ballVX);
+    ballVX = -std::abs(ballVX);
   }
   
   // Reset ball if out of bounds
@@ -9379,7 +9379,7 @@ void drawMarching() {
       if (field > 0) {
         gfx->fillRect(x, y, 16, 16, gfx->color565(255, (int)(field * 255), 0));
       } else {
-        gfx->drawRect(x, y, 16, 16, gfx->color565(0, 0, abs((int)(field * 255))));
+        gfx->drawRect(x, y, 16, 16, gfx->color565(0, 0, std::abs((int)(field * 255))));
       }
     }
   }
@@ -9894,7 +9894,7 @@ void drawNormals() {
       int ex = px + nx * 15;
       int ey = py + ny * 15;
       
-      uint16_t color = gfx->color565((nz + 1) * 127, abs(nx) * 255, abs(ny) * 255);
+      uint16_t color = gfx->color565((nz + 1) * 127, std::abs(nx) * 255, std::abs(ny) * 255);
       gfx->drawLine(px, py, ex, ey, color);
     }
   }
@@ -10056,7 +10056,7 @@ void drawPacman() {
   gfx->fillCircle(pacmanX, pacmanY, 15, YELLOW);
   
   // Mouth animation
-  float mouthOpen = abs(sin(mouthAngle)) * 10 + 5;
+  float mouthOpen = std::abs(sin(mouthAngle)) * 10 + 5;
   int mouthX1 = pacmanX + cos(PI/6) * mouthOpen;
   int mouthY1 = pacmanY - sin(PI/6) * mouthOpen;
   int mouthX2 = pacmanX + cos(-PI/6) * mouthOpen;
@@ -10431,7 +10431,7 @@ void drawPyro() {
   for (int i = 0; i < 15; i++) {
     int x = (sin(animationTime + i) * 100) + gfx->width() / 2;
     int y = (cos(animationTime * 1.5 + i) * 80) + gfx->height() / 2;
-    int size = abs(sin(animationTime * 2 + i)) * 15;
+    int size = std::abs(sin(animationTime * 2 + i)) * 15;
     gfx->fillCircle(x, y, size, gfx->color565(255, 200 - i * 10, 0));
   }
   gfx->setCursor(10, 10);
@@ -11317,8 +11317,8 @@ void drawSuperquadrics() {
         return (val >= 0) ? pow(val, exp) : -pow(-val, exp);
       };
       
-      float x = signPow(abs(cosU), 2.0/n1) * ((cosU >= 0) ? 1 : -1);
-      float y = signPow(abs(sinU), 2.0/n2) * ((sinU >= 0) ? 1 : -1);
+      float x = signPow(std::abs(cosU), 2.0/n1) * ((cosU >= 0) ? 1 : -1);
+      float y = signPow(std::abs(sinU), 2.0/n2) * ((sinU >= 0) ? 1 : -1);
       
       // 3D rotation projection
       float rotX = shapeTime * 0.5;
@@ -13617,9 +13617,9 @@ void drawBlitspin() {
     int endY = centerY + sin(lineAngle) * endRadius;
     
     uint16_t lineColor = gfx->color565(
-      255 * abs(sin(spinTime + line)),
-      255 * abs(cos(spinTime + line * 1.3)),
-      255 * abs(sin(spinTime * 1.7 + line))
+      255 * std::abs(sin(spinTime + line)),
+      255 * std::abs(cos(spinTime + line * 1.3)),
+      255 * std::abs(sin(spinTime * 1.7 + line))
     );
     
     gfx->drawLine(startX, startY, endX, endY, lineColor);
@@ -13828,9 +13828,9 @@ uint16_t Count(){return sizeof(draws)/sizeof(draws[0]);}
 const char* Name(uint16_t i){return i<Count()?names[i]:"Unknown";}
 bool Usable(uint16_t i){return i<Count()&&view::saver::Allowed(unsigned(i)+1)&&draws[i]&&resets[i];}
 void Reset(uint16_t i){if(Usable(i)){resetRandom(0x71352u+i);resets[i]();pendingClear=true;}}
-bool Render(uint16_t i,uint32_t ms,uint16_t* p,uint16_t w,uint16_t h){
+bool Render(uint16_t i,uint32_t ms,uint16_t* p,uint16_t w,uint16_t h,uint64_t (*clock)(),uint32_t work_budget){
  if(!Usable(i)||!p||w!=320||h!=240)return false;
- raster.bind(p,w,h); if(pendingClear){raster.fillScreen(BLACK);pendingClear=false;} animationTime=(ms%3600000)/1000.0f;
- draws[i](); raster.unbind();return true;
+ raster.bind(p,w,h); raster.beginFrame(work_budget,clock); if(pendingClear){raster.fillScreen(BLACK);pendingClear=false;} animationTime=(ms%3600000)/1000.0f;
+ draws[i](); const bool complete=!raster.exhausted(); raster.unbind();return complete;
 }
 }

@@ -30,6 +30,8 @@ void AppLauncher::onLauncherOpen()
     mclog::tagInfo(getAppInfo().name, "on open");
 
     LvglLockGuard lock;
+    // Returning from an app means Home, independent of its former category.
+    _category.reset();
 
     if (
 #ifndef STACKCHAN_COMPANION_BOOT
@@ -99,6 +101,8 @@ void AppLauncher::create_launcher_view()
             }
         }
     }
+    // Retire callbacks/helpers before replacing their shared runtime.
+    _view.reset();
     _view = std::make_unique<view::LauncherView>();
     _view->init(std::move(shown));
     _view->onAppClicked = [&](int appID) {_pending_navigation=appID;};

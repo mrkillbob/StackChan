@@ -19,6 +19,7 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_ili9341.h>
 #include <esp_timer.h>
+#include <apps/runtime_lifecycle/session.h>
 #include <algorithm>
 #include "stackchan_camera.h"
 #include <companion/audio_owner.hpp>
@@ -390,14 +391,25 @@ private:
 
         power_save_timer_ = new PowerSaveTimer(-1, seconds_to_sleep, seconds_to_shutdown);
         power_save_timer_->OnEnterSleepMode([this]() {
+#ifdef STACKCHAN_COMPANION_BOOT
+            if(companion::CurrentAudioOwner()!=companion::AudioOwner::Stock||runtime_lifecycle::HomeRequested())return;
+#endif
             GetDisplay()->SetPowerSaveMode(true);
             // GetBacklight()->SetBrightness(10);
         });
         power_save_timer_->OnExitSleepMode([this]() {
+#ifdef STACKCHAN_COMPANION_BOOT
+            if(companion::CurrentAudioOwner()!=companion::AudioOwner::Stock||runtime_lifecycle::HomeRequested())return;
+#endif
             GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness();
         });
-        power_save_timer_->OnShutdownRequest([this]() { pmic_->PowerOff(); });
+        power_save_timer_->OnShutdownRequest([this]() {
+#ifdef STACKCHAN_COMPANION_BOOT
+            if(companion::CurrentAudioOwner()!=companion::AudioOwner::Stock||runtime_lifecycle::HomeRequested())return;
+#endif
+            pmic_->PowerOff();
+        });
         UpdatePowerSaveEnabled(pmic_->IsExternalPowerConnected(), pmic_->IsDischarging());
     }
 
@@ -484,7 +496,7 @@ private:
                     if(companion::CurrentAudioOwner()==companion::AudioOwner::Stock) {
                         if(!board->power_save_timer_)board->InitializePowerSaveTimer();
                         board->PollPowerSaveState();
-                    }
+                    }else if(board->power_save_timer_){board->power_save_timer_->SetEnabled(false);board->last_power_save_enabled_=false;}
 #else
                     board->PollPowerSaveState();
 #endif

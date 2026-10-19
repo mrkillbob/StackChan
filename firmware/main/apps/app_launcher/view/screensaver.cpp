@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 #include <cstring>
 
 using namespace view;
@@ -129,7 +130,7 @@ void Screensaver::onRender(float dt)
         // Clamp stalled frame delta; only visual time is advanced.
         if (dt > 0 && dt < 1) _animation_ms += uint32_t(dt * 1000);
         const uint16_t index=uint16_t(static_cast<unsigned>(_style)-1);
-        if(!effect_catalog::Render(index,_animation_ms,_effect_pixels,320,240)) {
+        if(!effect_catalog::Render(index,_animation_ms,_effect_pixels,320,240,[]{return uint64_t(esp_timer_get_time());})) {
             showEffectError(); return;
         }
         lv_obj_invalidate(_effect_canvas);

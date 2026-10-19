@@ -305,6 +305,9 @@ public:
     void getMicWaveformFrame(std::vector<int16_t>& data);
     void clearupMicTest();
 
+    void forgetNativeNetwork();
+    bool stopBleServer();
+    bool stopEspNow();
     bool prepareStockFeatureHardware(bool motion, bool camera);
 
 private:

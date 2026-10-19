@@ -14,5 +14,5 @@ std::optional<Feature> ConsumeRequest();
 // An intentional driver reset restores only a preview, never an active service.
 std::optional<Feature> ConsumePreviewRequest();
 // Caller must first uninstall/destroy Mooncake and close Companion resources.
-[[noreturn]] void RunFeature(Feature feature);
+void RunFeature(Feature feature);
 }

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Intentional feature-entry adapter for the pinned official Stock AI.AGENT lifecycle.
 #include "stock_agent.h"
+#include <apps/runtime_lifecycle/session.h>
+#include <apps/runtime_lifecycle/cleanup.h>
+#include <esp_timer.h>
+#include <apps/stock_shell/navigation.h>
 #include "session_controls.hpp"
 #include <apps/network_setup/persistence_gate.h>
 #include <wifi_manager.h>
@@ -21,20 +25,16 @@
 
 namespace stock_agent {
 namespace {
-std::atomic<bool> start_requested{false};
+std::atomic<bool> start_requested{false},slow_stop{false};
+companion::AudioLease runtime_audio_lease;
+CleanSessionControls controls;
 std::atomic<bool> start_authorized{false};
 RTC_NOINIT_ATTR uint32_t preview_cookie;
 constexpr uint32_t preview_magic = 0x53544F50; // STOP: preview, never resume
 
-[[noreturn]] void ReturnHome() {
-    GetHAL().setServoPowerEnabled(false);
-    GetHAL().setLaserEnabled(false);
-    GetHAL().showRgbColor(0,0,0);
-    preview_cookie = 0;
-    // The official service has no joined teardown. Hardware reset ends all tasks,
-    // radio activity and codec use before the stopped selector is presented.
-    esp_restart();
-    while (true) GetHAL().delay(1000);
+void ReturnHome() {
+    runtime_lifecycle::RequestHome();
+    companion::RevokeAudio(runtime_audio_lease); // stop authorizing capture immediately
 }
 
 lv_obj_t* Label(lv_obj_t* parent, const char* value, int x, int y, int width) {
@@ -46,6 +46,7 @@ lv_obj_t* Label(lv_obj_t* parent, const char* value, int x, int y, int width) {
 }
 
 class StockAgentApp : public mooncake::AppAbility {
+    bool waiting_network_=false;
     lv_obj_t* panel_ = nullptr;
     lv_obj_t* notice_ = nullptr;
     std::atomic<int> action_{0};
@@ -68,9 +69,10 @@ public:
     StockAgentApp() {
         AppAiAgent stock;
         setAppInfo() = stock.getAppInfo();
+        setAppInfo().name = "Stackchan";
     }
     void onOpen() override {
-        action_ = 2; // The intentional AI.AGENT tile is the activation action.
+        waiting_network_=false;action_ = GetHAL().isAppConfiged() ? 2 : 0; // Tile opens directly after setup.
         LvglLockGuard lock;
         panel_ = lv_obj_create(lv_screen_active());
         lv_obj_set_size(panel_, 320, 240);
@@ -80,30 +82,36 @@ public:
         lv_obj_set_style_bg_color(panel_, lv_color_hex(0x10232d), 0);
         lv_obj_set_style_text_color(panel_, lv_color_hex(0xffffff), 0);
         lv_obj_set_style_text_font(panel_, &lv_font_montserrat_16, 0);
-        Label(panel_, "Opening stock AI.AGENT", 10, 10, 300);
-        Label(panel_, "AI.AGENT uses cloud AI, microphone/wake word, camera and motors.\nStop / Home restarts launcher.", 10, 43, 300);
-        notice_ = Label(panel_, (companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized())
-            ? "Wi-Fi was used. Restart this\nfeature transfer."
+        Label(panel_, "Stackchan", 10, 10, 300);
+        Label(panel_, "Uses cloud AI, microphone/wake word, camera and motors.\nStop / Home stops and returns Home.", 10, 43, 300);
+        notice_ = Label(panel_, !GetHAL().isAppConfiged() ? "Setup required: Settings > Setup & login.\nComplete Wi-Fi and account setup there." : (companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized())
+            ? "Network availability is checked before opening."
             : "Wi-Fi setup: phone browser.\nStock vendor activation.\nWi-Fi changes are saved after connection.",
             10, 128, 300);
         Button("Back", 10, 192, 90, 1);
-        Button((companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized()) ? "Retry transfer" : "Retry", 112, 192, 198, 2);
+        if(!GetHAL().isAppConfiged()){Button("Settings",112,192,198,3);return;}
+        Button("Retry",112,192,96,2);
+        Button("Settings",214,192,96,3);
     }
     void onRunning() override {
         auto action = action_.exchange(0);
-        if (action == 1) close();
+        if(!action&&waiting_network_)action=2;
+        if (action == 1) {waiting_network_=false;close();return;}
+        if (action == 3) {waiting_network_=false;stock_shell::RequestSettings();close();return;}
         if (action != 2) return;
+        if (!GetHAL().isAppConfiged()) return;
         if (companion::CurrentAudioOwner() != companion::AudioOwner::None) {
             LvglLockGuard lock;
-            lv_label_set_text(notice_, "Audio is still stopping.\nReopen AI.AGENT when stopped.");
+            lv_label_set_text(notice_, "Audio is still stopping.\nReopen Stackchan when stopped.");
             return;
         }
-        if ((companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized())) {
-            preview_cookie = preview_magic;
-            esp_restart(); // no start request survives reset
+        if (!runtime_lifecycle::PrepareVendorNetwork()) {
+            waiting_network_=true;
+            LvglLockGuard lock;
+            lv_label_set_text(notice_,"Stopping previous Wi-Fi.\nWaiting for confirmed cleanup.\nBack cancels opening Stackchan.");
             return;
         }
-        start_requested = true;
+        waiting_network_=false;start_requested = true;
     }
     void onClose() override {
         action_ = 0;
@@ -115,6 +123,7 @@ public:
 };
 
 const char* SessionText() {
+    if(runtime_lifecycle::HomeRequested())return slow_stop.load()?"Stop pending; ownership retained":"Stopping Stackchan";
     // The original HAL background task owns avatar/motion/reminder updates.
     auto state = Application::GetInstance().GetDeviceState();
     const char* text = "Stock AI - starting";
@@ -133,9 +142,8 @@ const char* SessionText() {
 }
 void SessionControls() {
     LvglLockGuard lock;
-    static CleanSessionControls controls;
     // A compact reveal affordance leaves the native face unobstructed. State and
-    // Stop/Home appear only when requested; the original reset path is retained.
+    // Stop/Home requests cancellation; its owner joins outside LVGL.
     controls.Create(ReturnHome, SessionText);
 }
 }
@@ -158,22 +166,32 @@ bool AutoStartRequested() {
 void AuthorizeAutoStart() {
     if (AutoStartRequested()) start_authorized = true;
 }
-static companion::AudioLease runtime_audio_lease;
-[[noreturn]] void RunStockAgent() {
-    if (!start_authorized.exchange(false) || (companion::NetworkWasStarted() || network_setup::NetworkWasStarted() || WifiManager::GetInstance().IsInitialized()) ||
-        !companion::AcquireAudio(companion::AudioOwner::Stock,companion::AudioPurpose::StockRuntime,1,runtime_audio_lease)) ReturnHome();
+void RunStockAgent() {
+    if(!start_authorized.exchange(false)||!runtime_lifecycle::VendorNetworkAvailable())return;
+    if(!companion::AcquireAudio(companion::AudioOwner::Stock,companion::AudioPurpose::StockRuntime,1,runtime_audio_lease))return;
+    if(!runtime_lifecycle::Begin()){companion::ReleaseAudio(runtime_audio_lease,true);return;}
+    runtime_lifecycle::ResetCleanupJob();slow_stop=false;
     companion::SetSettingsScope(companion::SettingsScope::StockRuntime);
-    Board::GetInstance().GetUuid();
-    hal_bridge::set_xiaozhi_mode(true);
-    SessionControls(); // present before audio/network/provisioning activation
-    // Pass captured custody before any Application audio initialization.
-    if (!Application::GetInstance().GetAudioService().BindAudioLease(runtime_audio_lease)) {
-        companion::RevokeAudio(runtime_audio_lease);
-        ReturnHome();
+    Board::GetInstance().GetUuid();hal_bridge::set_xiaozhi_mode(true);SessionControls();
+    if(!Application::GetInstance().GetAudioService().BindAudioLease(runtime_audio_lease))ReturnHome();
+    else {
+        runtime_lifecycle::ApplicationStarted();
+        if(xTaskCreate([](void*){
+            GetHAL().startXiaozhi();
+            runtime_lifecycle::ApplicationExited();vTaskDelete(nullptr);
+        },"stock_session",8192,nullptr,5,nullptr)!=pdPASS){runtime_lifecycle::ApplicationExited();ReturnHome();}
     }
-    // Root's HAL prepares motion/camera, MCP and the power policy before the
-    // official reminder/update task and Application lifecycle begin.
-    GetHAL().startXiaozhi();
-    ReturnHome();
+    while(true){
+        GetHAL().feedTheDog();
+        auto& session=runtime_lifecycle::Session();
+        if(session.Poll(uint64_t(esp_timer_get_time()/1000),[]{companion::RevokeAudio(runtime_audio_lease);runtime_lifecycle::QuietHardware();},
+            []{return runtime_lifecycle::ApplicationJoined()&&runtime_lifecycle::UpdateJoined()&&runtime_lifecycle::PollSourcesStopped(nullptr);},
+            []{runtime_lifecycle::QuietHardware();return Application::GetInstance().GetAudioService().Stop(10);},
+            []{return companion::ReleaseAudio(runtime_audio_lease,true);} ))break;
+        slow_stop=session.Pending(uint64_t(esp_timer_get_time()/1000));
+        GetHAL().delay(20);
+    }
+    {LvglLockGuard lock;controls.Destroy();}
+    runtime_lifecycle::ResetSessionUi();companion::SetSettingsScope(companion::SettingsScope::None);
 }
 }

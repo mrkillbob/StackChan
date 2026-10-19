@@ -7,6 +7,7 @@
 #include <companion/settings_policy.hpp>
 #endif
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -16,6 +17,7 @@ class ScreensaverWorker final:public WorkerBase {
     view::saver::Selection selection_;
     lv_obj_t *screen_=nullptr,*root_=nullptr,*title_=nullptr,*canvas_=nullptr,*toggle_=nullptr,*order_=nullptr,*count_=nullptr;
     uint16_t *pixels_=nullptr,*thumbnail_=nullptr;
+    bool preview_failed_=false;
     unsigned id_=0;uint32_t started_=0,last_=0;int action_=0;
     struct Callback {ScreensaverWorker* self;int action;};
     std::array<Callback,7> callbacks_{};unsigned callback_count_=0;
@@ -31,10 +33,11 @@ class ScreensaverWorker final:public WorkerBase {
         lv_label_set_text_fmt(title_,"%u / %u  %s",view::saver::AllowedOrdinal(id_),view::saver::AllowedCount,view::saver::Name(style));
         lv_label_set_text(toggle_,selection_.selected(id_)?"Deselect":"Select");
         lv_label_set_text(order_,selection_.order==view::saver::Order::Random?"Random":"Sequential");
-        if(selection_.count())lv_label_set_text_fmt(count_,"%u selected",selection_.count());
+        if(preview_failed_)lv_label_set_text(count_,"Slow: use < / >");
+        else if(selection_.count())lv_label_set_text_fmt(count_,"%u selected",selection_.count());
         else lv_label_set_text(count_,"Empty: Save uses DVD");
     }
-    void restart(){started_=GetHAL().millis();if(id_)effect_catalog::Reset(uint16_t(id_-1));labels();}
+    void restart(){preview_failed_=false;if(canvas_)lv_obj_remove_flag(canvas_,LV_OBJ_FLAG_HIDDEN);started_=GetHAL().millis();if(id_)effect_catalog::Reset(uint16_t(id_-1));labels();}
     bool save(){
         selection_.normalize();
         // A single bounded versioned key stores both set and order. Checked
@@ -53,8 +56,8 @@ class ScreensaverWorker final:public WorkerBase {
         return error==ESP_OK&&length==encoded.size()+1&&encoded==check.data();
     }
     void preview(uint32_t elapsed){
-        if(!pixels_||!thumbnail_||!canvas_)return;
-        if(id_){if(!effect_catalog::Render(uint16_t(id_-1),elapsed,pixels_,320,240)){lv_label_set_text(count_,"Preview unavailable");return;}}
+        if(preview_failed_||!pixels_||!thumbnail_||!canvas_)return;
+        if(id_){if(!effect_catalog::Render(uint16_t(id_-1),elapsed,pixels_,320,240,[]{return uint64_t(esp_timer_get_time());})){preview_failed_=true;lv_obj_add_flag(canvas_,LV_OBJ_FLAG_HIDDEN);lv_label_set_text(count_,"Slow: use < / >");return;}}
         else {
             // Local preview of the stock DVD slide, without loading a screen.
             std::fill_n(pixels_,320*240,uint16_t(0));

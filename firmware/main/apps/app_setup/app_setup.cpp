@@ -1,3 +1,4 @@
+#include <apps/runtime_lifecycle/session.h>
 /*
  * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
  *
@@ -25,7 +26,7 @@ using namespace setup_workers;
 AppSetup::AppSetup()
 {
     // 配置 App 名
-    setAppInfo().name = "SETUP";
+    setAppInfo().name = "Settings";
     // 配置 App 图标
     static auto icon  = assets::get_image("icon_setup.bin");
     setAppInfo().icon = (void*)&icon;
@@ -87,7 +88,7 @@ void AppSetup::onOpen()
               }}},
         },
         {
-            "AI.Agent",
+            "Stackchan",
             {{"General",
               [&]() {
                   _destroy_menu    = true;
@@ -212,6 +213,15 @@ void AppSetup::onOpen()
         }
     }
 #endif
+#ifdef STACKCHAN_COMPANION_BOOT
+    _menu_sections.push_back({"Setup & login", {{"Welcome setup", [this]() {
+        _destroy_menu = true;
+        _need_warm_reset = false;
+        _worker.reset();
+        companion::SetSettingsScope(companion::SettingsScope::None);
+        _worker = stock_services::MakeWorker(stock_services::Feature::Onboarding);
+    }}}});
+#endif
     LvglLockGuard lock;
 
     _menu_page = std::make_unique<view::SelectMenuPage>(_menu_sections);
@@ -260,6 +270,9 @@ void AppSetup::onRunning()
 
 void AppSetup::onClose()
 {
+#ifdef STACKCHAN_COMPANION_BOOT
+    if(runtime_lifecycle::DeferNativeClose())return;
+#endif
     mclog::tagInfo(getAppInfo().name, "on close");
 
     LvglLockGuard lock;
