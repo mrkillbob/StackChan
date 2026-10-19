@@ -57,3 +57,9 @@ target_compile_features(screensaver_management_test PRIVATE cxx_std_17)
 add_test(NAME screensaver_management_test COMMAND screensaver_management_test)
 add_test(NAME screensaver_management_ui_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/screensaver_management_ui_test.py)
+
+add_test(NAME nested_usb_close_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/nested_usb_close_test.py)
+
+add_test(NAME usb_actor_close_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/usb_actor_close_test.py)

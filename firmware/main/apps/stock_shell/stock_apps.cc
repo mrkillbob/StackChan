@@ -763,11 +763,14 @@ public:
 };
 void DestroyShellForTransfer(mooncake::Mooncake& shell)
 {
-    TearDownShell<LvglLockGuard>(shell,[]{
+    while(!TearDownShell<LvglLockGuard>(shell,[]{
         view::destroy_home_indicator();
         view::destroy_status_bar();
         view::reset_toast_runtime();
-    },[]{mooncake::DestroyMooncake();});
+    },[]{mooncake::DestroyMooncake();})){
+        // TearDownShell released the UI lock; actor/codec owners can make progress.
+        GetHAL().feedTheDog();GetHAL().delay(20);
+    }
 }
 [[noreturn]] void Run()
 {

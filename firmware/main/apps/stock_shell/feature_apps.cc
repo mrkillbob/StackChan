@@ -57,7 +57,7 @@ class JointApp final:public mooncake::AppAbility {
  std::mutex action_mutex_;std::optional<companion::FeatureUiAction> action_;
  lv_obj_t *frame_=nullptr,*native_root_=nullptr,*root_=nullptr,*native_controls_=nullptr,*native_actions_=nullptr,*status_=nullptr,*picker_=nullptr;
  lv_obj_t* pending_panel_=nullptr;lv_obj_t* pending_text_=nullptr;
- std::unique_ptr<mooncake::AppAbility> usb_view_;
+ std::unique_ptr<direct_usb_pcm::Page> usb_view_;
  std::atomic<bool> usb_pending_{false},usb_active_{false};bool usb_return_=false;
  bool controls_visible_=false,closing_=false,ready_ui_=false;unsigned group_=0;uint32_t rendered_epoch_=UINT32_MAX;
  std::string shown_code_,shown_request_,shown_session_,shown_mira_,rendered_text_,formatted_raw_,formatted_text_,local_notice_,scenes_result_;
@@ -111,8 +111,15 @@ class JointApp final:public mooncake::AppAbility {
  void ReadScenes(){auto& raw=State().link.Result();if(raw==scenes_result_)return;
 scenes_result_=raw;auto p=cJSON_Parse(raw.c_str());if(!p)return;
 auto a=cJSON_GetObjectItemCaseSensitive(p,"scenes");if(cJSON_IsArray(a)&&cJSON_GetArraySize(a)<=16){std::vector<Scene> next;for(auto v=a->child;v;v=v->next){auto h=cJSON_GetObjectItemCaseSensitive(v,"homeID"),s=cJSON_GetObjectItemCaseSensitive(v,"sceneID"),name=cJSON_GetObjectItemCaseSensitive(v,"name");if(cJSON_IsString(h)&&cJSON_IsString(s)&&h->valuestring&&s->valuestring&&std::strlen(h->valuestring)==36&&std::strlen(s->valuestring)==36){std::string label=cJSON_IsString(name)&&name->valuestring?name->valuestring:"Unnamed scene";for(auto& c:label)if(static_cast<unsigned char>(c)<32||c==127)c=' ';next.push_back({h->valuestring,s->valuestring,label});}}scenes_=std::move(next);Render();}cJSON_Delete(p);}
- void ShowPending(const char* text){LvglLockGuard lock;if(!pending_panel_){pending_panel_=stock_ui::Card(frame_,8,72,304,96);pending_text_=stock_ui::Text(pending_panel_,text,12,12,280);}else lv_label_set_text(pending_text_,text);}
+ void ShowPending(const char* text){if(!frame_)return;LvglLockGuard lock;if(!pending_panel_){pending_panel_=stock_ui::Card(frame_,8,72,304,96);pending_text_=stock_ui::Text(pending_panel_,text,12,12,280);}else lv_label_set_text(pending_text_,text);}
  void ClearPending(){LvglLockGuard lock;if(pending_panel_)lv_obj_delete(pending_panel_);pending_panel_=pending_text_=nullptr;}
+ bool CloseUsbView(){
+  if(!usb_view_)return true;
+  if(!usb_view_->RequestClose()){usb_view_->onRunning();return false;}
+  usb_view_->onClose();usb_view_.reset();usb_active_=false;usb_return_=false;
+  {LvglLockGuard lock;if(frame_)lv_obj_remove_flag(frame_,LV_OBJ_FLAG_HIDDEN);}
+  return true;
+ }
  bool CloseAll(){if(!companion::CloseView()||!State().CloseFeatures())return false;return companion::PollSavedNetworkStopped();}
  bool PublicStatusIdle(){if(usb_pending_.load()||usb_active_.load())return false;std::lock_guard<std::mutex> lock(action_mutex_);auto& s=State();return !closing_&&!action_&&!s.usb.OwnsDriver()&&!s.pending_wifi&&s.link.Stopped();}
  void Handle(const companion::FeatureUiAction& a,uint64_t now){auto& s=State();auto& link=s.link;
@@ -155,6 +162,8 @@ public:
  JointApp(){setAppInfo().name="Mira";static auto icon=assets::get_image("icon_ai_agent.bin");setAppInfo().icon=&icon;}
  ~JointApp()override{companion::PublicStatusOwner().Clear(this);}
  void onOpen()override{
+  // Mooncake re-enters Running while an external close waits; retain this UI.
+  if(closing_)return;
   usb_pending_=false;usb_active_=false;usb_return_=false;
   closing_=controls_visible_=ready_ui_=false;rendered_epoch_=UINT32_MAX;{std::lock_guard<std::mutex> lock(action_mutex_);action_.reset();}
   local_notice_=State().CloseFeatures()?"":"USB cleanup pending.";scenes_.clear();scenes_result_.clear();
@@ -167,6 +176,11 @@ public:
   companion::OpenView(native_root_);companion::PublicStatusOwner().Set(this,[](void* owner){return static_cast<JointApp*>(owner)->PublicStatusIdle();});Render();RenderNativeControls();ShowControls(false);
  }
  void onRunning()override{
+  if(closing_){
+   if(CloseUsbView()&&CloseAll())close();
+   else ShowPending("Stopping Mira and USB.\nCleanup pending; keep this page open.");
+   return;
+  }
   if(usb_view_){
    usb_view_->onRunning();
    if(usb_return_){
@@ -200,6 +214,17 @@ public:
   if(group_==2&&ready)ReadScenes();
   Update();
  }
- void onClose()override{if(usb_view_){usb_view_->onClose();usb_view_.reset();}usb_pending_=false;usb_active_=false;usb_return_=false;companion::PublicStatusOwner().Clear(this);CloseAll();LvglLockGuard lock;if(frame_)lv_obj_delete(frame_);frame_=root_=native_root_=native_controls_=native_actions_=status_=picker_=pending_panel_=pending_text_=nullptr;callbacks_.clear();native_callbacks_.clear();}
+ void onClose()override{
+  closing_=true;usb_pending_=false;
+  if(!CloseUsbView()||!CloseAll()){
+   ShowPending("Stopping Mira and USB.\nCleanup pending; keep this page open.");
+   // baseUpdate must not mark this app Sleeping and rebuild Home yet.
+   open();return;
+  }
+  usb_active_=false;usb_return_=false;companion::PublicStatusOwner().Clear(this);
+  LvglLockGuard lock;if(frame_)lv_obj_delete(frame_);
+  frame_=root_=native_root_=native_controls_=native_actions_=status_=picker_=pending_panel_=pending_text_=nullptr;
+  callbacks_.clear();native_callbacks_.clear();closing_=false;
+ }
 };
 }std::unique_ptr<mooncake::AppAbility> MakeJointCompanionApp(){return std::make_unique<JointApp>();}}
