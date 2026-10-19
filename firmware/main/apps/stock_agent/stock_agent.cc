@@ -102,7 +102,11 @@ public:
         if (action == 1) {waiting_network_=false;close();return;}
         if (action == 3) {waiting_network_=false;stock_shell::RequestSettings();close();return;}
         if (action != 2) return;
-        if (!GetHAL().isAppConfiged()) return;
+        if (!GetHAL().isAppConfiged()) {
+            waiting_network_=false;
+            ShowNotice("Setup required: Settings > Setup & login.\nComplete Wi-Fi and account setup there.");
+            return;
+        }
         if (companion::CurrentAudioOwner() != companion::AudioOwner::None) {
             ShowNotice("Audio is still stopping.\nRetry when stopped, or return Home.");
             return;

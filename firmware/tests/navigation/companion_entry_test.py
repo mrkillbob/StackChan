@@ -75,6 +75,10 @@ int main(){using stock_agent::StockAgentApp;
   app.onRunning();assert(!stock_agent::start_requested);
   Click(Button("Settings"));app.onRunning();assert(settings_requested&&app.closed&&!stock_agent::start_requested);
   app.onClose();assert(!LiveObjects());}
+ configured=true;settings_requested=false;
+ {StockAgentApp app;app.onOpen();configured=false;app.onRunning();
+  assert(!stock_agent::start_requested&&Button("Settings")&&Button("Back"));
+  app.onClose();assert(!LiveObjects());}
  configured=true;network_ready=false;stock_agent::start_requested=false;
  {StockAgentApp app;app.onOpen();app.onRunning();assert(!stock_agent::start_requested);
   for(unsigned i=0;i<3;++i)app.onRunning();
