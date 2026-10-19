@@ -11,3 +11,15 @@ The inert future-route lifecycle starts muted and requires a current-epoch conne
 Quit invalidates the epoch and disarms local lifecycle state, then invokes the worker’s atomic `PairingController.shutdown`. Release is confirmed only for that exact worker exit. Hangup is requested only if a future supported route advertises it. Failure refuses application termination and reports cleanup incomplete. Existing physical stop and worker Cancel controls remain in place.
 
 `script/test_offline.sh` covers decoding, real-pipe worker cleanup, consent/session behavior, remembered-device rules and inert Mira lifecycle/presentation cases. Set `STACKCHAN_OFFLINE_BUILD_ROOT` and `STACKCHAN_UI_BUILD_ROOT` to `/tmp` paths. Build only with `--build-only`; no app launch or hardware acceptance is part of this checkpoint.
+
+## W1 (2026-10-19): persistent trust, honest presence, bounded reconnect
+
+Built on a snapshot of the installed-app export plus this branch's lifecycle files (see the roadmap `LINEAGE.md`).
+
+- **Trust.** `PersistentRegistryTrust` backs `LaunchTrustProviding` with `SQLiteRegistryReader`, a read-only view of the HomeLab SQLite store (`.tools/persistent-companion/state/home-lab.sqlite3`). It reads the `stackchan_pair` gate row's state and expiry and counts `device_credentials` rows. A SQLite authorizer denies every other table and column, so hashes, digests, endpoints and enrollment context cannot be read. Unreadable → `.unknown` ("Pairing status unavailable"), never "Pairing needed". `.valid` means a committed, unexpired pairing exists; the host still re-authenticates on every connect.
+- **Presence.** Robot link and call are separate. `robotConnected` = "Robot connected · call not attached". The manual Mac route (Path A) cannot see a call: the user may say "My Mira call is running on this Mac", which shows `callAsserted` ("not verified"). Only a route that can verify a call can reach `connected` ("In call"); WSS/PCM readiness, consent and frames never do.
+- **Close.** Every end carries a fixed `CloseReason` code and initiator (user/app/robot/network/call/worker). With no hangup route the close text says the call keeps running and must be ended in the call app.
+- **Reconnect.** Only Wi-Fi loss and robot reset reconnect: ≤3 attempts per loss (2/5/10 s), 60 s window, 8 per session, 20 s attempt timeout. Each attempt is a fresh epoch that starts muted, without consent and with no call attached; the old epoch's callbacks are stale from the moment of loss. A reset restarts the per-loss count and retries at once. The worker listener is kept for retries; exhaustion or any other reason closes and releases.
+- **Microphone strip.** Robot mic (off / armed / streaming / paused while StackChan plays), host bridge (idle / open), call mic (always unknown).
+- **Not wired.** The worker does not yet report capture-frame flow or playback suppression, so the strip shows "armed" rather than "streaming" in production. `PairingControllerRobotLink` is compiled but only its pure projection is tested offline.
+- Tests: `script/test_offline.sh` (Swift) and `script/test_python_offline.sh` (Python, no listeners).

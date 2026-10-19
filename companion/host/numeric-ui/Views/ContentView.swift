@@ -1,5 +1,26 @@
 import SwiftUI
+/// Root: Mira home is always the launch surface. Pairing and the remembered-device controls
+/// open only from its button. A live worker/session stays visible until it completes or is
+/// cancelled, so hiding the pairing view never leaves pairing or audio running behind Home.
 struct ContentView: View {
+    @ObservedObject var controller: PairingController
+    @ObservedObject var lifecycle: CompanionLifecycle
+    var localStop: () -> Void = {}
+    @State private var showPairing = false
+    var body: some View {
+        if !showPairing {
+            MiraLandingView(lifecycle: lifecycle, controller: controller, repair: { showPairing = true }, localStop: localStop)
+        } else {
+            VStack(spacing: 0) {
+                PairingContentView(controller: controller)
+                if !controller.phase.busy {
+                    Button("Back to Mira") { showPairing = false }.buttonStyle(.link).font(.caption).padding(.bottom, 14)
+                }
+            }
+        }
+    }
+}
+struct PairingContentView: View {
     @ObservedObject var controller: PairingController
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {

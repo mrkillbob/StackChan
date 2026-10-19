@@ -16,3 +16,7 @@ mkdir -p "$BUILD_ROOT"
 
 /usr/bin/nice -n 20 /usr/bin/xcrun swiftc -swift-version 5 -module-cache-path "$BUILD_ROOT/module-cache" "$UI_ROOT"/Models/*.swift "$UI_ROOT/Services/AudioRouteCatalog.swift" "$UI_ROOT/Services/PairingController.swift" "$UI_ROOT/Tests/PersistentChecks.swift" -o "$BUILD_ROOT/persistent-checks"
 "$BUILD_ROOT/persistent-checks"
+/usr/bin/nice -n 20 /usr/bin/xcrun swiftc -swift-version 5 -module-cache-path "$BUILD_ROOT/module-cache" "$UI_ROOT"/Models/*.swift "$UI_ROOT/Tests/MiraLifecycleChecks.swift" -o "$BUILD_ROOT/mira-lifecycle-checks"
+"$BUILD_ROOT/mira-lifecycle-checks"
+/usr/bin/nice -n 20 /usr/bin/xcrun swiftc -swift-version 5 -module-cache-path "$BUILD_ROOT/module-cache" "$UI_ROOT"/Models/*.swift "$UI_ROOT/Services/PersistentRegistryReader.swift" "$UI_ROOT/Tests/W1LifecycleChecks.swift" -o "$BUILD_ROOT/w1-lifecycle-checks"
+"$BUILD_ROOT/w1-lifecycle-checks"
