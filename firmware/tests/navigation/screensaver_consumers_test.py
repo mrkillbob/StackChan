@@ -70,6 +70,9 @@ struct Screensaver{
 };
 struct Preview{
  bool preview_failed_=false;
+ lv_obj_t* confirmation_=nullptr;
+ bool currentInView()const{return true;}
+ void message(const char* text){lv_label_set_text(count_,text);}
  uint16_t* pixels_=nullptr;uint16_t* thumbnail_=nullptr;
  lv_obj_t* canvas_=nullptr;lv_obj_t* count_=nullptr;
  unsigned id_=0;

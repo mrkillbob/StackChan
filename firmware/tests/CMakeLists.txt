@@ -50,3 +50,10 @@ add_test(NAME phone_station_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/phone_station_test.py)
 add_test(NAME station_event_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/station_event_test.py)
+
+add_executable(screensaver_management_test navigation/screensaver_management_test.cpp)
+target_include_directories(screensaver_management_test PRIVATE ../main)
+target_compile_features(screensaver_management_test PRIVATE cxx_std_17)
+add_test(NAME screensaver_management_test COMMAND screensaver_management_test)
+add_test(NAME screensaver_management_ui_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/screensaver_management_ui_test.py)

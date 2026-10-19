@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "app_launcher.h"
+#include "view/screensaver_library.hpp"
 #include <hal/hal.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
@@ -143,7 +144,7 @@ void AppLauncher::screensaver_update()
     if (!_screensaver) {
         if(!view::saver::MayEnterIdle(idle,launcher_active,_going_to_open_app_id>=0,media_owned))return;
         Settings settings("screensaver");
-        auto selection=view::saver::Selection::fromPayload(settings.GetString("playlist"));
+        auto selection=view::saver::Library::fromPayload(settings.GetString("playlist")).effective();
         auto style=static_cast<view::saver::Style>(_slideshow.start(selection,now));
         _screensaver=std::make_unique<view::Screensaver>(style);
         _screensaver->init();
