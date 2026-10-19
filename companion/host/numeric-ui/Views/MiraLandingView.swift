@@ -31,6 +31,9 @@ struct MiraLandingView: View {
             }
             Text(detail).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             if lifecycle.canOpen { Button("Connect to Mira") { lifecycle.open() }.buttonStyle(.borderedProminent) }
+            if case .cleanupIncomplete = lifecycle.presence {
+                Button("Retry audio worker release") { lifecycle.stopAudioSession() }.buttonStyle(.bordered)
+            }
             if lifecycle.presence.isLive {
                 MicrophoneStripView(strip: lifecycle.micStrip)
                 if lifecycle.robotLinked {

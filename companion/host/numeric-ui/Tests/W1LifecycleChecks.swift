@@ -466,5 +466,9 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
         check(failed.life.presence == .cleanupIncomplete([CloseStep.workerRelease.rawValue]) &&
               failed.life.closeRecord?.released == false,
               "failed worker exit is never reported as a released audio session")
+        failed.res.fail = false
+        failed.life.stopAudioSession()
+        check(failed.life.presence == .closed && failed.life.closeRecord?.released == true && failed.res.log == ["worker", "worker"],
+              "retry after a failed release re-runs worker shutdown and confirms only on clean exit")
     }
 }
