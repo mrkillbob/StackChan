@@ -31,6 +31,8 @@ struct lv_obj_t{};constexpr int LV_OBJ_FLAG_HIDDEN=1;
 static int deleted=0,child_destroyed=0,child_running=0,stops=0,globals=0;
 static bool usb_closed=false,regular_closed=true;static unsigned orphan_panels=0;
 struct LvglLockGuard{};
+namespace view {unsigned destroyed=0;void update_home_indicator(){}void destroy_home_indicator(){++destroyed;}}
+
 void lv_obj_delete(lv_obj_t* p){if(p)++deleted;}
 void lv_label_set_text(lv_obj_t*,const char*){}
 namespace stock_ui{lv_obj_t* Card(lv_obj_t* parent,int,int,int,int){static lv_obj_t node;if(!parent)++orphan_panels;return &node;}lv_obj_t* Text(lv_obj_t*,const char*,int,int,int){static lv_obj_t node;return &node;}}
@@ -68,11 +70,11 @@ int main(){
   assert(parent.usb_view_&&parent.frame_&&child_destroyed==0&&deleted==0);
   assert(parent.currentState()!=mooncake::AppAbility::StateSleeping&&!companion::PublicStatusOwner().Idle());
   for(unsigned tick=0;tick<10;++tick){parent.baseUpdate();assert(parent.frame_&&parent.usb_view_);}
-  assert(stops&&child_running&&parent.opens==1&&static_cast<FakeUsb*>(parent.usb_view_.get())->closing_); // re-open does not reset or rebuild the parent
+  assert(!view::destroyed);assert(stops&&child_running&&parent.opens==1&&static_cast<FakeUsb*>(parent.usb_view_.get())->closing_); // re-open does not reset or rebuild the parent
   usb_closed=true;
   for(unsigned tick=0;tick<5;++tick)parent.baseUpdate();
   assert(parent.currentState()==mooncake::AppAbility::StateSleeping&&!parent.usb_view_&&!parent.frame_);
-  assert(child_destroyed==1&&deleted==1&&companion::PublicStatusOwner().Idle());
+  assert(child_destroyed==1&&deleted==1&&companion::PublicStatusOwner().Idle()&&view::destroyed==1);
  }
  // A forced whole-shell teardown must not uninstall an asynchronous close owner.
  usb_closed=false;deleted=child_destroyed=0;

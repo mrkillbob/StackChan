@@ -5,7 +5,7 @@
 #include <apps/runtime_lifecycle/cleanup.h>
 #include <esp_timer.h>
 #include <apps/stock_shell/navigation.h>
-#include "session_controls.hpp"
+#include <apps/common/home_indicator/home_indicator.h>
 #include <apps/network_setup/persistence_gate.h>
 #include <wifi_manager.h>
 #include <apps/app_ai_agent/app_ai_agent.h>
@@ -27,7 +27,6 @@ namespace stock_agent {
 namespace {
 std::atomic<bool> start_requested{false},slow_stop{false};
 companion::AudioLease runtime_audio_lease;
-CleanSessionControls controls;
 std::atomic<bool> start_authorized{false};
 RTC_NOINIT_ATTR uint32_t preview_cookie;
 constexpr uint32_t preview_magic = 0x53544F50; // STOP: preview, never resume
@@ -77,7 +76,7 @@ class StockAgentApp : public mooncake::AppAbility {
         lv_obj_set_style_text_color(panel_, lv_color_hex(0xffffff), 0);
         lv_obj_set_style_text_font(panel_, &lv_font_montserrat_16, 0);
         Label(panel_, "Stackchan", 10, 10, 300);
-        Label(panel_, "Uses cloud AI, microphone/wake word, camera and motors.\nStop / Home stops and returns Home.", 10, 43, 300);
+        Label(panel_, "Uses cloud AI, microphone/wake word, camera and motors.\nSwipe up from the bottom for Home.", 10, 43, 300);
         notice_ = Label(panel_, text, 10, 128, 300);
         Button("Back", 10, 192, 90, 1);
         if(!GetHAL().isAppConfiged()){Button("Settings",112,192,198,3);return;}
@@ -147,9 +146,10 @@ const char* SessionText() {
 }
 void SessionControls() {
     LvglLockGuard lock;
-    // State and Stop/Home remain directly available without a dropdown. Home
-    // requests cancellation; its owner joins outside LVGL.
-    controls.Create(ReturnHome, SessionText);
+    // Reuse the firmware's bottom-swipe Home overlay, hidden until requested.
+    // The session loop owns it even during activation and checked shutdown.
+    view::create_home_indicator(ReturnHome, 0x81DBBD, 0x134233,
+                                lv_layer_top(), false, SessionText);
 }
 }
 std::unique_ptr<mooncake::AppAbility> MakeApp() { return std::make_unique<StockAgentApp>(); }
@@ -188,6 +188,7 @@ void RunStockAgent() {
     }
     while(true){
         GetHAL().feedTheDog();
+        {LvglLockGuard lock;view::update_home_indicator();}
         auto& session=runtime_lifecycle::Session();
         if(session.Poll(uint64_t(esp_timer_get_time()/1000),[]{companion::RevokeAudio(runtime_audio_lease);runtime_lifecycle::QuietHardware();},
             []{return runtime_lifecycle::ApplicationJoined()&&runtime_lifecycle::UpdateJoined()&&runtime_lifecycle::PollSourcesStopped(nullptr);},
@@ -196,7 +197,6 @@ void RunStockAgent() {
         slow_stop=session.Pending(uint64_t(esp_timer_get_time()/1000));
         GetHAL().delay(20);
     }
-    {LvglLockGuard lock;controls.Destroy();}
     runtime_lifecycle::ResetSessionUi();companion::SetSettingsScope(companion::SettingsScope::None);
 }
 }
