@@ -145,10 +145,22 @@ namespace companion {
 
 controls = common + r'''
 #include "apps/stock_agent/session_controls.hpp"
+enum State {kDeviceStateWifiConfiguring,kDeviceStateActivating,kDeviceStateIdle,
+ kDeviceStateConnecting,kDeviceStateListening,kDeviceStateSpeaking,kDeviceStateAudioTesting,kDeviceStateFatalError};
+State state=kDeviceStateIdle;bool home_requested=false;
+struct Application {static Application& GetInstance(){static Application a;return a;}State GetDeviceState(){return state;}};
+namespace runtime_lifecycle {bool HomeRequested(){return home_requested;}}
+namespace stock_agent {std::atomic<bool> slow_stop{false};
+''' + body(stock, 'const char* SessionText()') + r'''
+}
 unsigned stops=0;const char* status="Stackchan - idle";
 void Stop(){++stops;}const char* Status(){return status;}
 int main(){
  stock_agent::CleanSessionControls controls;
+ controls.Create(Stop,stock_agent::SessionText);
+ assert(Text("Stackchan - wake word on")&&"the newly visible footer must retain the Stackchan product label");
+ home_requested=true;stock_agent::slow_stop=true;TickTimers();assert(Text("Stop pending; ownership retained"));
+ controls.Destroy();home_requested=false;
  for(unsigned cycle=0;cycle<20;++cycle){
   controls.Create(Stop,Status);
   assert(!Text("LIST_ICON")&&"the companion session must not expose a dropdown/menu icon");

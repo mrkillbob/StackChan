@@ -131,16 +131,16 @@ const char* SessionText() {
     if(runtime_lifecycle::HomeRequested())return slow_stop.load()?"Stop pending; ownership retained":"Stopping Stackchan";
     // The original HAL background task owns avatar/motion/reminder updates.
     auto state = Application::GetInstance().GetDeviceState();
-    const char* text = "Stock AI - starting";
+    const char* text = "Stackchan - starting";
     switch (state) {
-        case kDeviceStateWifiConfiguring: text = "Stock AI - Wi-Fi setup"; break;
-        case kDeviceStateActivating: text = "Stock AI - activation"; break;
-        case kDeviceStateIdle: text = "Stock AI - wake word on"; break;
-        case kDeviceStateConnecting: text = "Stock AI - connecting"; break;
-        case kDeviceStateListening: text = "Stock AI - listening"; break;
-        case kDeviceStateSpeaking: text = "Stock AI - speaking"; break;
-        case kDeviceStateAudioTesting: text = "Stock AI - audio test"; break;
-        case kDeviceStateFatalError: text = "Stock AI - error"; break;
+        case kDeviceStateWifiConfiguring: text = "Stackchan - Wi-Fi setup"; break;
+        case kDeviceStateActivating: text = "Stackchan - activation"; break;
+        case kDeviceStateIdle: text = "Stackchan - wake word on"; break;
+        case kDeviceStateConnecting: text = "Stackchan - connecting"; break;
+        case kDeviceStateListening: text = "Stackchan - listening"; break;
+        case kDeviceStateSpeaking: text = "Stackchan - speaking"; break;
+        case kDeviceStateAudioTesting: text = "Stackchan - audio test"; break;
+        case kDeviceStateFatalError: text = "Stackchan - error"; break;
         default: break;
     }
     return text;
