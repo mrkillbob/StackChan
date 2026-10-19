@@ -3,6 +3,27 @@ import Foundation
 /// The words the Mira home shows for each lifecycle state, kept free of SwiftUI so tests can
 /// check that the UI stays truthful. Only a route-verified `.connected` may say "In call".
 enum MiraPresentation {
+    static func homeStatus(_ presence: MiraPresence, session: MiraHomeSession) -> String {
+        switch presence {
+        case .closing, .cleanupIncomplete: return status(presence)
+        default: break
+        }
+        if session.pairedThisSession && !presence.isLive { return "Paired for this session" }
+        if session.showsControls && !presence.isLive { return "Session cleanup pending" }
+        return status(presence)
+    }
+
+    static func homeDetail(_ presence: MiraPresence, session: MiraHomeSession, workerActivity: PairingActivity? = nil,
+                           closeRecord: CloseRecord?, lastFailure: CloseReason?) -> String {
+        switch presence {
+        case .closing, .cleanupIncomplete:
+            return detail(presence, workerActivity: workerActivity, closeRecord: closeRecord, lastFailure: lastFailure)
+        default: break
+        }
+        if session.pairedThisSession && !presence.isLive { return "The pairing is temporary. Companion cannot verify or join your existing Mira call through a supported route; call continuity and speaker playback remain unverified." }
+        return detail(presence, workerActivity: workerActivity, closeRecord: closeRecord, lastFailure: lastFailure)
+    }
+
     static func status(_ presence: MiraPresence) -> String {
         switch presence {
         case .connected: return "In call with Mira"
@@ -47,7 +68,7 @@ enum MiraPresentation {
         case .repairRequired: return "The saved pairing has expired or is incomplete on this Mac. Pair again when you are ready; nothing starts a call."
         case .needsPairing: return "No saved pairing is available on this Mac. Pair deliberately when you are ready; nothing starts a call."
         case .closed: return closeRecord?.message ?? ""
-        case .closing: return ""
+        case .closing: return "Stopping the audio worker. Worker release is not confirmed; microphone capture state is unknown."
         }
     }
 }

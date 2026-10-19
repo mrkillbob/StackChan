@@ -76,12 +76,10 @@ struct MiraLandingView: View {
         .onChange(of: controller.phase) { _, _ in lifecycle.refreshTrust() }
     }
     private var status: String {
-        if session.pairedThisSession && !lifecycle.presence.isLive { return "Paired for this session" }
-        if session.showsControls && !lifecycle.presence.isLive { return "Session cleanup pending" }
-        return MiraPresentation.status(lifecycle.presence)
+        MiraPresentation.homeStatus(lifecycle.presence, session: session)
     }
     private var detail: String {
-        if session.pairedThisSession && !lifecycle.presence.isLive { return "The pairing is temporary. Companion cannot verify or join your existing Mira call through a supported route; call continuity and speaker playback remain unverified." }
-        return MiraPresentation.detail(lifecycle.presence, workerActivity: controller.activity, closeRecord: lifecycle.closeRecord, lastFailure: lifecycle.lastFailure)
+        MiraPresentation.homeDetail(lifecycle.presence, session: session, workerActivity: controller.activity,
+                                    closeRecord: lifecycle.closeRecord, lastFailure: lifecycle.lastFailure)
     }
 }

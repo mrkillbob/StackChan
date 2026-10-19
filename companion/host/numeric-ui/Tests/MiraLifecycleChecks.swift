@@ -36,7 +36,46 @@ func check(_ ok: Bool, _ what: String, line: Int = #line) {
 let supported = SameCallCapability.supported(routeID: "fixture", hangup: true, returnAudio: true)
 
 @main struct MiraLifecycleChecks {
+    static func homeReleasePresentation() {
+        // A worker may still report paired throughout a delayed shutdown. The home
+        // must give its lifecycle release state priority over that stale report.
+        let resources = FixtureResources(), route = ManualMacCallRoute()
+        resources.holdWorker = true
+        let life = CompanionLifecycle(trust: FixtureTrust(value: .valid), route: route, resources: resources)
+        let paired = MiraHomeSession(phase: .paired, cleanupUnconfirmed: false)
+        check(MiraPresentation.homeStatus(life.presence, session: paired) == "Paired for this session",
+              "ordinary paired home keeps its session status")
+        check(MiraPresentation.homeDetail(life.presence, session: paired, closeRecord: nil, lastFailure: nil)
+                .contains("pairing is temporary"), "ordinary paired detail keeps its scope")
+
+        life.stopAudioSession()
+        let pending = MiraHomeSession(phase: .paired, cleanupUnconfirmed: true)
+        check(MiraPresentation.homeStatus(life.presence, session: pending) == "Closing…",
+              "closing takes priority over a stale paired worker")
+        let closingDetail = MiraPresentation.homeDetail(life.presence, session: pending, closeRecord: life.closeRecord, lastFailure: nil)
+        check(closingDetail.contains("release is not confirmed") && closingDetail.contains("capture state is unknown"),
+              "closing does not claim release or known capture")
+
+        resources.deferred.removeValue(forKey: "worker")?(false)
+        check(life.presence == .cleanupIncomplete(["workerRelease"]), "fixture release failed")
+        check(MiraPresentation.homeStatus(life.presence, session: pending) == "Cleanup not confirmed",
+              "failed release takes priority over a stale paired worker")
+        let failedDetail = MiraPresentation.homeDetail(life.presence, session: pending, closeRecord: life.closeRecord, lastFailure: nil)
+        check(failedDetail.contains("release is not confirmed") && failedDetail.contains("capture state is unknown"),
+              "failed release explains the unconfirmed worker and unknown capture")
+
+        life.stopAudioSession()
+        check(MiraPresentation.homeStatus(life.presence, session: pending) == "Closing…", "retry remains closing")
+        resources.deferred.removeValue(forKey: "worker")?(true)
+        let ended = MiraHomeSession(phase: .closed, cleanupUnconfirmed: false)
+        check(life.presence == .closed && life.closeRecord?.released == true && resources.log.count == 2, "retry release confirmed")
+        check(MiraPresentation.homeStatus(life.presence, session: ended) == "Closed", "confirmed retry shows closed")
+        check(MiraPresentation.homeDetail(life.presence, session: ended, closeRecord: life.closeRecord, lastFailure: nil) == life.closeRecord?.message,
+              "confirmed retry uses the close receipt")
+    }
+
     static func main() {
+        homeReleasePresentation()
         // Production .paired is a busy worker session, not a persisted trust receipt.
         let pairedHome = MiraHomeSession(phase: .paired, cleanupUnconfirmed: false)
         check(pairedHome.pairedThisSession && pairedHome.showsControls, "paired home retains session controls")
