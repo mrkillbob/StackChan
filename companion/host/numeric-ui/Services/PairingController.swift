@@ -218,16 +218,30 @@ final class PairingController: ObservableObject {
         process.standardInput = incoming; process.standardOutput = outgoing
         // Raw exceptions/IO are never reflected into the UI or a log file.
         process.standardError = FileHandle.nullDevice
+        // Pipe reads and the termination notice arrive on unrelated queues. A worker that prints a
+        // final status (for example a cleanup report) and exits at once must not have that status
+        // dropped by the termination block. Both handlers do their pipe reads and enqueue their
+        // main-queue work under one lock: any read that completed before termination is delivered
+        // first, and the termination handler drains whatever the worker left unread before it
+        // enqueues its own block, so nothing can be read after that block is queued.
+        let ordering = NSLock()
         outgoing.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            ordering.lock(); defer { ordering.unlock() }
             let data = handle.availableData
+            // EOF: stop the handler so it cannot spin until the termination block runs.
+            if data.isEmpty { handle.readabilityHandler = nil; return }
             DispatchQueue.main.async {
                 guard self?.generation == activeGeneration else { return }
                 self?.receive(data)
             }
         }
         process.terminationHandler = { [weak self] process in
+            ordering.lock(); defer { ordering.unlock() }
+            let remainder = Self.drainWithoutBlocking(outgoing.fileHandleForReading)
             DispatchQueue.main.async {
                 guard let self = self, self.generation == activeGeneration, self.child === process else { return }
+                if !remainder.isEmpty { self.receive(remainder) }
+                guard self.generation == activeGeneration else { return }
                 self.generation = UUID()
                 self.buffer.removeAll()
                 self.output?.readabilityHandler = nil; self.output = nil; self.input = nil; self.child = nil
@@ -242,6 +256,18 @@ final class PairingController: ObservableObject {
         }
         do { try process.run(); child = process; input = incoming.fileHandleForWriting; output = outgoing.fileHandleForReading }
         catch { outgoing.fileHandleForReading.readabilityHandler = nil; phase = .failed; recovery = .setup }
+    }
+    /// Reads what an exited worker left in the pipe, without waiting on any process that still holds it open.
+    private static func drainWithoutBlocking(_ handle: FileHandle) -> Data {
+        let fd = handle.fileDescriptor
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { return Data() }
+        var collected = Data(), chunk = [UInt8](repeating: 0, count: 4096)
+        while collected.count <= 8192 {
+            let count = Darwin.read(fd, &chunk, chunk.count)
+            if count > 0 { collected.append(contentsOf: chunk[0..<count]) } else { break }
+        }
+        return collected
     }
     private func receive(_ data: Data) {
         guard !data.isEmpty else { return }

@@ -68,6 +68,13 @@ print(json.dumps({'state':'failed','message':'cleanup_unconfirmed','cleanup':['a
   assert(blocked.instruction.contains("Do not try again") && blocked.instruction.contains("microphone and speaker routes are restored"))
   assert(blocked.instruction.contains("pairing grant was revoked") && blocked.instruction.contains("USB pairing session is closed"))
   var blockedStopped:Bool?=nil;blocked.shutdown{closed in blockedStopped=closed};pump{blockedStopped != nil};assert(blockedStopped == false)
+  // A worker that prints its final cleanup report and exits immediately races the controller's
+  // pipe read against process termination; repeat to cover both orderings. The report must never be
+  // lost, because a lost report would look like a clean exit-0 release.
+  for _ in 0..<25 {
+   let racing=PairingController(approved:true,root:root,processFactory:{fake(cleanup)},oneAttempt:false)
+   racing.primary();pump{racing.phase == .failed && racing.cleanupIssues == [.audio,.grant,.usb] && racing.cleanupPending}
+  }
   let invalid="""
 import sys,json,time
 sys.stdin.readline()
