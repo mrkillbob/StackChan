@@ -476,6 +476,10 @@ def main(argv=None):
     parser.add_argument('--cue',default=str(ROOT/'.tools/native-call-preparation/transport-speaker-cue.wav'))
     args=parser.parse_args(argv)
     try:asyncio.run(_run(args))
-    except BaseException:_output({'state':'closed','message':'closed'})
+    except BaseException:
+        # Never disguise an owner-close error as a successful worker exit. The
+        # controller also checks this process's exit code before confirming release.
+        _output({'state':'failed','message':'cleanup_unconfirmed','cleanup':['audio']})
+        return 1
     return 0
 if __name__=='__main__':raise SystemExit(main())

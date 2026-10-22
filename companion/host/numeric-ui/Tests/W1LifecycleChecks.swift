@@ -70,8 +70,8 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
 
 @main struct W1LifecycleChecks {
     static func main() {
-        trustMapping(); sqliteReader(); presenceAndManualRoute(); closeReasons(); reconnect(); micStrip(); projection(); consentRevocation()
-        print("PASS W1 lifecycle: registry-backed trust (state/counts only), robot-vs-call presence, close reasons, bounded muted-only reconnect, microphone strip, ManualMacCallRoute; inert fixtures only")
+        trustMapping(); sqliteReader(); presenceAndManualRoute(); closeReasons(); reconnect(); micStrip(); projection(); consentRevocation(); stopAudioSession()
+        print("PASS W1 lifecycle: registry trust, robot-vs-call presence, bounded reconnect, microphone strip, confirmed audio-worker stop; inert fixtures only")
     }
 
     // MARK: (1) LaunchTrustProviding backed by the registry view
@@ -209,7 +209,17 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
         check(!r.life.presence.showsActiveCall, "robot link is not a call")
         let status = MiraPresentation.status(r.life.presence)
         check(status.contains("Robot connected") && status.contains("call not attached") && !status.contains("In call"), "status wording: \(status)")
-        check(MiraPresentation.detail(r.life.presence, muted: true, closeRecord: nil, lastFailure: nil).contains("cannot start, verify or hang it up"), "detail says what it cannot do")
+        check(MiraPresentation.detail(r.life.presence, closeRecord: nil, lastFailure: nil).contains("cannot start, verify or hang it up"), "detail says what it cannot do")
+        for presence: MiraPresence in [.robotConnected, .callAsserted, .connected] {
+            let detail = MiraPresentation.detail(presence, workerActivity: .conversation, closeRecord: nil, lastFailure: nil)
+            check(detail.localizedCaseInsensitiveContains("unknown") &&
+                  !detail.localizedCaseInsensitiveContains("muted") &&
+                  !detail.localizedCaseInsensitiveContains("microphone is not sent"),
+                  "live audio copy cannot infer mute from lifecycle projection: \(detail)")
+        }
+        check(MiraPresentation.workerAudioStatus(.conversation).contains("worker reports conversation activity") &&
+              MiraPresentation.workerAudioStatus(.conversation).contains("capture state is unknown"),
+              "worker activity is distinguished from confirmed capture")
         // PCM/WSS readiness (bridge activity, consent) never attaches a call.
         r.life.robotConsentReported(epoch: 1); r.life.bridgeActivityReported(epoch: 1, captureFlowing: true, playbackSuppressing: false)
         check(r.life.presence == .robotConnected && r.life.call == .notAttached, "consent and frames do not attach a call")
@@ -253,7 +263,7 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
         check(rec.reason == .userClosed && rec.initiator == .user && rec.released && rec.call == .keepsRunning && rec.epoch == 1, "close record")
         check(rec.message.contains("still running") && rec.message.contains("no way to hang it up") && rec.message.contains("StackChan is released"), "says the call keeps running: \(rec.message)")
         check(a.life.call == .notAttached && a.life.muted && !a.life.captureMayArm && !a.life.robotLinked, "disarmed after close")
-        check(MiraPresentation.detail(a.life.presence, muted: true, closeRecord: a.life.closeRecord, lastFailure: nil) == rec.message, "closed screen shows the record")
+        check(MiraPresentation.detail(a.life.presence, closeRecord: a.life.closeRecord, lastFailure: nil) == rec.message, "closed screen shows the record")
         // Not asserted: still honest that it may keep running.
         let b = rig(); b.life.open(); b.link.reporter?(1, .connected); b.life.close(reason: .appQuit)
         check(b.life.closeRecord?.call == .mayKeepRunning && b.life.closeRecord?.reason == .appQuit && b.life.closeRecord!.message.contains("keeps running"), "unknown call may keep running")
@@ -289,7 +299,7 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
         check(r.life.muted && !r.life.physicalConsent && !r.life.captureMayArm && !r.life.robotLinked && r.life.epoch == 2, "disarmed at the instant of loss, old epoch already dead")
         check(r.sched.pending.count == 1 && r.sched.pending[0].delay == 2 && r.link.opens == [1], "first retry is delayed, nothing opened yet")
         check(r.res.log.isEmpty, "worker listener is kept for the retry; no release yet")
-        check(MiraPresentation.status(r.life.presence).contains("muted") && !MiraPresentation.status(r.life.presence).contains("In call"), "reconnecting wording")
+        check(MiraPresentation.status(r.life.presence).contains("fresh consent required") && !MiraPresentation.status(r.life.presence).contains("In call"), "reconnecting wording")
         r.link.reporter?(1, .connected); check(r.life.presence == .reconnecting(attempt: 1, of: 3), "a stale-epoch report cannot revive the old session")
         r.sched.fireFirst()
         check(r.life.epoch == 3 && r.link.opens == [1, 3] && r.life.muted && !r.life.physicalConsent, "fresh epoch, fresh attempt, still muted")
@@ -368,27 +378,28 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
     // MARK: (5) microphone strip
     static func micStrip() {
         let idle = rig()
-        check(idle.life.micStrip == MicrophoneStrip(robot: .off, bridge: .idle, call: .unknown), "idle strip")
-        idle.life.open(); check(idle.life.micStrip.bridge == .idle && idle.life.micStrip.robot == .off, "connecting: bridge not open yet")
+        check(idle.life.micStrip.robotText.localizedCaseInsensitiveContains("unknown"), "mic strip is explicit when worker capture telemetry is unavailable")
+        check(idle.life.micStrip == MicrophoneStrip(robot: .unknown, bridge: .idle, call: .unknown), "idle strip")
+        idle.life.open(); check(idle.life.micStrip.bridge == .idle && idle.life.micStrip.robot == .unknown, "connecting: bridge not open yet")
         idle.link.reporter?(1, .connected)
-        check(idle.life.micStrip == MicrophoneStrip(robot: .off, bridge: .open, call: .unknown), "linked and muted: robot off, bridge open")
+        check(idle.life.micStrip == MicrophoneStrip(robot: .unknown, bridge: .open, call: .unknown), "linked with no capture telemetry remains unknown")
         idle.life.robotConsentReported(epoch: 1); idle.life.attestCall(running: true)
-        check(idle.life.micStrip.robot == .off, "consent alone leaves the mic off while muted")
-        idle.life.setMuted(false); check(idle.life.micStrip.robot == .armed, "armed, nothing flowing")
+        check(idle.life.micStrip.robot == .unknown, "consent alone does not prove capture state")
+        idle.life.setMuted(false); check(idle.life.micStrip.robot == .unknown, "local arming projection does not prove capture")
         idle.life.bridgeActivityReported(epoch: 1, captureFlowing: true, playbackSuppressing: false); check(idle.life.micStrip.robot == .streaming, "streaming")
         idle.life.bridgeActivityReported(epoch: 1, captureFlowing: true, playbackSuppressing: true)
-        check(idle.life.micStrip.robot == .suppressedForPlayback && idle.life.micStrip.robotText.contains("plays sound"), "half-duplex pause is labelled")
-        idle.life.bridgeActivityReported(epoch: 7, captureFlowing: false, playbackSuppressing: false); check(idle.life.micStrip.robot == .suppressedForPlayback, "stale-epoch activity ignored")
+        check(idle.life.micStrip.robotText.localizedCaseInsensitiveContains("conflict") && !idle.life.micStrip.robotText.localizedCaseInsensitiveContains("paused"), "conflicting capture and suppression telemetry is surfaced without claiming a pause")
+        idle.life.bridgeActivityReported(epoch: 7, captureFlowing: false, playbackSuppressing: false); check(idle.life.micStrip.robotText.localizedCaseInsensitiveContains("conflict"), "stale-epoch activity ignored")
         idle.life.bridgeActivityReported(epoch: 1, captureFlowing: true, playbackSuppressing: false)
-        idle.life.setMuted(true); check(idle.life.micStrip.robot == .off && !idle.life.captureFlowing, "mute turns the robot mic off at once")
+        idle.life.setMuted(true); check(idle.life.micStrip.robot == .streaming && idle.life.captureFlowing, "local mute projection cannot hide worker-reported capture")
         check(idle.life.micStrip.call == .unknown && idle.life.micStrip.lines.count == 3 && idle.life.micStrip.callText.contains("unknown"), "call mic is always unknown")
-        // Frames cannot be 'streaming' for a mic that may not arm.
+        // Worker telemetry is shown even if it contradicts the local gate; the UI must not hide it.
         let n = rig(); n.life.open(); n.link.reporter?(1, .connected); n.life.bridgeActivityReported(epoch: 1, captureFlowing: true, playbackSuppressing: false)
-        check(n.life.micStrip.robot == .off && !n.life.captureFlowing, "frames without consent+unmute+call are not 'streaming'")
+        check(n.life.micStrip.robot == .streaming && !n.life.captureMayArm, "worker-reported flow is visible even before local arming projection")
         n.link.reporter?(1, .lost(.wifiLost))
-        check(n.life.micStrip == MicrophoneStrip(robot: .off, bridge: .idle, call: .unknown), "reconnecting: everything off, bridge idle")
+        check(n.life.micStrip == MicrophoneStrip(robot: .unknown, bridge: .idle, call: .unknown), "reconnecting: capture is unknown, bridge idle")
         n.life.close()
-        check(n.life.micStrip == MicrophoneStrip(robot: .off, bridge: .idle, call: .unknown), "closed strip")
+        check(n.life.micStrip == MicrophoneStrip(robot: .unknown, bridge: .idle, call: .unknown), "closed strip")
     }
 
     // MARK: production link projection
@@ -436,5 +447,28 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
               "fresh consent alone does not clear the forced mute")
         r.life.setMuted(false)
         check(r.life.captureMayArm, "fresh consent plus explicit unmute can arm again")
+    }
+
+    // MARK: stopping audio uses the owned worker's confirmed shutdown
+    static func stopAudioSession() {
+        let r = armedRig()
+        check(r.life.captureMayArm, "precondition: current session can arm capture")
+        r.life.stopAudioSession()
+        check(r.life.presence == .closed && r.life.muted && !r.life.robotLinked,
+              "stop ends the local session and disarms it")
+        check(r.res.log == ["worker"] && r.life.closeRecord?.released == true,
+              "stop uses the owned worker release path and records confirmation")
+
+        let failed = rig(); failed.life.open(); failed.link.reporter?(failed.life.epoch, .connected)
+        failed.life.robotConsentReported(epoch: failed.life.epoch); failed.life.attestCall(running: true)
+        failed.life.setMuted(false); failed.res.fail = true
+        failed.life.stopAudioSession()
+        check(failed.life.presence == .cleanupIncomplete([CloseStep.workerRelease.rawValue]) &&
+              failed.life.closeRecord?.released == false,
+              "failed worker exit is never reported as a released audio session")
+        failed.res.fail = false
+        failed.life.stopAudioSession()
+        check(failed.life.presence == .closed && failed.life.closeRecord?.released == true && failed.res.log == ["worker", "worker"],
+              "retry after a failed release re-runs worker shutdown and confirms only on clean exit")
     }
 }

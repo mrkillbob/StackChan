@@ -61,7 +61,7 @@ struct PairingContentView: View {
                 Spacer()
                 Button(controller.primaryTitle, action: controller.primary).buttonStyle(.borderedProminent).disabled(!controller.canPrimary)
             }
-            Text(controller.persistentMode ? "Enrollment saves wireless trust. Use StackChan prepares the listener; physical Listen on the robot remains the audio gate." : (controller.audioApproved ? "Match the number on both screens. The robot’s Pair & authorize mic/speaker button gives physical consent. Use its physical stop to end the session. Nothing is saved as permanent trust." : "Pairing keeps StackChan muted. Audio starts only after separate physical Listen consent."))
+            Text(controller.persistentMode ? "Enrollment saves wireless trust. Use StackChan prepares the listener; physical Listen on the robot remains the audio gate." : (controller.audioApproved ? "Match the number on both screens. The robot’s Pair & authorize mic/speaker button gives physical consent. Use its physical stop to end the session. Nothing is saved as permanent trust." : "Pairing does not grant audio. Audio starts only after separate physical Listen consent."))
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             IntegrationReadinessView()

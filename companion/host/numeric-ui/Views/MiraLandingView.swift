@@ -31,10 +31,16 @@ struct MiraLandingView: View {
             }
             Text(detail).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             if lifecycle.canOpen { Button("Connect to Mira") { lifecycle.open() }.buttonStyle(.borderedProminent) }
+            if case .cleanupIncomplete = lifecycle.presence {
+                Button("Retry audio worker release") { lifecycle.stopAudioSession() }.buttonStyle(.bordered)
+            }
             if lifecycle.presence.isLive {
                 MicrophoneStripView(strip: lifecycle.micStrip)
                 if lifecycle.robotLinked {
-                    Toggle("Muted", isOn: Binding(get: { lifecycle.muted }, set: { lifecycle.setMuted($0) }))
+                    Button("Stop audio session") { localStop(); lifecycle.stopAudioSession() }
+                        .buttonStyle(.bordered)
+                    Text("This stops the whole Companion audio worker; microphone-only mute is not available. A call in your call app may continue.")
+                        .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     if !lifecycle.physicalConsent { Text("Waiting for the robot’s physical consent.").font(.caption).foregroundStyle(.secondary) }
                     if lifecycle.call == .notAttached {
                         Button("My Mira call is running on this Mac") { lifecycle.attestCall(running: true) }
@@ -55,7 +61,10 @@ struct MiraLandingView: View {
                             Text("Session limit: \(remaining) seconds left").font(.caption)
                         }
                     }
-                    Button("Stop session") { localStop(); controller.cancel() }.disabled(!controller.canCancel)
+                    if !lifecycle.robotLinked {
+                        Button("Stop session") { localStop(); controller.cancel() }
+                            .disabled(!controller.canCancel || lifecycle.presence == .closing)
+                    }
                     Text("The robot’s physical stop also ends the session.").font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -67,12 +76,10 @@ struct MiraLandingView: View {
         .onChange(of: controller.phase) { _, _ in lifecycle.refreshTrust() }
     }
     private var status: String {
-        if session.pairedThisSession && !lifecycle.presence.isLive { return "Paired for this session" }
-        if session.showsControls && !lifecycle.presence.isLive { return "Session cleanup pending" }
-        return MiraPresentation.status(lifecycle.presence)
+        MiraPresentation.homeStatus(lifecycle.presence, session: session)
     }
     private var detail: String {
-        if session.pairedThisSession && !lifecycle.presence.isLive { return "The pairing is temporary. Companion cannot verify or join your existing Mira call through a supported route; call continuity and speaker playback remain unverified." }
-        return MiraPresentation.detail(lifecycle.presence, muted: lifecycle.muted, closeRecord: lifecycle.closeRecord, lastFailure: lifecycle.lastFailure)
+        MiraPresentation.homeDetail(lifecycle.presence, session: session, workerActivity: controller.activity,
+                                    closeRecord: lifecycle.closeRecord, lastFailure: lifecycle.lastFailure)
     }
 }

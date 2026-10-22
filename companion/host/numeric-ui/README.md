@@ -7,11 +7,14 @@ See [offline boundaries and next-trial gates](COMPANION-OFFLINE.md) and
 unsaved preference preview; durable enrollment and integration execution are disabled.
 
 USB and verified Wi-Fi TLS carry pairing; there is no Bluetooth transport.
-Click Pair StackChan, then physically tap Pair on the muted robot.
+Click Pair StackChan, then physically tap Pair on the robot.
 Compare the six digits and confirm on both devices. Cancel/Retry closes the attempt.
 On installed a67e6c2, an audio-scoped matching confirmation is explicitly labeled
-"Pair & authorize mic/speaker" and authorizes that one local session. Use Mac
-Cancel or robot Back to stop; there are no separate Connect/Allow/Mute buttons.
+"Pair & authorize mic/speaker" and gives physical consent for that one local session.
+Companion has no microphone-only mute: leave physical Listen off when audio is not
+authorized, or stop the whole audio session. A stop reports release only after a clean
+worker exit; a call in the user's call app may continue. The robot physical stop also ends
+the session.
 Audio is blocked by default. A separately approved local audio check requires both
 `--approved-test` and `--approved-audio`, a matching fresh one-use authorization,
 a valid `expected_boot_nonce` in that fresh authorization, and both matching-number

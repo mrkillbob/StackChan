@@ -231,7 +231,7 @@ enum MiraPresence: Equatable {
 
 // MARK: Microphone state strip
 
-enum RobotMicState: String, Equatable { case off, armed, streaming, suppressedForPlayback }
+enum RobotMicState: String, Equatable { case unknown, off, armed, streaming, suppressedForPlayback, conflictingTelemetry }
 enum HostBridgeState: String, Equatable { case idle, open }
 /// The call's own mute lives inside the call app and cannot be read from here.
 enum CallMicState: String, Equatable { case unknown }
@@ -242,10 +242,12 @@ struct MicrophoneStrip: Equatable {
     let call: CallMicState
     var robotText: String {
         switch robot {
+        case .unknown: return "Robot mic: capture state unknown (worker does not report capture status)"
         case .off: return "Robot mic: off"
         case .armed: return "Robot mic: armed (nothing flowing yet)"
         case .streaming: return "Robot mic: streaming"
         case .suppressedForPlayback: return "Robot mic: paused while StackChan plays sound"
+        case .conflictingTelemetry: return "Robot mic: conflicting worker reports (capture flow and playback suppression)"
         }
     }
     var bridgeText: String { bridge == .open ? "Host bridge: open" : "Host bridge: idle" }
@@ -345,10 +347,10 @@ final class CompanionLifecycle: ObservableObject {
 
     var micStrip: MicrophoneStrip {
         let robot: RobotMicState
-        if !captureMayArm { robot = .off }
+        if captureFlowing && playbackSuppressing { robot = .conflictingTelemetry }
         else if playbackSuppressing { robot = .suppressedForPlayback }
         else if captureFlowing { robot = .streaming }
-        else { robot = .armed }
+        else { robot = .unknown }
         return MicrophoneStrip(robot: robot, bridge: robotLinked ? .open : .idle, call: .unknown)
     }
 
@@ -485,12 +487,20 @@ final class CompanionLifecycle: ObservableObject {
     /// Bridge activity reported by the existing worker; informational, never grants anything.
     func bridgeActivityReported(epoch e: UInt64, captureFlowing flowing: Bool, playbackSuppressing suppressing: Bool) {
         guard e == epoch, robotLinked, presence.isLive else { return }
-        captureFlowing = flowing && captureMayArm; playbackSuppressing = suppressing
+        // These are worker observations, not commands. Show the observed flow even if
+        // Companion's separate local consent projection says it should not be armed.
+        captureFlowing = flowing; playbackSuppressing = suppressing
     }
+    /// Updates only the lifecycle's local projection; it does not command the audio worker.
     func setMuted(_ value: Bool) {
-        if value { muted = true; captureFlowing = false; disableSpeaker(); return }
+        if value { muted = true; disableSpeaker(); return }
         guard canUnmute else { return }
         muted = false
+    }
+    /// There is no separately acknowledged worker mute command. Stop the owned audio worker
+    /// and wait for its exact process exit before reporting the Companion session released.
+    func stopAudioSession(_ finished: ((Bool) -> Void)? = nil) {
+        close(reason: .userClosed, finished)
     }
     func setSpeaker(_ on: Bool) {
         if !on { disableSpeaker(); return }
@@ -503,8 +513,24 @@ final class CompanionLifecycle: ObservableObject {
     /// single atomic worker shutdown starts immediately; "closed" is reported only after the
     /// exact worker exit confirms release.
     func close(reason: CloseReason = .userClosed, _ finished: ((Bool) -> Void)? = nil) {
-        // Pairing views also own a worker, so every non-closed state runs the release.
-        if presence == .closed { finished?(true); return }
+        // Pairing views can start a new worker after Stop closed the call lifecycle.
+        // Recheck the shared resource owner on Quit instead of trusting that older close.
+        if presence == .closed {
+            if closeInFlight { finished?(false); return }
+            closeInFlight = true
+            resources.shutdownAndConfirmRelease { [weak self] ok in
+                guard let self = self else { finished?(ok); return }
+                self.closeInFlight = false
+                self.closeLog.append(.workerRelease)
+                if !ok {
+                    self.closeRecord = CloseRecord(reason: reason, epoch: self.epoch, released: false,
+                                                   call: self.closeRecord?.call ?? .none)
+                    self.presence = .cleanupIncomplete([CloseStep.workerRelease.rawValue])
+                }
+                finished?(ok)
+            }
+            return
+        }
         if closeInFlight { finished?(false); return }
         closeInFlight = true
         let hadCall = presence.isLive
