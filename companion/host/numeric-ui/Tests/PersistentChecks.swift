@@ -107,7 +107,7 @@ for line in sys.stdin:
         precondition(retained.phase == .closed && retained.cleanupIssues.isEmpty, "persistent owner was killed before verified cleanup")
         // Real inert import check with the same environment used by the worker.
         let runtime = PairingController(approved: false, root: URL(fileURLWithPath: "/Users/mikedemott/Developer/AgentWork/StackChan"))
-        let probe=Process();probe.executableURL=URL(fileURLWithPath:"/opt/homebrew/bin/python3.14")
+        let probe=Process();probe.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["STACKCHAN_TEST_PYTHON"] ?? "/usr/bin/python3")
         probe.arguments=["-B","-c","import native_adapter, native_conversation"]
         probe.currentDirectoryURL=URL(fileURLWithPath:runtime.rememberedWorkerLaunchArguments.last!).deletingLastPathComponent()
         probe.environment=runtime.workerLaunchEnvironment
