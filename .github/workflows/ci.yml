@@ -3,6 +3,7 @@ name: StackChan CI
 on:
   pull_request:
   push:
+    branches: [main, mira-desk-integration, claude/todo20-companion-lifecycle, codex/w1-consent-revocation, codex/combined-navigation-p2]
   workflow_dispatch:
 
 # PR-controlled code runs only on disposable GitHub-hosted runners.
@@ -99,6 +100,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Compile actual firmware without device access
         run: |
+          # checkout runs as the host UID; this disposable SDK container runs as root.
+          chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
           git log -1 --format=fuller
           . /opt/esp/idf/export.sh
           cd firmware
