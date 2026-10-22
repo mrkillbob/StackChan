@@ -7,7 +7,7 @@ import Darwin
   precondition(condition(), "bounded fixture did not complete")
  }
  static func fake(_ code: String) -> Process {
-  let p=Process();p.executableURL=URL(fileURLWithPath:"/opt/homebrew/bin/python3.14")
+  let p=Process();p.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["STACKCHAN_TEST_PYTHON"] ?? "/usr/bin/python3")
   p.arguments=["-B","-u","-c",FixtureCustody.wrap(code)]
   return p
  }
