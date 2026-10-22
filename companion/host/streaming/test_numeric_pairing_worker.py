@@ -23,6 +23,14 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         def loader():self.loaded+=1;raise RuntimeError('synthetic loader boundary')
         return w.NumericWorker(approved=approved,paused=lambda:paused,serial_factory=factory,runtime_loader=loader,emit=self.events.append,clock=self.clock,sleep=self.sleep)
     async def sleep(self,n):self.clock.now+=n;await asyncio.sleep(0)
+    async def test_main_does_not_report_clean_exit_after_worker_cleanup_error(self):
+        emitted=[]
+        def fail_run(_args):raise RuntimeError('synthetic cleanup failure')
+        with patch.object(w,'_run',new=fail_run):
+            with patch.object(w,'_output',side_effect=emitted.append):
+                result=w.main([])
+        self.assertNotEqual(result,0)
+        self.assertEqual(emitted,[{'state':'failed','message':'cleanup_unconfirmed','cleanup':['audio']}])
     async def test_import_and_constructor_inert(self):
         worker=self.worker();self.assertEqual(self.opened,0);self.assertEqual(self.loaded,0);self.assertIsNone(worker.port)
     async def test_activation_and_pause_denial_before_open(self):

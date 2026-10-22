@@ -84,6 +84,8 @@ jobs:
           "$STACKCHAN_OFFLINE_BUILD_ROOT/AudioEndpointDirectionChecks"
           "$STACKCHAN_OFFLINE_BUILD_ROOT/StatusChecks"
           "$STACKCHAN_OFFLINE_BUILD_ROOT/RememberedDeviceChecks"
+          "$STACKCHAN_OFFLINE_BUILD_ROOT/MiraLifecycleChecks"
+          "$STACKCHAN_OFFLINE_BUILD_ROOT/W1LifecycleChecks"
 
   firmware-esp:
     name: Firmware ESP32-S3 build

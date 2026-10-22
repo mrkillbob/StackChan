@@ -10,7 +10,7 @@ mkdir -p "$BUILD_ROOT/module-cache"
 for unit in CompanionSinkBridge WebcamGate; do
   /usr/bin/nice -n 20 /usr/bin/xcrun clang -fobjc-arc -fmodules -fmodules-cache-path="$BUILD_ROOT/module-cache" -mmacosx-version-min=14.0 -c "$WEB_ROOT/$unit.m" -o "$BUILD_ROOT/$unit.o"
 done
-for fixture in AudioEndpointDirectionChecks StatusChecks LifecycleChecks CompanionChecks RememberedDeviceChecks PersistentChecks; do
+for fixture in AudioEndpointDirectionChecks StatusChecks LifecycleChecks CompanionChecks RememberedDeviceChecks PersistentChecks MiraLifecycleChecks W1LifecycleChecks; do
   /usr/bin/nice -n 20 /usr/bin/xcrun swiftc -swift-version 5 -module-cache-path "$BUILD_ROOT/module-cache" -import-objc-header "$WEB_ROOT/Companion-Bridging-Header.h" "$UI_ROOT"/Models/*.swift "$UI_ROOT"/Services/*.swift "$UI_ROOT/Tests/FixtureCustody.swift" "$UI_ROOT/Tests/$fixture.swift" "$BUILD_ROOT/CompanionSinkBridge.o" "$BUILD_ROOT/WebcamGate.o" -framework CoreMediaIO -framework CoreMedia -framework CoreVideo -o "$BUILD_ROOT/$fixture"
   if [[ "$MODE" != "--compile-only" ]]; then "$BUILD_ROOT/$fixture"; fi
 done

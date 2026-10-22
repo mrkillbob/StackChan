@@ -7,6 +7,28 @@ those source capabilities are not evidence of a configured or active session.
 The existing saved device pairing is separate from this source qualification.
 
 USB and verified Wi-Fi TLS carry pairing; there is no Bluetooth transport.
+Click Pair StackChan, then physically tap Pair on the robot.
+Compare the six digits and confirm on both devices. Cancel/Retry closes the attempt.
+On installed a67e6c2, an audio-scoped matching confirmation is explicitly labeled
+"Pair & authorize mic/speaker" and gives physical consent for that one local session.
+Companion has no microphone-only mute: leave physical Listen off when audio is not
+authorized, or stop the whole audio session. A stop reports release only after a clean
+worker exit; a call in the user's call app may continue. The robot physical stop also ends
+the session.
+Audio is blocked by default. A separately approved local audio check requires both
+`--approved-test` and `--approved-audio`, a matching fresh one-use authorization,
+a valid `expected_boot_nonce` in that fresh authorization, and both matching-number
+confirmations before any audio admission. A mismatched Ready aborts before key
+loading, listener creation, protocol write or grant; its nonce/reset evidence survives.
+The pairing backend suppresses application DTR/RTS updates and clears/verifies HUPCL
+while retaining one bounded SCNP write. OS USB behavior still requires physical
+boot continuity qualification; these controls cannot prove reset-free hardware.
+
+Default app launch is an inert preview. Live mode requires a separately approved
+exact firmware image and test, `--approved-test`, and removal of the project pause
+marker by the approved test operator. Keep the marker until that approval.
+The window has no token field, clipboard operation, or credential log.
+
 The comparison code is a human session check within approved TLS trust, not a
 password or a generic cryptographic SAS protocol. Both confirmations remain
 required for enrollment. Camera and wake providers remain unavailable until
@@ -28,7 +50,7 @@ signature data; no explicit codesign, installed-app replacement or activation is
 performed by compile-only mode. It does not certify an artifact as never signed.
 
 `STACKCHAN_OFFLINE_BUILD_ROOT` selects the fixture output/module-cache directory.
-`--compile-only` on the offline helper compiles all six fixtures and runs none.
+`--compile-only` on the offline helper compiles all eight fixtures and runs none.
 The default offline mode executes the fixtures without resource supervision.
 For bounded process-fixture qualification, `script/run_process_fixtures.py` uses
 the separate audited no-fork policy documented in `script/FOUNDATION-FIXTURES.md`.

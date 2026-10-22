@@ -88,9 +88,18 @@ final class PairingController: ObservableObject {
     private var input: FileHandle?
     private var output: FileHandle?
     private var buffer = Data()
-    private var shutdownDone: ((Bool) -> Void)?
+    // Every shutdown request joins one in-flight stop: all completions are kept and each runs once.
+    private var shutdownCompletions: [(Bool) -> Void] = []
+    private var escalationGeneration: UUID?
+    private(set) var escalationSchedules = 0
+    // Test-only hooks; the defaults are the production behavior. `escalationDelays` shortens the
+    // terminate/kill/deadline timers. `finalizationGate`, when set, holds every pipe read and the
+    // termination handler's retirement until the test opens it (bounded to 5 s per waiter).
+    var escalationDelays: (terminate: Double, kill: Double, deadline: Double) = (4, 6, 8)
+    var finalizationGate: DispatchSemaphore?
     private var generation = UUID()
     private var requiresProcessExit = false
+    private var lastWorkerExitConfirmed: Bool?
     private var receivedUptime = ProcessInfo.processInfo.systemUptime
     private let processFactory: (() -> Process)?
     init(approved: Bool, root: URL, processFactory: (() -> Process)? = nil, audioApproved: Bool = false, oneAttempt: Bool = true, audioMode: CompanionAudioMode = .transportTest, restorationVerifier: SessionRestorationVerifying? = nil, audioRouteAvailability: @escaping () -> Bool = { AudioRouteCatalog.requiredEndpointsAvailable() }) { self.restorationVerifier = restorationVerifier; self.audioMode = audioMode; self.oneAttempt = oneAttempt; self.approved = approved; self.audioApproved = approved && audioApproved; self.root = root; self.processFactory = processFactory; self.audioRouteAvailability = audioRouteAvailability }
@@ -177,36 +186,36 @@ final class PairingController: ObservableObject {
         if !approved { return "Prepared preview. Pairing needs approval for one temporary USB/Wi-Fi check." }
         if !cleanupIssues.isEmpty {
             var checks = [String]()
-            if cleanupIssues.contains(.audio) { checks.append("confirm the original microphone and speaker routes are restored, keeping StackChan muted") }
+            if cleanupIssues.contains(.audio) { checks.append("confirm the original microphone and speaker routes are restored and the worker has released audio") }
             if cleanupIssues.contains(.grant) { checks.append("verify the temporary pairing grant was revoked") }
             if cleanupIssues.contains(.usb) { checks.append("verify the USB pairing session is closed") }
             return "Cleanup is not confirmed. Do not try again until you " + checks.joined(separator: ", and ") + "."
         }
         if stage == .restoring {
-            return "The local session is stopping or closed. Keep StackChan muted. The operator must independently verify original microphone/speaker routes and owned process, USB and listener closure. This app cannot yet verify that supervisor receipt."
+            return "The local session is stopping or closed. Microphone capture state is unknown until worker release is confirmed. The operator must independently verify original microphone/speaker routes and owned process, USB and listener closure. This app cannot yet verify that supervisor receipt."
         }
         if requiresOriginalCall && phase == .idle {
             return "After the operator completes the approved route preparation, start a fresh voice call in this same original dot conversation. Confirm it is open below. Automatic call launch is unavailable."
         }
         if let recovery = recovery { return recovery.guidance }
-        if phase.terminal && oneAttempt { return "Session ended. Keep StackChan muted. A fresh approved check is needed before another attempt." }
+        if phase.terminal && oneAttempt { return "Session ended. Microphone capture state is unknown until cleanup is verified. A fresh approved check is needed before another attempt." }
         switch phase {
-        case .idle: return "Ready now. Open Companion on StackChan and leave it muted. Click Pair StackChan to begin."
+        case .idle: return "Ready now. Open Companion on StackChan and leave physical Listen off. Click Pair StackChan to begin."
         case .opening: return "Opening USB before pairing. Wait for the robot to settle."
         case .usb_ready, .waiting_robot: return "Keep USB connected. On the robot, tap Pair."
         case .comparing, .waiting_confirmation:
             if audioApproved { return confirmationSent ? "Confirm the same number on StackChan only if both numbers match. Its Pair & authorize mic/speaker button gives physical consent for the temporary microphone and speaker session." : "Compare this number with the correct StackChan screen. Confirm on both only if they match. The robot’s Pair & authorize mic/speaker button gives physical consent for the temporary microphone and speaker session." }
             return confirmationSent ? "Confirm the same number on StackChan. Only accept if both numbers match." : "Compare this number with the correct StackChan screen. Confirm on both only if they match."
         case .staging: return "Both confirmations received. Waiting for StackChan’s acknowledgement."
-        case .restoring: return "Closing temporary access. Keep StackChan muted while cleanup is verified."
+        case .restoring: return "Closing temporary access. Keep physical Listen off while cleanup is verified."
         case .paired:
-            if audioApproved && audioMode == .nativeConversation && activity == .conversation {
-                return "Physical mic consent was accepted. Your original call audio is being bridged for this bounded trial. Mira identity, conversation continuity and physical playback still need human confirmation. Use Cancel or the physical stop to end."
+            if activity == .conversation {
+                return "The worker reports conversation activity. Microphone capture state is unknown; physical playback and call destination are not verified here. Use Cancel or the physical stop to end."
             }
-            return audioApproved ? "Pairing confirmed. Waiting for the robot’s physical microphone consent acknowledgement from its matching-number confirmation. Use Cancel on this Mac or Back on StackChan to stop." : "Pairing acknowledged. Keep StackChan muted. Audio needs separate approval."
+            return audioApproved ? "Pairing confirmed. Waiting for the robot’s physical microphone consent acknowledgement from its matching-number confirmation. Use Cancel on this Mac or Back on StackChan to stop." : "Pairing acknowledged. Leave physical Listen off. Audio needs separate approval."
         case .cancelled: return "Cancelled. Any temporary grant is revoked. Retry starts a fresh attempt."
         case .expired: return "The session expired. Retry starts a fresh attempt; no previous grant is reused."
-        case .failed: return "Pairing stopped. Check the robot is muted and connected before a fresh retry."
+        case .failed: return "Pairing stopped. Microphone capture state is unknown; verify worker cleanup and leave physical Listen off before a fresh retry."
         case .closed: return "Session closed. Temporary access ended."
         }
     }
@@ -231,6 +240,7 @@ final class PairingController: ObservableObject {
             phase = .failed; recovery = .setup; return
         }
         let activeGeneration = UUID(); generation = activeGeneration; buffer.removeAll(); requiresProcessExit = false
+        lastWorkerExitConfirmed = nil
         if processFactory == nil {
         process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/python3.14")
         process.arguments = persistentMode ? rememberedWorkerLaunchArguments : workerLaunchArguments
@@ -240,24 +250,64 @@ final class PairingController: ObservableObject {
         process.standardInput = incoming; process.standardOutput = outgoing
         // Raw exceptions/IO are never reflected into the UI or a log file.
         process.standardError = FileHandle.nullDevice
+        // Pipe reads and the termination notice arrive on unrelated queues. A worker that prints a
+        // final status (for example a cleanup report) and exits at once must not have that status
+        // dropped by the termination block. PipeReader is the only reader of the pipe: it is
+        // nonblocking for its whole life and is never switched back, so a handler that was already
+        // queued cannot block or raise on an empty pipe that a descendant still holds open. Reads
+        // and enqueues happen under its lock; termination retires it (draining what is left) before
+        // enqueuing its block, so a queued handler that runs afterwards reads nothing.
+        guard let reader = PipeReader(fd: outgoing.fileHandleForReading.fileDescriptor) else {
+            try? incoming.fileHandleForReading.close(); try? incoming.fileHandleForWriting.close()
+            try? outgoing.fileHandleForReading.close(); try? outgoing.fileHandleForWriting.close()
+            phase = .failed; recovery = .setup; return
+        }
+        let gate = finalizationGate
         outgoing.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            DispatchQueue.main.async {
-                guard self?.generation == activeGeneration else { return }
-                self?.receive(data)
+            if let gate = gate { _ = gate.wait(timeout: .now() + 5); gate.signal() }
+            let outcome = reader.read { data in
+                DispatchQueue.main.async {
+                    guard self?.generation == activeGeneration else { return }
+                    self?.receive(data)
+                }
+            }
+            switch outcome {
+            case .eof, .retired: handle.readabilityHandler = nil   // stop a source that would spin
+            case .failed:
+                // A hard read error means output may be lost: never let it pass as a quiet release.
+                handle.readabilityHandler = nil
+                DispatchQueue.main.async {
+                    guard let self = self, self.generation == activeGeneration else { return }
+                    self.failProtocol()
+                }
+            case .data, .wouldBlock, .interrupted: break
             }
         }
         process.terminationHandler = { [weak self] process in
-            DispatchQueue.main.async {
-                guard let self = self, self.generation == activeGeneration, self.child === process else { return }
-                self.webcam.ownerLost(); self.localVision.disable(); self.gestures.ownerLost()
-                self.generation = UUID()
-                self.buffer.removeAll()
-                self.output?.readabilityHandler = nil; self.output = nil; self.input = nil; self.child = nil
-                if self.phase.busy { self.phase = .failed; self.code = nil; self.recovery = self.recovery ?? .workerExit }
-                self.cleanupPending = false; self.requiresProcessExit = false
-                self.refreshRestoration()
-                let done = self.shutdownDone; self.shutdownDone = nil; done?(!self.persistentMode || self.cleanupIssues.isEmpty)
+            if let gate = gate { _ = gate.wait(timeout: .now() + 5); gate.signal() }
+            reader.retire { retirement in
+                let remainder = retirement.data
+                DispatchQueue.main.async {
+                    guard let self = self, self.generation == activeGeneration, self.child === process else { return }
+                    self.webcam.ownerLost(); self.localVision.disable(); self.gestures.ownerLost()
+                    if !remainder.isEmpty { self.receive(remainder) }
+                    guard self.generation == activeGeneration else { return }
+                    // Exit without a complete final JSON line is not evidence of cleanup.
+                    let incompleteStatus = !self.buffer.isEmpty
+                    self.generation = UUID()
+                    self.buffer.removeAll()
+                    self.output?.readabilityHandler = nil; self.output = nil; self.input = nil; self.child = nil
+                    // A read error or an incomplete final drain means output may be missing: not a release.
+                    let released = Self.releaseVerdict(exitedCleanly: process.terminationReason == .exit && process.terminationStatus == 0,
+                                                       cleanupIssuesEmpty: self.cleanupIssues.isEmpty, readFaulted: retirement.faulted || incompleteStatus)
+                    if (retirement.faulted || incompleteStatus) && self.recovery == nil { self.recovery = .protocolFailure }
+                    self.lastWorkerExitConfirmed = released
+                    if self.phase == .cancelled { self.updateRememberedReleaseStatus(released) }
+                    if self.phase.busy { self.phase = .failed; self.code = nil; self.recovery = self.recovery ?? .workerExit }
+                    self.cleanupPending = !released; self.requiresProcessExit = false
+                    self.refreshRestoration()
+                    self.finishShutdown(released)
+                }
             }
         }
         do { try process.run(); child = process; input = incoming.fileHandleForWriting; output = outgoing.fileHandleForReading }
@@ -281,9 +331,15 @@ final class PairingController: ObservableObject {
             if (requiresProcessExit && !status.phase.terminal && status.phase != .restoring) || (cleanupPending && !status.phase.terminal && status.phase != .restoring) { continue }
             phase = status.phase; if phase.terminal || phase == .restoring { webcam.ownerLost(); localVision.disable(); gestures.ownerLost() }; code = status.code; remaining = status.remaining
             if persistentMode {
-                if phase == .paired { rememberedStatus = status.activity == nil ? "Pairing stored. Select the StackChan audio devices in your Voice app, then choose Use StackChan." : "Audio listener ready. Press Listen on StackChan to enable microphone and speaker." }
-                if phase == .cancelled { rememberedStatus = "Use StackChan stopped. Audio is closed; wireless trust remains saved unless you chose Forget." }
-                if phase == .failed { rememberedStatus = "Operation failed. Keep StackChan muted and verify cleanup before retrying." }
+                if phase == .paired {
+                    rememberedStatus = status.activity == nil
+                        ? "Pairing stored. Select the StackChan audio devices in your Voice app, then choose Use StackChan."
+                        : "Audio listener ready. " + MiraPresentation.workerAudioStatus(status.activity)
+                }
+                if phase == .cancelled {
+                    rememberedStatus = "Use StackChan stop was requested. Worker release is not confirmed; microphone capture state is unknown. Wireless trust remains saved unless you chose Forget."
+                }
+                if phase == .failed { rememberedStatus = "Operation failed. Microphone capture state is unknown; verify cleanup before retrying." }
                 if phase == .closed { rememberedStatus = "Listener closed. Remembered trust is still saved." }
             }
             activity = status.activity; audioRemaining = status.audioRemaining
@@ -302,10 +358,26 @@ final class PairingController: ObservableObject {
             if phase.terminal { confirmationSent = false; cleanupPending = !cleanupIssues.isEmpty }
         }
     }
+    /// Release is confirmed only by an ordered finalization: clean exit, no reported cleanup issue, and
+    /// every byte of final output read without error. The deadline timer never produces this verdict.
+    static func releaseVerdict(exitedCleanly: Bool, cleanupIssuesEmpty: Bool, readFaulted: Bool) -> Bool {
+        exitedCleanly && cleanupIssuesEmpty && !readFaulted
+    }
+    /// Malformed-protocol contract (existing behavior, preserved and tested): a status the controller cannot
+    /// decode marks the attempt failed (`recovery == .protocolFailure`), sets cleanup pending and asks the
+    /// worker to stop. If the worker then exits 0 having reported no cleanup issue and every byte was read
+    /// cleanly, that exit is accepted as a confirmed release. Only a worker-reported cleanup issue, a non-clean
+    /// exit, a read error or an incomplete drain keeps the release unconfirmed.
     private func failProtocol() {
         webcam.ownerLost(); localVision.disable(); gestures.ownerLost()
         phase = .failed; code = nil; recovery = .protocolFailure; cleanupPending = true
         shutdown { [weak self] closed in self?.cleanupPending = !closed }
+    }
+    private func updateRememberedReleaseStatus(_ released: Bool) {
+        guard persistentMode else { return }
+        rememberedStatus = released
+            ? "Use StackChan stopped. Worker process release is confirmed; wireless trust remains saved unless you chose Forget."
+            : "Use StackChan stop is not confirmed. Microphone capture state is unknown; verify cleanup before retrying. Wireless trust remains saved unless you chose Forget."
     }
     func explicitCameraPermission(_ mode: CameraPermissionMode) {
         guard persistentMode, phase == .paired, activity != nil, !cleanupPending, input != nil,
@@ -347,20 +419,29 @@ final class PairingController: ObservableObject {
     func cancel() { webcam.ownerLost(); localVision.disable(); gestures.ownerLost(); guard canCancel else { return }; cleanupPending = true; code = nil; send("cancel") }
     func shutdown(_ done: @escaping (Bool) -> Void) {
         webcam.ownerLost(); localVision.disable(); gestures.ownerLost()
-        guard child != nil else { done(true); return }
-        cleanupPending = true; requiresProcessExit = true; send("cancel"); try? input?.close(); input = nil
+        guard child != nil else { done((lastWorkerExitConfirmed ?? true) && cleanupIssues.isEmpty); return }
+        // A request while a stop is already in flight joins it: no second cancel, no second timer set.
+        let alreadyRequested = escalationGeneration == generation
+        cleanupPending = true; requiresProcessExit = true
+        if !alreadyRequested { send("cancel"); try? input?.close(); input = nil }
         stopAfterRequest(done)
     }
-    private func stopAfterRequest(_ done: @escaping (Bool) -> Void) {
-        guard let process = child else { done(true); return }
-        shutdownDone = done
+    private func finishShutdown(_ released: Bool) {
+        let completions = shutdownCompletions; shutdownCompletions = []
+        for completion in completions { completion(released) }
+    }
+    private func stopAfterRequest(_ done: ((Bool) -> Void)?) {
+        guard let process = child else { done?(true); return }
+        if let done = done { shutdownCompletions.append(done) }
         let activeGeneration = generation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self, weak process] in
+        guard escalationGeneration != activeGeneration else { return }   // escalation is scheduled once per worker
+        escalationGeneration = activeGeneration; escalationSchedules += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + escalationDelays.terminate) { [weak self, weak process] in
             guard let self = self, self.generation == activeGeneration,
                   let process = process, self.child === process, process.isRunning else { return }
             process.terminate()
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self, weak process] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + escalationDelays.kill) { [weak self, weak process] in
             guard let self = self, self.generation == activeGeneration,
                   let process = process, self.child === process, process.isRunning else { return }
             // A remembered worker retains exact owners and retries checked close.
@@ -368,12 +449,76 @@ final class PairingController: ObservableObject {
             guard !self.persistentMode else { return }
             Darwin.kill(process.processIdentifier, SIGKILL)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self, weak process] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + escalationDelays.deadline) { [weak self] in
             guard let self = self, self.generation == activeGeneration else { return }
-            // Refuse app termination/retry until this exact child is known closed.
-            let closed = (process == nil || process?.isRunning == false) && (!self.persistentMode || self.cleanupIssues.isEmpty)
-            if closed { self.cleanupPending = false }
-            let completion = self.shutdownDone; self.shutdownDone = nil; completion?(closed)
+            // The termination block is the only place that confirms a release, and it advances `generation`.
+            // Reaching here with the same generation means exit and final output have not been finalized in
+            // order, whatever `Process.isRunning` says now, so the release stays unconfirmed. The late
+            // termination block still publishes the real result.
+            self.cleanupPending = true
+            if self.phase == .cancelled { self.updateRememberedReleaseStatus(false) }
+            // The escalation cycle is spent; a later request starts a fresh one instead of waiting forever.
+            self.escalationGeneration = nil
+            self.finishShutdown(false)
         }
+    }
+}
+
+/// The single read path for a worker's stdout pipe. The descriptor is made nonblocking once and is
+/// never switched back, because a readability handler that was already queued may still run after
+/// the worker exits. Every read is bounded, EINTR is retried a few times, and EAGAIN, EOF and hard
+/// errors are reported as outcomes instead of raised. `retired` is set under the same lock as the
+/// reads, so no read starts after retirement.
+final class PipeReader {
+    enum Outcome: Equatable { case data, wouldBlock, interrupted, eof, retired, failed(Int32) }
+    /// What retirement hands back: the final bytes, and whether anything may be missing (an earlier hard read
+    /// error, or a final drain that ended on an error, an interrupt or the byte bound instead of EOF/empty).
+    struct Retirement { let data: Data; let faulted: Bool }
+    private let fd: Int32
+    private let limit: Int
+    private let lock = NSLock()
+    private var isRetired = false
+    private var fault = false       // sticky: output may have been lost
+    init?(fd: Int32, limit: Int = 16384) {
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { return nil }
+        self.fd = fd; self.limit = limit
+    }
+    /// Reads what is available (at most `limit` bytes) and hands it to `deliver` while still holding the lock.
+    func read(deliver: (Data) -> Void) -> Outcome {
+        lock.lock(); defer { lock.unlock() }
+        guard !isRetired else { return .retired }
+        let (data, outcome) = readLocked()
+        if case .failed = outcome { fault = true }
+        if !data.isEmpty { deliver(data) }
+        return outcome
+    }
+    /// Reads the remainder once, marks the reader retired, and runs `body` with the result under the lock.
+    func retire<T>(_ body: (Retirement) -> T) -> T {
+        lock.lock(); defer { lock.unlock() }
+        var data = Data()
+        if !isRetired {
+            let (remainder, outcome) = readLocked()
+            data = remainder
+            switch outcome {
+            case .eof, .wouldBlock: break                 // drained: nothing more is available now
+            default: fault = true                         // error, interrupt or byte bound: incomplete
+            }
+            isRetired = true
+        }
+        return body(Retirement(data: data, faulted: fault))
+    }
+    private func readLocked() -> (Data, Outcome) {
+        var collected = Data(), chunk = [UInt8](repeating: 0, count: 4096), interrupts = 0
+        while collected.count < limit {
+            let count = Darwin.read(fd, &chunk, min(chunk.count, limit - collected.count))
+            if count > 0 { collected.append(contentsOf: chunk[0..<count]); continue }
+            if count == 0 { return (collected, .eof) }
+            let error = errno
+            if error == EINTR { interrupts += 1; if interrupts <= 16 { continue }; return (collected, .interrupted) }
+            if error == EAGAIN { return (collected, .wouldBlock) }
+            return (collected, .failed(error))
+        }
+        return (collected, .data)     // bound reached; the source fires again if more remains
     }
 }

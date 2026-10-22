@@ -16,7 +16,8 @@ case "$MODE" in
   run|--compile-only|--build-only|--verify|--debug|--logs|--telemetry) ;;
   *) echo "usage: $0 [run|--compile-only|--build-only|--verify|--debug|--logs|--telemetry]" >&2; exit 2 ;;
 esac
-mkdir -p "$BUNDLE/Contents/MacOS" "$BUILD_ROOT/module-cache"
+mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources" "$BUILD_ROOT/module-cache"
+/bin/bash "$TASK_ROOT/script/package_resources.sh" "$TASK_ROOT" "$BUNDLE"
 WEB_ROOT="$PROJECT_ROOT/companion/webcam"
 for unit in CompanionSinkBridge WebcamGate; do
   /usr/bin/nice -n 20 /usr/bin/xcrun clang -fobjc-arc -fmodules -fmodules-cache-path="$BUILD_ROOT/module-cache" -mmacosx-version-min=14.0 -c "$WEB_ROOT/$unit.m" -o "$BUILD_ROOT/$unit.o"

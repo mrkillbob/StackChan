@@ -41,6 +41,7 @@ for line in sys.stdin:
   native.primary();pump{native.phase == .comparing};assert(native.stage == .pairing)
   native.primary();pump{native.activity == .physicalConsent};assert(native.stage == .physicalConsent)
   pump{native.activity == .conversation};assert(native.stage == .conversation && native.secondsRemaining() != nil)
+  assert(native.instruction.localizedCaseInsensitiveContains("capture state is unknown"), "conversation copy cannot claim capture merely from worker activity")
   native.cancel();pump{native.phase == .restoring};assert(native.stage == .restoring && !native.canPrimary)
   pump{native.phase == .closed};assert(native.stage == .restoring)
   var closed=false;native.shutdown{closed=$0};pump{closed};assert(native.stage == .restoring)
@@ -59,6 +60,21 @@ print(json.dumps({'state':'closed','message':'closed'}),flush=True)
   assert(expired.instruction.contains("trust profile has expired"))
   var stopped=false;expired.shutdown{stopped=$0};pump{stopped}
   assert(expired.recovery == .trustExpired)
+  let ambiguousShutdown=PairingController(approved:true,root:root,processFactory:{fake("""
+import sys,json
+for line in sys.stdin:
+ if json.loads(line)['command']=='prepare':print(json.dumps({'state':'comparing','code':'012345'}),flush=True)
+ elif json.loads(line)['command']=='cancel':
+  print(json.dumps({'state':'closed','message':'closed'}),flush=True)
+  sys.exit(1)
+""")},oneAttempt:false)
+  ambiguousShutdown.primary();pump{ambiguousShutdown.phase == .comparing}
+  var ambiguousRelease:Bool?=nil
+  ambiguousShutdown.shutdown{ambiguousRelease=$0};pump{ambiguousRelease != nil}
+  assert(ambiguousRelease == false && ambiguousShutdown.cleanupPending, "generic closed status plus failed worker exit is not release confirmation")
+  var retriedRelease:Bool?=nil
+  ambiguousShutdown.shutdown{retriedRelease=$0}
+  assert(retriedRelease == false && ambiguousShutdown.cleanupPending, "cached failed exit cannot become a later success")
   let disconnected="""
 import sys,json,os,time,signal
 signal.signal(signal.SIGTERM,signal.SIG_IGN)
@@ -70,11 +86,11 @@ time.sleep(30)
   let broken=PairingController(approved:true,root:root,processFactory:{fake(disconnected)},oneAttempt:false)
   broken.primary();pump{broken.phase == .comparing}
   broken.primary();assert(broken.phase == .failed && broken.recovery == .connection && !broken.canPrimary)
-  var brokenStopped=false;broken.shutdown{brokenStopped=$0}
+  var brokenStopped:Bool?=nil;broken.shutdown{brokenStopped=$0}
   // The controller escalates at6s and reports uncertainty at8s; allow that policy to finish.
   let deadline=Date().addingTimeInterval(9)
-  while !brokenStopped && Date()<deadline { RunLoop.current.run(until:Date().addingTimeInterval(0.01)) }
-  assert(brokenStopped && !broken.cleanupPending)
-  print("PASS Companion manual call, ready cue, paired/physical-consent/conversation, restoring, session-bound closure, first recovery, closed-input cleanup and unsaved opt-in; no hardware/audio/network")
+  while brokenStopped == nil && Date()<deadline { RunLoop.current.run(until:Date().addingTimeInterval(0.01)) }
+  assert(brokenStopped == false && broken.cleanupPending, "forced worker kill is not a confirmed clean release")
+  print("PASS Companion manual call, ready cue, paired/physical-consent/conversation, restoring, session-bound closure, fail-closed worker exit status and unsaved opt-in; no hardware/audio/network")
  }
 }

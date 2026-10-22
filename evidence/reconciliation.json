@@ -1,0 +1,34 @@
+{
+  "h01_head": "cb2511fd99880355c1fe6887a4ea612f1fdb1b84",
+  "installed_head": "85fb3be834cae873a7f9cb67d23a410beb7d6805",
+  "original_common_ancestor": "1b5765599fba8aaad1811d9a79358ccc7051f5f3",
+  "original_conflicted_paths": 90,
+  "firmware_tree": "Identical to installed head, including clean face, bottom-swipe Home, Moire tombstone, Moire2, callback drain and exact wake pins",
+  "preserved_installed_controls": [
+    "public binding and project paths",
+    "camera ownership/custody cleanup",
+    "Objective-C native bridge compilation",
+    "actual ESP/app CI lanes"
+  ],
+  "h01_controls": [
+    "ordered nonblocking stdout retirement",
+    "bounded coalesced checked shutdown",
+    "honest capture status and whole-worker Stop",
+    "lifecycle launch/close/consent projection"
+  ],
+  "review_repairs": [
+    "Configured registry device/state path replaces historical default; row expiry must match metadata",
+    "Cold Home Connect refreshes route availability",
+    "Reviewed Mira image packaged with fixed digest"
+  ],
+  "registry_limit": "Read-only state/count availability projection; no credential/private key/CA/URI-column reads. Worker independently verifies complete trust tuple/TLS before connecting.",
+  "validation": {
+    "all_eight_swift_fixtures_compile": true,
+    "five_pure_model_fixtures_pass": true,
+    "new_configured_registry_and_cold_route_cases_pass": true,
+    "public_numeric_worker_cases": 48,
+    "public_model_cases": 18,
+    "full_composed_app_and_esp_CI": "Pending new publication and exact-head actual CI; no local full-app retry after sandbox denial"
+  },
+  "device_deployment": false
+}

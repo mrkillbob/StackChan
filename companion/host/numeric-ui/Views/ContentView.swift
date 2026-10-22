@@ -1,5 +1,26 @@
 import SwiftUI
+/// Root: Mira home is always the launch surface. Pairing and the remembered-device controls
+/// open only from its button. A live worker/session stays visible until it completes or is
+/// cancelled, so hiding the pairing view never leaves pairing or audio running behind Home.
 struct ContentView: View {
+    @ObservedObject var controller: PairingController
+    @ObservedObject var lifecycle: CompanionLifecycle
+    var localStop: () -> Void = {}
+    @State private var showPairing = false
+    var body: some View {
+        if !showPairing {
+            MiraLandingView(lifecycle: lifecycle, controller: controller, repair: { showPairing = true }, localStop: localStop)
+        } else {
+            VStack(spacing: 0) {
+                PairingContentView(controller: controller)
+                if !controller.phase.busy {
+                    Button("Back to Mira") { showPairing = false }.buttonStyle(.link).font(.caption).padding(.bottom, 14)
+                }
+            }
+        }
+    }
+}
+struct PairingContentView: View {
     @ObservedObject var controller: PairingController
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -43,7 +64,7 @@ struct ContentView: View {
                 Spacer()
                 Button(controller.primaryTitle, action: controller.primary).buttonStyle(.borderedProminent).disabled(!controller.canPrimary)
             }
-            Text(controller.persistentMode ? "Enrollment saves wireless trust. Use StackChan prepares the listener; physical Listen on the robot remains the audio gate." : (controller.audioApproved ? "Match the number on both screens. The robot’s Pair & authorize mic/speaker button gives physical consent. Use its physical stop to end the session. Nothing is saved as permanent trust." : "Pairing keeps StackChan muted. Audio starts only after separate physical Listen consent."))
+            Text(controller.persistentMode ? "Enrollment saves wireless trust. Use StackChan prepares the listener; physical Listen on the robot remains the audio gate." : (controller.audioApproved ? "Match the number on both screens. The robot’s Pair & authorize mic/speaker button gives physical consent. Use its physical stop to end the session. Nothing is saved as permanent trust." : "Pairing does not grant audio. Audio starts only after separate physical Listen consent."))
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             IntegrationReadinessView()
