@@ -13,7 +13,21 @@ class TransportComplete(Exception):
     """Expected finite audio/conversation completion; cleanup remains diagnosed."""
 
 
-async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, diagnostics=None, retain_cleanup=None):
+class OwnedSocketClose:
+    """One exact close operation; timeout/cancellation never abandons its task."""
+    def __init__(self,socket):self.socket=socket;self.task=None;self.confirmed=False
+    async def close(self,timeout=.25,**kwargs):
+        if self.confirmed:return
+        if self.task is None:self.task=asyncio.create_task(self.socket.close(**kwargs))
+        done,_=await asyncio.wait({self.task},timeout=timeout)
+        if not done:raise TimeoutError('socket cleanup pending')
+        task=self.task
+        try:task.result()
+        except BaseException:self.task=None;raise
+        self.confirmed=True
+
+
+async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, diagnostics=None, retain_cleanup=None, socket_owner=None):
     """Own one receive task, service 20 ms audio ticks, and fail closed on exit.
     Existing session authority/watchdog is checked even when the peer is silent.
     Blocking codec/provider work must be bounded by the supplied adapter.
@@ -23,6 +37,7 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
     if type(send_timeout) not in (int, float) or not 0 < send_timeout <= 0.25:
         raise ValueError('bounded send deadline required')
     receive = None
+    socket_owner=socket_owner or OwnedSocketClose(socket)
     diagnostics = diagnostics or TransportDiagnostics(getattr(session,'clock',time.monotonic))
     diagnostics.observe(session)
     primary = None
@@ -68,7 +83,8 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
                         answer=route.camera_control(control) if route is not None else None
                     else:
                         if len(message.encode())>1024:raise ValueError("bounded audio control required")
-                        answer = session.control(control)
+                        start=getattr(session,'start_control',session.control)
+                        answer = start(control)
                         diagnostics.accepted_control(session,control.get('type'))
                     if answer is not None:
                         response = json.dumps(answer, separators=(',', ':'), allow_nan=False)
@@ -88,6 +104,16 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
                 else:
                     raise ValueError('bounded audio/control message required')
                 receive = asyncio.create_task(socket.recv())
+            poll=getattr(session,'poll_control',None)
+            if callable(poll):
+                diagnostics.set_phase('native_startup')
+                answer=poll()
+                if answer is not None:
+                    diagnostics.accepted_control(session,'consent')
+                    response=json.dumps(answer,separators=(',',':'),allow_nan=False)
+                    if len(response.encode())>1024:raise ValueError('bounded control response required')
+                    diagnostics.set_phase('control_send')
+                    await asyncio.wait_for(socket.send(response),send_timeout)
             now = time.monotonic()
             if now >= next_tick:
                 if session.armed:
@@ -139,6 +165,7 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
             service_video_after_audio()
     except BaseException as failure:
         primary = failure
+        diagnostics.observe(session)
         diagnostics.fault(failure)
         raise
     finally:
@@ -167,10 +194,10 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
                 diagnostics.fault(failure,'receive_cleanup',cleanup=True)
                 if cleanup is None:cleanup = failure
         try:
-            await asyncio.wait_for(socket.close(), send_timeout)
+            await socket_owner.close(timeout=send_timeout)
         except BaseException as failure:
             diagnostics.fault(failure,'socket_cleanup',cleanup=True)
             if cleanup is None:cleanup = failure
-            if retain_cleanup is not None:retain_cleanup('socket',socket)
+            if retain_cleanup is not None:retain_cleanup('socket',socket_owner)
         if primary is None and cleanup is not None:
             raise cleanup

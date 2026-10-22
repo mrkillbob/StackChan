@@ -59,6 +59,11 @@ jobs:
         run: |
           echo "Full streaming integration requires private HomeLab source; see scripts/ci/DEPENDENCIES.md."
           "$RUNNER_TEMP/fixture-venv/bin/python" scripts/ci/test_public_python.py
+      - name: Public gateway startup and cleanup regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/bridge/host-adapter:${{ github.workspace }}/companion/host:${{ github.workspace }}/companion/host/streaming:${{ github.workspace }}/companion/host/native-audio
+        run: '"$RUNNER_TEMP/fixture-venv/bin/python" -m unittest discover -s companion/host/streaming -p test_gateway_lifecycle_public.py -v'
       - name: Public trust and custody model fixtures
         run: |
           python3 -m unittest discover -s companion/host/offline-public -v

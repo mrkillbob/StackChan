@@ -49,10 +49,11 @@ class GatewayRetention(unittest.IsolatedAsyncioTestCase):
         with patch('remote_gateway.run_connection',complete):await gateway.handle(Socket())
         self.assertIn(device.id,gateway._active)
         await gateway.handle(Socket());self.assertEqual(len(factories),1)
+        self.assertEqual(resource.calls,2) # New admission retries the retained owner before rejecting.
         with self.assertRaises(RuntimeError):await gateway.close()
         self.assertIn(device.id,gateway._active)
         resource.fail=False;await gateway.close()
-        self.assertNotIn(device.id,gateway._active);self.assertEqual(resource.calls,3)
+        self.assertNotIn(device.id,gateway._active);self.assertEqual(resource.calls,4)
 
 class WorkerRetention(unittest.IsolatedAsyncioTestCase):
     async def test_worker_keeps_gateway_when_socket_teardown_fails(self):
