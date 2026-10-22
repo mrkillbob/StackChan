@@ -231,6 +231,13 @@ final class PairingController: ObservableObject {
         if processFactory == nil && (!FileManager.default.fileExists(atPath: root.path) || ProcessInfo.processInfo.environment["STACKCHAN_BINDING_CONFIG"] == nil) {
             phase = .failed; recovery = .setup; rememberedStatus = "Approved local configuration unavailable."; return
         }
+        let launchEnvironment = workerLaunchEnvironment
+        let workerPython = processFactory == nil ? WorkerPython.resolve(environment: launchEnvironment, root: root) : nil
+        if processFactory == nil && workerPython == nil {
+            phase = .failed; recovery = .setup
+            rememberedStatus = "Python unavailable. Configure STACKCHAN_PYTHON with the approved virtual environment's executable."
+            return
+        }
         let process = processFactory?() ?? Process(), incoming = Pipe(), outgoing = Pipe()
         // A worker may close stdin before terminationHandler reaches the main queue.
         // Suppress SIGPIPE only on our command descriptor so EPIPE reaches cleanup.
@@ -242,10 +249,10 @@ final class PairingController: ObservableObject {
         let activeGeneration = UUID(); generation = activeGeneration; buffer.removeAll(); requiresProcessExit = false
         lastWorkerExitConfirmed = nil
         if processFactory == nil {
-        process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/python3.14")
+        process.executableURL = workerPython
         process.arguments = persistentMode ? rememberedWorkerLaunchArguments : workerLaunchArguments
         process.currentDirectoryURL = root
-        process.environment = workerLaunchEnvironment
+        process.environment = launchEnvironment
         }
         process.standardInput = incoming; process.standardOutput = outgoing
         // Raw exceptions/IO are never reflected into the UI or a log file.
