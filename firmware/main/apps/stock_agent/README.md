@@ -1,19 +1,22 @@
-# Selectable Stock AI adapter
+# Stackchan companion adapter
 
-The launcher opens `MakeApp()` as a stopped preview. It calls
-`ConsumeStartRequest()` after each shell update. On true it must uninstall all
-Mooncake apps, destroy Mooncake, and call the non-returning `RunStockAgent()`.
-Opening this app stays stopped. A power-on/reset boot starts Stock only after a new explicit General Confirm opt-in; legacy boot_ai alone is ignored. Software resets, including Stop/Home, suppress autostart.
+The Stackchan tile opens a configured session directly after ownership and network
+checks. Missing setup appears inline with a Settings action; Wi-Fi and account
+setup remain in Settings. Intentional tile entry authorizes the existing stock
+runtime. Boot, reconnect and legacy boot_ai do not authorize capture or motion.
 
-`ConsumePreviewRequest()` returns true once on an intentional software restart
-from the shared-network preview; open the installed Stock app in that case,
-without invoking `RunStockAgent()`. That preview still needs another Start.
-The RTC cookie carries only a stopped preview request, never session consent.
+The companion face has no persistent Stop/Home footer. Swipe up from the bottom
+edge to reveal the original firmware Home button and temporary session status.
+Home immediately requests cancellation and revokes the stock audio lease. The
+outer session loop keeps this control reachable during startup and shutdown,
+retains ownership while workers stop, and restores the launcher after checked
+cleanup. It does not reset the MCU. Other apps retain their original first-show
+Home behavior.
 
-Stock acquires `AudioOwner::Stock` before touching the codec. Mira must have
-successfully closed its resources before launching Stock. The stock session's
-always-visible top-layer Stop / Home de-energizes motor/laser/RGB outputs and uses MCU restart because upstream
-has no joined, repeatable teardown. No active state survives that reset.
+Stock acquires AudioOwner::Stock before touching the codec. Mira must finish
+closing its resources before Stock can start. Idle enables the existing wake
+word; the temporary Home overlay reports that accurately. StopListening is not
+advertised as microphone mute.
 
 Stock retains official hotspot/browser Wi-Fi configuration and activation-code
 flows. Existing Wi-Fi and identity are read from NVS. Phone-entered Wi-Fi and

@@ -3,6 +3,26 @@ import Combine
 import Darwin
 
 final class PairingController: ObservableObject {
+    // No transport/clock/approved-extension/checked-stop evidence yet.
+    // These hooks cannot request capture; readiness starts and remains false.
+    lazy var webcamFramePipeline=CompanionWebcamPipeline(owner:nil,verifiedInstalledBridge:webcamBridge,extensionApproved:false) // never ready without actual issuer/approval
+    let webcamBridge=WebcamBridgeAdapter() // inert; attach only verified installed sink
+    lazy var webcam = WebcamControls(begin: { [weak self] in
+        guard let self, self.webcamFramePipeline.explicitWebcamOn() else { return false }
+        self.send("webcam_on");return true
+    }, revoke: { [weak self] in
+        guard let self else { return false }
+        let hadVideo=self.webcamFramePipeline.binding != nil
+        let stopped=self.webcamFramePipeline.revoke()
+        _=self.webcamBridge.revokeLocalExtension()
+        if hadVideo && self.child != nil && self.persistentMode { self.send("webcam_off") }
+        return stopped
+    })
+    let gestures=GesturePerceptionControls(receiver:CompanionThumbnailReceiver(owner:ExistingWorkerThumbnailUnavailable(),clock:{ ProcessInfo.processInfo.systemUptime }))
+    // Inert construction; no optIn, frame submit, processLatest or model request.
+    let localVision = CompanionVisionService(currentAuthenticatedCameraOwner: { _ in false },
+        clock: { ProcessInfo.processInfo.systemUptime }, requestIntent: { _ in })
+    @Published private(set) var cameraPermissionFeedback = "Camera permission unavailable · device confirmation and physical qualification pending"
     @Published private(set) var phase: PairingPhase = .idle
     @Published private(set) var code: String?
     @Published private(set) var remaining: Int?
@@ -26,7 +46,7 @@ final class PairingController: ObservableObject {
     var workerLaunchEnvironment: [String: String] {
         var environment = ProcessInfo.processInfo.environment
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        environment["PYTHONPATH"] = ["/Users/mikedemott/Homelab/src", root.appendingPathComponent("bridge/host-adapter").path,
+        environment["PYTHONPATH"] = [URL(fileURLWithPath: environment["HOME_LAB_ROOT"] ?? "/nonexistent/stackchan-home-lab").appendingPathComponent("src").path, root.appendingPathComponent("bridge/host-adapter").path,
           root.appendingPathComponent("bridge/local-endpoint").path, root.appendingPathComponent(".tools/bridge-python").path,
           candidateHost.appendingPathComponent("native-audio").path].joined(separator: ":")
         return environment
@@ -138,6 +158,7 @@ final class PairingController: ObservableObject {
         return !cleanupPending && cleanupIssues.isEmpty && (child == nil || persistentMode)
     }
     func forgetRemembered() {
+        webcam.ownerLost(); localVision.disable(); gestures.ownerLost()
         guard canForgetRemembered else { return }
         if child == nil { persistentMode = true; start() }
         if persistentMode, child != nil {
@@ -207,6 +228,9 @@ final class PairingController: ObservableObject {
         if child != nil { phase = .opening; send(retry ? "retry" : "prepare") }
     }
     private func start() {
+        if processFactory == nil && (!FileManager.default.fileExists(atPath: root.path) || ProcessInfo.processInfo.environment["STACKCHAN_BINDING_CONFIG"] == nil) {
+            phase = .failed; recovery = .setup; rememberedStatus = "Approved local configuration unavailable."; return
+        }
         let process = processFactory?() ?? Process(), incoming = Pipe(), outgoing = Pipe()
         // A worker may close stdin before terminationHandler reaches the main queue.
         // Suppress SIGPIPE only on our command descriptor so EPIPE reaches cleanup.
@@ -265,6 +289,7 @@ final class PairingController: ObservableObject {
                 let remainder = retirement.data
                 DispatchQueue.main.async {
                     guard let self = self, self.generation == activeGeneration, self.child === process else { return }
+                    self.webcam.ownerLost(); self.localVision.disable(); self.gestures.ownerLost()
                     if !remainder.isEmpty { self.receive(remainder) }
                     guard self.generation == activeGeneration else { return }
                     // Exit without a complete final JSON line is not evidence of cleanup.
@@ -294,9 +319,17 @@ final class PairingController: ObservableObject {
         guard buffer.count <= 8192 else { failProtocol(); return }
         while let end = buffer.firstIndex(of: 10) {
             let line = buffer.subdata(in: 0..<end); buffer.removeSubrange(0...end)
+            if let notice = CameraPermissionNotice.decode(line) {
+                cameraPermissionFeedback = notice.feedback
+                continue // Feedback only; never enables capture or trusts a status bool.
+            }
+            if webcamFramePipeline.handleExistingWorkerEvent(line) {
+                if webcamFramePipeline.binding == nil { webcam.ownerLost() }
+                continue
+            }
             guard let status = PairingStatus.decode(line) else { failProtocol(); return }
             if (requiresProcessExit && !status.phase.terminal && status.phase != .restoring) || (cleanupPending && !status.phase.terminal && status.phase != .restoring) { continue }
-            phase = status.phase; code = status.code; remaining = status.remaining
+            phase = status.phase; if phase.terminal || phase == .restoring { webcam.ownerLost(); localVision.disable(); gestures.ownerLost() }; code = status.code; remaining = status.remaining
             if persistentMode {
                 if phase == .paired {
                     rememberedStatus = status.activity == nil
@@ -336,6 +369,7 @@ final class PairingController: ObservableObject {
     /// cleanly, that exit is accepted as a confirmed release. Only a worker-reported cleanup issue, a non-clean
     /// exit, a read error or an incomplete drain keeps the release unconfirmed.
     private func failProtocol() {
+        webcam.ownerLost(); localVision.disable(); gestures.ownerLost()
         phase = .failed; code = nil; recovery = .protocolFailure; cleanupPending = true
         shutdown { [weak self] closed in self?.cleanupPending = !closed }
     }
@@ -344,6 +378,27 @@ final class PairingController: ObservableObject {
         rememberedStatus = released
             ? "Use StackChan stopped. Worker process release is confirmed; wireless trust remains saved unless you chose Forget."
             : "Use StackChan stop is not confirmed. Microphone capture state is unknown; verify cleanup before retrying. Wireless trust remains saved unless you chose Forget."
+    }
+    func explicitCameraPermission(_ mode: CameraPermissionMode) {
+        guard persistentMode, phase == .paired, activity != nil, !cleanupPending, input != nil,
+              let proposal = try? CameraPermissionProposal(requestID: UUID().uuidString, mode: mode, ttlSeconds: 30),
+              let data = try? proposal.localWorkerJSON(),
+              let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        send(payload)
+    }
+    func requestCameraPermission(_ request: CameraPermissionRequest) {
+        guard persistentMode, phase == .paired, !cleanupPending, input != nil else {
+            cameraPermissionFeedback = "Camera permission unavailable · current remembered session required"; return
+        }
+        guard let data = try? request.localWorkerJSON(),
+              let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        send(payload) // Existing Mac local worker pipe, not a new network route.
+    }
+    func revokeCameraPermission(requestID: String) {
+        webcam.ownerLost(); localVision.disable(); gestures.ownerLost()
+        guard let data = try? CameraPermissionRequest.explicitOff(requestID: requestID),
+              let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        send(payload) // Actual Stop remains retained/checked by existing worker owner.
     }
     private func send(_ command: String) {
         send(["command": command])
@@ -361,8 +416,9 @@ final class PairingController: ObservableObject {
         guard let remaining = activity == .conversation ? audioRemaining : remaining else { return nil }
         return max(0, remaining - Int(max(0, uptime - receivedUptime)))
     }
-    func cancel() { guard canCancel else { return }; cleanupPending = true; code = nil; send("cancel") }
+    func cancel() { webcam.ownerLost(); localVision.disable(); gestures.ownerLost(); guard canCancel else { return }; cleanupPending = true; code = nil; send("cancel") }
     func shutdown(_ done: @escaping (Bool) -> Void) {
+        webcam.ownerLost(); localVision.disable(); gestures.ownerLost()
         guard child != nil else { done((lastWorkerExitConfirmed ?? true) && cleanupIssues.isEmpty); return }
         // A request while a stop is already in flight joins it: no second cancel, no second timer set.
         let alreadyRequested = escalationGeneration == generation

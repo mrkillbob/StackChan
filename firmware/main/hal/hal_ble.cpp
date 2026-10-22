@@ -24,6 +24,7 @@ void wipe_config_text(std::string& value) {
 }
 }
 
+static std::atomic<bool> config_server_started{false};
 static const std::string_view _tag              = "HAL-BLE";
 static const uint8_t _ble_fragment_magic0       = 0xAA;
 static const uint8_t _ble_fragment_magic1       = 0x55;
@@ -369,9 +370,13 @@ bool Hal::isBleConnected()
 #include <mutex>
 #include <atomic>
 
+class WifiConfigServer;
+static std::shared_ptr<WifiConfigServer> retained_config_server;
 class WifiConfigServer {
 public:
+    bool StopChecked(){return !_wifi_station||_wifi_station->StopChecked();}
     ~WifiConfigServer() {
+        configASSERT(StopChecked());
         if (_config_signal_id >= 0) GetHAL().onBleConfigData.disconnect(_config_signal_id);
         std::lock_guard<std::mutex> lock(_mutex);
         while (!_msg_queue.empty()) { wipe_config_text(_msg_queue.front()); _msg_queue.pop(); }
@@ -407,7 +412,7 @@ public:
             GetHAL().onAppConfigEvent.emit(AppConfigEvent::WifiConnectFailed);
         });
 
-        _wifi_station->Start();
+        if(!_wifi_station->Start())GetHAL().onAppConfigEvent.emit(AppConfigEvent::WifiConnectFailed);
     }
 
     void update()
@@ -556,7 +561,8 @@ class AppConfigServerWorker : public mooncake::BasicAbility {
 public:
     void onCreate() override
     {
-        _server = std::make_unique<WifiConfigServer>();
+        _server = std::make_shared<WifiConfigServer>();
+        retained_config_server=_server;
         _server->init();
     }
 
@@ -575,7 +581,7 @@ public:
     }
 
 private:
-    std::unique_ptr<WifiConfigServer> _server;
+    std::shared_ptr<WifiConfigServer> _server;
     uint32_t _last_tick = 0;
 };
 
@@ -584,8 +590,7 @@ void Hal::startAppConfigServer()
     if (!network_setup::CredentialPersistenceAllowed()) return;
     // Original onboarding may reenter after BLE disconnect. A session has one
     // server/driver; leaving an active session resets into the stopped shell.
-    static std::atomic<bool> started{false};
-    if (started.exchange(true)) return;
+    if (config_server_started.exchange(true)) return;
     mclog::tagInfo(_tag, "start app config server");
 
     ble_init(true);
@@ -603,4 +608,10 @@ void Hal::resetAppConfiged()
 {
     Settings settings("app_config", true);
     settings.SetBool("is_configed", false);
+}
+
+bool Hal::stopBleServer(){
+    if(!ble_prph_stop_checked())return false;
+    if(retained_config_server&&!retained_config_server->StopChecked())return false;
+    retained_config_server.reset();config_server_started=false;return true;
 }

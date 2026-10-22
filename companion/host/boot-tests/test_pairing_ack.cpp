@@ -27,7 +27,7 @@ using Owner=companion::UsbProvisioningOwner<Driver>;using Read=companion::Provis
 static constexpr const char* uuid="00112233445566778899aabbccddeeff";
 std::vector<uint8_t> Frame(const std::string& request=uuid){
  std::vector<uint8_t> b{'S','C','P','G',1,0,0};
- for(const auto& s:std::vector<std::string>{"wss://192.168.1.75:18443/companion/audio","test-device","never-an-authorized-secret",request}){b.push_back(s.size()>>8);b.push_back(s.size()&255);b.insert(b.end(),s.begin(),s.end());}
+ for(const auto& s:std::vector<std::string>{"wss://192.168.42.10:18443/companion/audio","test-device","never-an-authorized-secret",request}){b.push_back(s.size()>>8);b.push_back(s.size()&255);b.insert(b.end(),s.begin(),s.end());}
  auto n=b.size()-7;b[5]=n>>8;b[6]=n&255;return b;
 }
 void Header(const companion::AckFrame& a,AckStatus status){assert(a.size()==22);assert(a[0]=='S'&&a[1]=='C'&&a[2]=='P'&&a[3]=='S'&&a[4]==1&&a[5]==static_cast<uint8_t>(status));}

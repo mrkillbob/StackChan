@@ -27,6 +27,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Record tested revision
         run: git log -1 --format=fuller
+      - name: Prepare exact host fixture dependencies
+        run: python3 scripts/ci/prepare_host_dependencies.py
       - run: |
           cmake -S firmware/tests -B "$RUNNER_TEMP/firmware-tests" -DCMAKE_BUILD_TYPE=Debug
           cmake --build "$RUNNER_TEMP/firmware-tests" --parallel 2
@@ -57,6 +59,15 @@ jobs:
         run: |
           echo "Full streaming integration requires private HomeLab source; see scripts/ci/DEPENDENCIES.md."
           "$RUNNER_TEMP/fixture-venv/bin/python" scripts/ci/test_public_python.py
+      - name: Public gateway startup and cleanup regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/bridge/host-adapter:${{ github.workspace }}/companion/host:${{ github.workspace }}/companion/host/streaming:${{ github.workspace }}/companion/host/native-audio
+        run: '"$RUNNER_TEMP/fixture-venv/bin/python" -m unittest discover -s companion/host/streaming -p test_gateway_lifecycle_public.py -v'
+      - name: Public trust and custody model fixtures
+        run: |
+          python3 -m unittest discover -s companion/host/offline-public -v
+          python3 companion/host/numeric-ui/script/test_fixture_custody.py
 
   companion-swift:
     name: Companion Swift offline checks
@@ -67,15 +78,19 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Compile all H01 fixtures and run pure model fixtures
+      - name: Compile every offline fixture
+        env:
+          STACKCHAN_OFFLINE_BUILD_ROOT: ${{ runner.temp }}/companion-offline
+        run: bash companion/host/numeric-ui/script/test_offline.sh --compile-only
+      - name: Run pure model fixtures
         env:
           STACKCHAN_OFFLINE_BUILD_ROOT: ${{ runner.temp }}/companion-offline
         run: |
-          bash companion/host/numeric-ui/script/test_offline.sh --compile-only
-          "$STACKCHAN_OFFLINE_BUILD_ROOT/status-checks"
-          "$STACKCHAN_OFFLINE_BUILD_ROOT/remembered-checks"
-          "$STACKCHAN_OFFLINE_BUILD_ROOT/mira-lifecycle-checks"
-          "$STACKCHAN_OFFLINE_BUILD_ROOT/w1-lifecycle-checks"
+          "$STACKCHAN_OFFLINE_BUILD_ROOT/AudioEndpointDirectionChecks"
+          "$STACKCHAN_OFFLINE_BUILD_ROOT/StatusChecks"
+          "$STACKCHAN_OFFLINE_BUILD_ROOT/RememberedDeviceChecks"
+          "$STACKCHAN_OFFLINE_BUILD_ROOT/MiraLifecycleChecks"
+          "$STACKCHAN_OFFLINE_BUILD_ROOT/W1LifecycleChecks"
 
   firmware-esp:
     name: Firmware ESP32-S3 build
@@ -115,13 +130,8 @@ jobs:
           STACKCHAN_UI_BUILD_ROOT: ${{ runner.temp }}/companion-app
         run: |
           git log -1 --format=fuller
-          ui="$GITHUB_WORKSPACE/companion/host/numeric-ui"
-          mkdir -p "$STACKCHAN_UI_BUILD_ROOT/module-cache"
-          xcrun swiftc -swift-version 5 -module-cache-path "$STACKCHAN_UI_BUILD_ROOT/module-cache" \
-            -parse-as-library "$ui"/Models/*.swift "$ui"/Services/*.swift \
-            "$ui"/Views/*.swift "$ui"/App/*.swift \
-            -o "$STACKCHAN_UI_BUILD_ROOT/StackChanPairing"
-          shasum -a 256 "$STACKCHAN_UI_BUILD_ROOT/StackChanPairing"
+          bash companion/host/numeric-ui/script/build_and_run.sh --compile-only
+          shasum -a 256 "$STACKCHAN_UI_BUILD_ROOT/StackChanPairing.app/Contents/MacOS/StackChanPairing"
 
   secrets:
     name: Secret history scan
@@ -135,11 +145,25 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Scan full history with immutable Gitleaks binary
         run: |
+          set -euo pipefail
           archive="$RUNNER_TEMP/gitleaks.tar.gz"
           curl --fail --location --retry 2 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o "$archive"
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $archive" | sha256sum --check
           tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
-          "$RUNNER_TEMP/gitleaks" git --redact --no-banner .
+          # Remerge diffs cover changes introduced only by two-parent merge resolutions.
+          # Git cannot reconstruct octopus resolutions; never silently omit that code.
+          unsupported_merges="$(git rev-list --all --min-parents=3 --count)"
+          if [[ "$unsupported_merges" != "0" ]]; then
+            echo "Unsupported octopus merge history requires explicit scan coverage." >&2
+            exit 1
+          fi
+          git log --all --full-history --remerge-diff --max-count=1 --format= >/dev/null
+          scan_log="$RUNNER_TEMP/gitleaks-history.log"
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --no-color --log-opts='--all --full-history --remerge-diff' . 2>&1 | tee "$scan_log"
+          if grep -Eq '(^|[[:space:]])(ERR|FTL)([[:space:]]|$)' "$scan_log"; then
+            echo "Secret scanner emitted errors; partial history is not a passing scan." >&2
+            exit 1
+          fi
 
   required:
     name: All required checks pass

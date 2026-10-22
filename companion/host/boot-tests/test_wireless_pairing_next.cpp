@@ -3,7 +3,7 @@
 #include <cassert>
 #include <iostream>
 extern "C" const char* companion_local_ca_pem(){return "synthetic-CA-no-authority";}
-extern "C" const char* companion_local_tls_host(){return "192.168.1.75";}
+extern "C" const char* companion_local_tls_host(){return "192.168.42.10";}
 int main(){using namespace companion;NetworkInterface network;NumericPairing p;
  assert(p.StartWireless(network,91,100));
  auto ws=BoundedWebSocket::latest;assert(ws&&ws->sent.size()==1);
@@ -15,7 +15,7 @@ int main(){using namespace companion;NetworkInterface network;NumericPairing p;
  ws->Feed("{\"type\":\"pair.challenge\","+context+",\"code\":\"123456\",\"expires_ms\":60000,\"audio_requested\":true}");p.Tick(101);
  assert(p.Code()=="123456"&&!p.Confirmed());NumericGrant out;assert(!p.TakeGrant(out));
  assert(p.Confirm(102));
- ws->Feed("{\"type\":\"pair.grant\","+context+",\"device\":\"stackchan-80456b561404\",\"uri\":\"wss://192.168.1.75:18443/companion/audio\",\"credential\":\"synthetic-only-00000000000000000000\",\"ttl_seconds\":60,\"audio_requested\":true}");p.Tick(103);
+ ws->Feed("{\"type\":\"pair.grant\","+context+",\"device\":\"stackchan-001122334455\",\"uri\":\"wss://192.168.42.10:18443/companion/audio\",\"credential\":\"synthetic-only-00000000000000000000\",\"ttl_seconds\":60,\"audio_requested\":true}");p.Tick(103);
  assert(p.TakeGrant(out)&&out.request==request&&out.audio_requested);assert(p.Staged());assert(!p.ConnectionReady());
  ws->Feed("{\"type\":\"pair.ready\","+context+",\"audio_requested\":true,\"ready\":true}");p.Tick(104);assert(p.ConnectionReady());
  p.Tick(60103);assert(!p.Active(60103));

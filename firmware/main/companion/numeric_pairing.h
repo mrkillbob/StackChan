@@ -5,6 +5,8 @@
 #include <deque>
 #include <mutex>
 #include <memory>
+#include <functional>
+#include "persistent_pairing.hpp"
 class NetworkInterface;class BoundedWebSocket;
 namespace companion {
 inline bool PairHex(const std::string& s){if(s.size()!=32)return false;for(char c:s)if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')))return false;return s!=std::string(32,'0');}
@@ -23,9 +25,14 @@ public:
 struct NumericGrant {std::string credential,request;uint64_t expires_at_ms=0;bool audio_requested=false;};
 class NumericPairing {
  NumericPairingContext context_;std::shared_ptr<BoundedWebSocket> socket_;std::mutex queue_mutex_;std::deque<std::string> queue_;std::atomic<bool> fault_{false};bool started_=false,grant_ready_=false,host_ready_=false;NumericGrant grant_;
+ bool remembered_=false,remembered_ready_=false;PairPolicy remember_policy_;std::function<PairPolicy()> policy_;std::function<bool(const PairRecord&)> save_;
+ bool StartMode(NetworkInterface&,const std::string&,uint32_t,uint64_t,bool);
  bool Send(const std::string&);bool Message(const std::string&,uint64_t);
 public:
+ void ConfigureRemembered(std::function<PairPolicy()> policy,std::function<bool(const PairRecord&)> save){policy_=std::move(policy);save_=std::move(save);}
+ bool StartRemembered(NetworkInterface&,uint32_t boot,uint64_t now);bool RememberedReady()const{return remembered_ready_;}bool Remembered()const{return remembered_;}
  ~NumericPairing();bool Start(NetworkInterface&,const std::string& request,uint32_t boot,uint64_t now);
+ bool StartWireless(NetworkInterface&,uint32_t boot,uint64_t now);const std::string& Request()const{return context_.Request();}
  void Tick(uint64_t now);void Cancel();bool Confirm(uint64_t now);bool Active(uint64_t now)const;const std::string& Code()const{return context_.Code();}
  bool Confirmed()const{return context_.Confirmed();}bool AudioRequested()const{return context_.AudioRequested();}
  bool ConnectionReady()const{return host_ready_;}

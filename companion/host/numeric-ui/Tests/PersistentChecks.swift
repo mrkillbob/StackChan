@@ -6,7 +6,7 @@ import Foundation
         precondition(condition(), "bounded fixture did not complete")
     }
     static func fake(_ source: String) -> Process {
-        let p=Process();p.executableURL=URL(fileURLWithPath:"/usr/bin/python3");p.arguments=["-B","-u","-c",source];return p
+        let p=Process();p.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["STACKCHAN_TEST_PYTHON"] ?? "/usr/bin/python3");p.arguments=["-B","-u","-c",FixtureCustody.wrap(source)];return p
     }
     static func main() {
         let root=URL(fileURLWithPath:"/synthetic")
@@ -106,9 +106,13 @@ for line in sys.stdin:
         pump(12) { done }
         precondition(retained.phase == .closed && retained.cleanupIssues.isEmpty, "persistent owner was killed before verified cleanup")
         // Real inert import check with the same environment used by the worker.
-        let runtime = PairingController(approved: false, root: URL(fileURLWithPath: "/Users/mikedemott/Developer/AgentWork/StackChan"))
+        // Imports need the same configured project/dependency root as the real worker.
+        let candidateRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let importRoot = ProcessInfo.processInfo.environment["STACKCHAN_FIXTURE_PROJECT_ROOT"].map { URL(fileURLWithPath: $0) } ?? candidateRoot
+        precondition(FileManager.default.fileExists(atPath: importRoot.appendingPathComponent("bridge/host-adapter/host_adapter.py").path), "fixture project dependency root required")
+        let runtime = PairingController(approved: false, root: importRoot)
         let probe=Process();probe.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["STACKCHAN_TEST_PYTHON"] ?? "/usr/bin/python3")
-        probe.arguments=["-B","-c","import native_adapter, native_conversation"]
+        probe.arguments=["-B","-c",FixtureCustody.wrap("import native_adapter, native_conversation")]
         probe.currentDirectoryURL=URL(fileURLWithPath:runtime.rememberedWorkerLaunchArguments.last!).deletingLastPathComponent()
         probe.environment=runtime.workerLaunchEnvironment
         try! probe.run();probe.waitUntilExit()

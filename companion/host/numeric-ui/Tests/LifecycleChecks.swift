@@ -7,9 +7,8 @@ import Darwin
   precondition(condition(), "bounded fixture did not complete at line \(line)")
  }
  static func fake(_ code: String) -> Process {
-  let p=Process();p.executableURL=URL(fileURLWithPath:"/usr/bin/python3")
-  let group=getpgrp()
-  p.arguments=["-B","-u","-c","import os\nos.setpgid(0, \(group))\nif os.getpgrp() != \(group): raise RuntimeError('fixture group mismatch')\n"+code]
+  let p=Process();p.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["STACKCHAN_TEST_PYTHON"] ?? "/usr/bin/python3")
+  p.arguments=["-B","-u","-c",FixtureCustody.wrap(code)]
   return p
  }
  static func main() {

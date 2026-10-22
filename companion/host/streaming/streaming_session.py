@@ -18,8 +18,9 @@ def decode_frame(wire):
     magic,version,kind,epoch,sequence,length=WIRE.unpack(wire[:16])
     if magic!=b'SCAV' or version!=1 or kind not in (1,2) or not epoch or sequence==0xffffffff or length!=len(wire)-16:raise ValueError('frame header')
     return epoch,sequence,kind==2,wire[16:]
-def parse_control(text):
-    if type(text) is not str or not 1<=len(text.encode())<=1024:raise ValueError('bounded control')
+def parse_control(text,*,max_bytes=1024):
+    if type(max_bytes) is not int or not 1<=max_bytes<=2048:raise ValueError("bounded control parser limit")
+    if type(text) is not str or not 1<=len(text.encode())<=max_bytes:raise ValueError('bounded control')
     def unique(pairs):
         d={}
         for key,value in pairs:

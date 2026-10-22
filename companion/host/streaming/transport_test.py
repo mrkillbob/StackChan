@@ -6,6 +6,7 @@ Caller supplies an approved generated mono24k PCM16 cue (<=10 s), existing
 HomeLab authority, verified LAN TLS and fresh human approval. Production listener
 is lazy and pinned, <=120 s; caller owns the outer 125 s alarm/130 s supervisor.
 """
+import public_config as config
 import argparse
 import asyncio
 from contextlib import asynccontextmanager
@@ -17,9 +18,9 @@ from gateway_connection import run_connection, TransportComplete
 from transport_diagnostics import TransportDiagnostics
 from streaming_session import StreamingSession, decode_frame
 
-HOST = '192.168.1.75'
-PORT = 18443
-DEVICE = 'stackchan-80456b561404'
+HOST = config.HOST
+PORT = config.PORT
+DEVICE = config.DEVICE
 MAX_LISTENER_SECONDS = 120
 MAX_CUE_FRAMES = 24000 * 10
 
@@ -292,6 +293,7 @@ class TransportGateway:
             self.last_result = result
 
     def listener(self, *, ssl_context, host=HOST, port=PORT, duration=MAX_LISTENER_SECONDS):
+        config.require()
         if self.transport_approved is not True:
             raise PermissionError('fresh human transport-test approval required')
         if (host != HOST or type(port) is not int or port != PORT or

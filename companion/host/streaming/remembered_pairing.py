@@ -1,4 +1,5 @@
 """Exact remembered StackChan authority. Import is inert; secrets are TLS-local."""
+import public_config as config
 import asyncio
 import json
 import math
@@ -10,12 +11,14 @@ from home_lab.devices import DeviceRegistry
 from home_lab.storage import SQLiteStateStore
 from numeric_pairing import strict_json, fresh_hex
 
-DEVICE='stackchan-80456b561404'
-URI='wss://192.168.1.75:18443/companion/audio'
+DEVICE=config.DEVICE
+URI=config.URI
 CAPABILITIES=('microphone','speaker')
 
 class RememberedRegistry:
     def __init__(self,directory,ca_sha256,remember_until_unix,*,clock=time.time):
+        config.require()
+        if ca_sha256!=config.CA_HASH or remember_until_unix!=config.EXPIRY:raise ValueError('unpinned trust')
         if type(ca_sha256) is not str or not re.fullmatch('[a-f0-9]{64}',ca_sha256):raise ValueError('invalid trust')
         if type(remember_until_unix) is not int or not 1<=remember_until_unix<=0xffffffff:raise ValueError('invalid expiry')
         self.clock=clock;self.ca=ca_sha256;self.expiry=remember_until_unix

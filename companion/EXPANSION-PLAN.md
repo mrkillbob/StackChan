@@ -10,7 +10,7 @@ Keep cloud reasoning off the robot where practical. The robot handles its microp
 
 ## Existing project and evidence
 
-- Folder: `/Users/mikedemott/Developer/AgentWork/StackChan`, outside synced Documents/iCloud.
+- Folder: `$STACKCHAN_ROOT`, outside synced Documents/iCloud.
 - Fork: https://github.com/mrkillbob/StackChan. GitHub identity was authenticated and verified as `mrkillbob`.
 - Official source: [m5stack/StackChan](https://github.com/m5stack/StackChan), pinned baseline `1b5765599fba8aaad1811d9a79358ccc7051f5f3`; source declares version 1.5.1. Michael reports installed firmware 1.5.1 and setup through StackChan World. A source build is not proven byte-identical to his installed image.
 - Local branch: `companion-audio-prototype`. Native audio foundation: `38d070e02da090879fe337067816c366614b9bc6`. Authenticated streaming and firmware components: `497357c3c40992c953f8216142996f626b9a4e50`. These commits have not been pushed, and no GitHub Actions runs were started.

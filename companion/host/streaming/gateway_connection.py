@@ -44,11 +44,14 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
     deadline = float("inf") if duration is None else time.monotonic() + duration
     next_tick = time.monotonic()
     playback = None
-    async def send_control(answer):
-        response=json.dumps(answer,separators=(',',':'),allow_nan=False)
-        if len(response.encode())>1024:raise ValueError('bounded control response required')
-        diagnostics.set_phase('control_send')
-        await asyncio.wait_for(socket.send(response),send_timeout)
+    pending_video = None
+    def service_video_after_audio():
+        nonlocal pending_video
+        route=getattr(session,"webcam_route",None)
+        if route is not None:
+            if pending_video is not None:route.offer(pending_video)
+            route.video_tick_after_audio()
+        pending_video=None
     try:
         receive = asyncio.create_task(socket.recv())
         while True:
@@ -65,13 +68,36 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
                 message = receive.result()
                 if type(message) is str:
                     diagnostics.set_phase('control')
-                    control = parse_control(message)
+                    control = parse_control(message,max_bytes=2048)
                     diagnostics.control_label(control.get('type'))
-                    start=getattr(session,'start_control',session.control)
-                    answer=start(control)
-                    if answer is not None:
+                    if control.get('type') in ('camera_driver_stop','camera_stop_ack','camera_stop_challenge','camera_stop_acknowledged'):
+                        dispatcher=getattr(session,'camera_stop_dispatcher',None)
+                        answer=dispatcher.handle_control(control) if dispatcher is not None else None
+                        route=getattr(session,'webcam_route',None)
+                        if route is not None:route.dispatch_stop_complete()
+                    elif control.get('type') in ('camera_clock_sample','camera_permission_request','camera_permission_off','camera_permission_confirmation'):
+                        dispatcher=getattr(session,'camera_dispatcher',None)
+                        answer=dispatcher.handle_control(control) if dispatcher is not None else None
+                    elif control.get('type') in ('camera_on','camera_off','camera_status'):
+                        route=getattr(session,'webcam_route',None)
+                        answer=route.camera_control(control) if route is not None else None
+                    else:
+                        if len(message.encode())>1024:raise ValueError("bounded audio control required")
+                        start=getattr(session,'start_control',session.control)
+                        answer = start(control)
                         diagnostics.accepted_control(session,control.get('type'))
-                        await send_control(answer)
+                    if answer is not None:
+                        response = json.dumps(answer, separators=(',', ':'), allow_nan=False)
+                        if len(response.encode()) > (2048 if answer.get("type","").startswith("camera_clock_") or answer.get("type","").startswith("camera_permission_") else 1024):
+                            raise ValueError('bounded control response required')
+                        diagnostics.set_phase('control_send')
+                        await asyncio.wait_for(socket.send(response), send_timeout)
+                        stop=getattr(session,'camera_stop_dispatcher',None)
+                        if stop is not None and stop.control_sent(answer):
+                            route=getattr(session,'webcam_route',None)
+                            if route is not None:route.dispatch_stop_complete()
+                elif type(message) is bytes and message.startswith(b"WCV1") and len(message)<=4112:
+                    pending_video=message # video processed only after due audio/control work
                 elif type(message) is bytes and 17 <= len(message) <= 4112:
                     diagnostics.set_phase('audio_receive')
                     session.receive(message)
@@ -84,7 +110,10 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
                 answer=poll()
                 if answer is not None:
                     diagnostics.accepted_control(session,'consent')
-                    await send_control(answer)
+                    response=json.dumps(answer,separators=(',',':'),allow_nan=False)
+                    if len(response.encode())>1024:raise ValueError('bounded control response required')
+                    diagnostics.set_phase('control_send')
+                    await asyncio.wait_for(socket.send(response),send_timeout)
             now = time.monotonic()
             if now >= next_tick:
                 if session.armed:
@@ -106,7 +135,8 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
                         playback = state
                     if not speaking:
                         next_tick = now + 0.02
-                        continue
+                        # Camera controls still drain below; no speaking audio packets.
+                        packets=[]
                     # 960 mono48k samples = 20 ms. Codec output is bounded per tick.
                     diagnostics.set_phase('audio_pull')
                     if packets is None:packets = session.outgoing(960)
@@ -119,6 +149,20 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
                         await asyncio.wait_for(socket.send(packet), send_timeout)
                         diagnostics.speaker_sent()
                 next_tick = now + 0.02
+            # At most two bounded existing-session camera controls, before video.
+            for name in ('camera_stop_dispatcher','camera_dispatcher'):
+                dispatcher=getattr(session,name,None)
+                if dispatcher is not None:
+                    tick=getattr(dispatcher,'tick',None)
+                    if callable(tick):tick()
+                    control=dispatcher.pop_control()
+                    if control is not None:
+                        response=json.dumps(control,separators=(',',':'),allow_nan=False)
+                        if len(response.encode())>(1024 if name=='camera_stop_dispatcher' else 2048):raise ValueError('bounded camera control response')
+                        await asyncio.wait_for(socket.send(response),send_timeout)
+                        sent=getattr(dispatcher,'control_sent',None)
+                        if callable(sent):sent(control)
+            service_video_after_audio()
     except BaseException as failure:
         primary = failure
         diagnostics.observe(session)
@@ -127,6 +171,15 @@ async def run_connection(socket, session, *, duration=900.0, send_timeout=0.25, 
     finally:
         # Invalidate authority first; cleanup never replaces the original fault.
         cleanup = None
+        route=getattr(session,"webcam_route",None)
+        if route is not None:route.revoke()
+        pending_video=None
+        stop=getattr(session,'camera_stop_dispatcher',None)
+        if stop is not None:stop.connection_lost()
+        camera=getattr(session,'camera_dispatcher',None)
+        if camera is not None:
+            lost=getattr(camera,'connection_lost',None)
+            if callable(lost):lost()
         try:
             session.close()
         except BaseException as failure:

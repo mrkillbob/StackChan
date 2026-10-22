@@ -3,6 +3,7 @@
 Only an explicitly approved, unpaused human prepare command opens USB. No
 credential entry, secret stdout, microphone recording or Mac audio devices.
 """
+import public_config as config
 import argparse
 import asyncio
 from contextlib import asynccontextmanager
@@ -22,9 +23,9 @@ import wave
 from numeric_pairing import NumericPairing,NumericGateway,PairingError,parse_command,write_numeric_once,HOST,PORT,DEVICE
 from pairing_receipt import decode_receipt,READY,REJECTED,EXPIRED
 
-ROOT=Path('/Users/mikedemott/Developer/AgentWork/StackChan')
-CERT_HASH='50efad262ca4e04cba6fcdc619277b10546354bf1724e399ac4c31431acf7888'
-CERT_BEGIN=1791743530;CERT_END=1791750790
+ROOT=config.ROOT
+CERT_HASH=config.CERT_HASH
+CERT_BEGIN=config.CERT_BEGIN;CERT_END=config.CERT_END
 STATES={'idle','opening','usb_ready','waiting_robot','comparing','waiting_confirmation','staging','paired','restoring','cancelled','expired','failed','closed'}
 
 DIAGNOSTIC_REASONS={'expired','cancelled','closed','pair_connection_closed','receipt_missing','reset_detected','window_changed','rejected','setup_or_transport_failed','transport_lost','approval_required','approval_consumed','paused','audio_complete','audio_transport_failed','cleanup_unconfirmed','ready_missing','certificate_expired','certificate_changed','lan_unavailable','grant_failed','revocation_failed','audio_cleanup_failed','audio_backpressure'}
@@ -313,6 +314,7 @@ def _serial_factory(port):
     return connection
 
 def _runtime(args, native_route=None):
+    config.require()
     _validated_audio_mode(args,native_route)
     # New trust is an explicit public-profile selection, independent of remembered
     # device state. Finite approval consumption remains unchanged in _prepare.
@@ -332,7 +334,7 @@ def _runtime(args, native_route=None):
         if cert.stat().st_size>8192 or hashlib.sha256(cert.read_bytes()).hexdigest()!=CERT_HASH:raise PairingError('certificate_changed')
         context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.minimum_version=ssl.TLSVersion.TLSv1_2;context.load_cert_chain(cert,key)
     if subprocess.check_output(['/usr/sbin/ipconfig','getifaddr','en1'],timeout=2,text=True).strip()!=HOST:raise PairingError('lan_unavailable')
-    for path in (ROOT/'.tools/bridge-python',Path('/Users/mikedemott/Homelab/src'),Path(__file__).resolve().parents[1]/'native-audio',ROOT/'bridge/host-adapter',ROOT/'bridge/local-endpoint'):
+    for path in (ROOT/'.tools/bridge-python',config.HOME_LAB_ROOT/"src",Path(__file__).resolve().parents[1]/'native-audio',ROOT/'bridge/host-adapter',ROOT/'bridge/local-endpoint'):
         if str(path) not in sys.path:sys.path.insert(0,str(path))
     from home_lab.devices import DeviceRegistry
     registry=DeviceRegistry()

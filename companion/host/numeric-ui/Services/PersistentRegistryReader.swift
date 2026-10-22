@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import Darwin
 
 /// Opens the HomeLab SQLite file read-only and reads exactly two things: the gate row's
 /// state and expiry, and counts of credential rows. An engine-level authorizer denies every
@@ -36,7 +37,7 @@ struct SQLiteRegistryReader: PersistentRegistryReading {
     enum ReadError: Error { case open, query }
     let databaseURL: URL
     let deviceID: String
-    init(databaseURL: URL, deviceID: String = "stackchan-80456b561404") { self.databaseURL = databaseURL; self.deviceID = deviceID }
+    init(databaseURL: URL, deviceID: String) { self.databaseURL = databaseURL; self.deviceID = deviceID }
 
     /// Read-only connection with the column allow-list installed. Internal so tests can prove
     /// that credential columns are unreadable through it.
@@ -97,5 +98,68 @@ struct SQLiteRegistryReader: PersistentRegistryReading {
         sqlite3_bind_text(stmt, 1, deviceID, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         guard sqlite3_step(stmt) == SQLITE_ROW else { throw ReadError.query }
         return Int(sqlite3_column_int64(stmt, 0))
+    }
+}
+
+/// Selects only the registry identity/path from the same public binding and profile
+/// used by remembered_pairing_worker. This is an availability projection, not TLS
+/// verification: the worker still validates its complete profile before connecting.
+struct ConfiguredRegistryReader: PersistentRegistryReading {
+    enum BindingError: Error { case unavailable }
+    let projectRoot: URL
+    let bindingURL: URL?
+
+    private func object(_ url: URL, ownerOnly: Bool) throws -> [String: Any] {
+        let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard values.isSymbolicLink != true, values.isRegularFile == true,
+              let size = attributes[.size] as? NSNumber, size.intValue <= 8192 else { throw BindingError.unavailable }
+        if ownerOnly {
+            guard (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
+                  let mode = attributes[.posixPermissions] as? NSNumber, mode.intValue & 0o077 == 0 else { throw BindingError.unavailable }
+        }
+        let bytes = try Data(contentsOf: url)
+        guard bytes.count <= 8192, let text = String(data: bytes, encoding: .utf8),
+              let value = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { throw BindingError.unavailable }
+        // Both public files have flat keys. Reject duplicate/escaped duplicate keys,
+        // matching the worker's strict JSON parser instead of accepting last-value wins.
+        let expression = try NSRegularExpression(pattern: #""(?:[^"\\]|\\.)*"\s*:"#)
+        var keys = Set<String>()
+        for match in expression.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let range = Range(match.range, in: text) else { throw BindingError.unavailable }
+            let token = String(text[range]).dropLast().trimmingCharacters(in: .whitespacesAndNewlines)
+            let decoded = try JSONSerialization.jsonObject(with: Data(("[" + token + "]").utf8)) as? [String]
+            guard let key = decoded?.first, keys.insert(key).inserted else { throw BindingError.unavailable }
+        }
+        return value
+    }
+
+    func snapshot() throws -> RegistrySnapshot {
+        guard let bindingURL = bindingURL else { throw BindingError.unavailable }
+        let binding = try object(bindingURL, ownerOnly: true)
+        guard let device = binding["device"] as? String,
+              device.range(of: "^stackchan-[a-f0-9]{12}$", options: .regularExpression) != nil,
+              let digest = binding["ca_sha256"] as? String,
+              digest.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+              let expiry = binding["expiry"] as? NSNumber, String(cString: expiry.objCType) != "c",
+              expiry.doubleValue == Double(expiry.int64Value), expiry.int64Value > 0, expiry.int64Value <= 0xffffffff else { throw BindingError.unavailable }
+        let base = projectRoot.appendingPathComponent(".tools/persistent-companion").resolvingSymlinksInPath()
+        let permissions = try FileManager.default.attributesOfItem(atPath: base.path)[.posixPermissions] as? NSNumber
+        guard let mode = permissions, mode.intValue & 0o077 == 0 else { throw BindingError.unavailable }
+        let profile = try object(base.appendingPathComponent("profile.json"), ownerOnly: false)
+        guard profile["exact_device_id"] as? String == device,
+              profile["ca_sha256"] as? String == digest,
+              let profileExpiry = profile["remember_until_unix"] as? NSNumber,
+              String(cString: profileExpiry.objCType) != "c", profileExpiry.doubleValue == Double(profileExpiry.int64Value), profileExpiry == expiry,
+              let path = profile["state_directory"] as? String, path.hasPrefix("/") else { throw BindingError.unavailable }
+        let state = URL(fileURLWithPath: path)
+        guard state.standardizedFileURL.path == path,
+              state.resolvingSymlinksInPath().path == path,
+              state.deletingLastPathComponent().path == base.path else { throw BindingError.unavailable }
+        let snapshot = try SQLiteRegistryReader(databaseURL: state.appendingPathComponent("home-lab.sqlite3"), deviceID: device).snapshot()
+        guard snapshot.pairState != .active || snapshot.expiryUnix == expiry.intValue else { throw BindingError.unavailable }
+        // State/count access intentionally cannot verify the stored CA/URI tuple.
+        // Availability never grants authority: the worker revalidates that full tuple.
+        return snapshot
     }
 }

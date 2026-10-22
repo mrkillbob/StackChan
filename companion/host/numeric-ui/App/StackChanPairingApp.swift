@@ -22,15 +22,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var controller = PairingController(
         approved: CommandLine.arguments.contains("--approved-test"),
-        root: URL(fileURLWithPath: "/Users/mikedemott/Developer/AgentWork/StackChan"),
+        root: URL(fileURLWithPath: ProcessInfo.processInfo.environment["STACKCHAN_ROOT"] ?? (Bundle.main.object(forInfoDictionaryKey: "StackChanRoot") as? String) ?? "/nonexistent/stackchan-unconfigured"),
         audioApproved: CommandLine.arguments.contains("--approved-audio"),
         audioMode: CommandLine.arguments.contains("--native-conversation") ? .nativeConversation : .transportTest)
-    private static let projectRoot = URL(fileURLWithPath: "/Users/mikedemott/Developer/AgentWork/StackChan")
+    private static let projectRoot = URL(fileURLWithPath: ProcessInfo.processInfo.environment["STACKCHAN_ROOT"] ?? (Bundle.main.object(forInfoDictionaryKey: "StackChanRoot") as? String) ?? "/nonexistent/stackchan-unconfigured")
     private static let robotLink = PairingControllerRobotLink()
     // Read-only view of the persistent host registry (state/counts only). Path A: the user runs
     // the Mira call themselves, so the route is manual and never claims "In call".
     @StateObject private var lifecycle = CompanionLifecycle(
-        trust: PersistentRegistryTrust(reader: SQLiteRegistryReader(databaseURL: Self.projectRoot.appendingPathComponent(".tools/persistent-companion/state/home-lab.sqlite3"))),
+        trust: PersistentRegistryTrust(reader: ConfiguredRegistryReader(projectRoot: Self.projectRoot, bindingURL: ProcessInfo.processInfo.environment["STACKCHAN_BINDING_CONFIG"].map { URL(fileURLWithPath: $0) })),
         route: ManualMacCallRoute(), link: robotLink, resources: WorkerAudioResources.shared)
     var body: some Scene {
         Window("StackChan Companion", id: "pairing") {

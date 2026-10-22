@@ -4,6 +4,7 @@ Numbers are comparison UX, not a password. TLS identity is an independent
 prerequisite. Only both physical robot confirmation and local Mac confirmation
 permit a volatile scoped grant; no audio authority until a correlated staged ACK.
 """
+import public_config as config
 import asyncio
 import json
 import math
@@ -12,9 +13,9 @@ import secrets
 import struct
 import time
 
-DEVICE='stackchan-80456b561404'
-URI='wss://192.168.1.75:18443/companion/audio'
-HOST='192.168.1.75';PORT=18443
+DEVICE=config.DEVICE
+URI=config.URI
+HOST=config.HOST;PORT=config.PORT
 HEX=re.compile(r'[0-9a-f]{32}\Z')
 def fresh_hex(value):
     return type(value) is str and HEX.fullmatch(value) is not None and value!='0'*32
@@ -69,6 +70,7 @@ class NumericPairing:
         if message is not None:value['message']=message
         self.emit(value);return value
     def prepare(self,request,boot_nonce,*,started_at=None,deadline_budget_seconds=120):
+        config.require()
         now=self.clock()
         if started_at is None:started_at=now
         if type(started_at) not in (int,float) or not math.isfinite(started_at) or not 0<=started_at<=now or type(deadline_budget_seconds) is not int or not 1<=deadline_budget_seconds<=120:

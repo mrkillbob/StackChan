@@ -26,7 +26,7 @@ class QualifiedProvider:
 
 
 class RemoteGateway:
-    def __init__(self, registry, sessions, provider_factory=None, *, fixture=False, session_factory=StreamingSession):
+    def __init__(self, registry, sessions, provider_factory=None, *, fixture=False, session_factory=StreamingSession, webcam_owner=None, webcam_deliver=None, camera_dispatcher_factory=None):
         self.registry = registry; self.sessions = sessions
         self.provider_factory = provider_factory; self.fixture = fixture
         self._active = set()
@@ -34,6 +34,9 @@ class RemoteGateway:
         self._cleaning=set()
         self._unclaimed_closers=set()
         self.session_factory=session_factory
+        self.webcam_owner=webcam_owner;self.webcam_deliver=webcam_deliver
+        from camera_stop_dispatcher import CameraStartCustodian
+        self.camera_custodian=CameraStartCustodian();self.camera_dispatcher_factory=camera_dispatcher_factory
         self.last_result={'outcome':'no_connection','native_conversation':True}
         self.completion_started=False
         self._activity_session=None
@@ -91,6 +94,14 @@ class RemoteGateway:
             session = self.session_factory(self.registry, self.sessions, provider.bridge,
                 grant.credential, grant.device_id, provider.arm,
                 fixture=self.fixture, native_session_ref=provider.route_reference)
+            if hasattr(session,"webcam_route"):
+                from webcam_transport import ExistingSessionWebcamRoute
+                from camera_stop_dispatcher import ExistingSessionStopDispatcher
+                stop=ExistingSessionStopDispatcher(session,self.webcam_owner,self.camera_custodian)
+                session.camera_stop_dispatcher=stop
+                session.webcam_route=ExistingSessionWebcamRoute(session,self.webcam_owner,deliver=self.webcam_deliver or (lambda frame:None),stop_evidence=stop.consumer,stop_dispatcher=stop,custodian=self.camera_custodian)
+            if self.camera_dispatcher_factory is not None:
+                session.camera_dispatcher=self.camera_dispatcher_factory(session,self.camera_custodian)
             session.on_complete=lambda:setattr(self,'completion_started',True)
             self._activity_session=session
             record_event(self.diagnostic_sink,'websocket','session_started')
@@ -135,6 +146,18 @@ class RemoteGateway:
                     self._unclaimed_closers.update(owner for kind,owner in retained if kind=='socket')
                 stats=session.statistics() if session is not None and hasattr(session,'statistics') else {}
                 self.last_result=dict(stats,outcome=outcome,conversation_complete=self.completion_started,diagnostics=diagnostics.snapshot())
+
+    def explicit_webcam_on(self):
+        session=self._activity_session
+        if session is None or not hasattr(session,'webcam_route'):
+            raise PermissionError('current authenticated webcam session unavailable')
+        return session.webcam_route.explicit_on()
+
+    def explicit_webcam_off(self):
+        session=self._activity_session
+        if session is None or not hasattr(session,'webcam_route'):return None
+        session.webcam_route.revoke()
+        return session.webcam_route.stop_status
 
     async def _close_device(self,device_id):
         # At most one retry owns this device; never open a replacement first.

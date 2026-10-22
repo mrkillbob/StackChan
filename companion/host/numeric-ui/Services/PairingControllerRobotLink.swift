@@ -20,6 +20,7 @@ final class PairingControllerRobotLink: RobotLinkOpening {
     func openRobotLink(epoch: UInt64, report: @escaping (UInt64, RobotLinkEvent) -> Void) {
         guard let controller = controller else { report(epoch, .lost(.protocolError)); return }
         self.epoch = epoch; self.report = report; wasLinked = false; wasConsented = false; localStop = false
+        controller.refreshAudioRouteAvailability()
         controller.useStackChan()
         // A refused or failed start never produced a live worker, so nothing can report later.
         guard controller.phase.busy else {

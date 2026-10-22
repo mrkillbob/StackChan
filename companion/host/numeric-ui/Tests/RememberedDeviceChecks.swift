@@ -11,7 +11,7 @@ final class MockRevoker: DeviceTrustRevoking {
 @main struct RememberedDeviceChecks {
  static func main() {
   let identity=DurableRobotIdentity(deviceKeyDigest:String(repeating:"a",count:64),hostKeyDigest:String(repeating:"b",count:64),trustProfileDigest:String(repeating:"c",count:64))!
-  assert(DurableRobotIdentity(deviceKeyDigest:"80456b561404",hostKeyDigest:String(repeating:"b",count:64),trustProfileDigest:String(repeating:"c",count:64))==nil)
+  assert(DurableRobotIdentity(deviceKeyDigest:"001122334455",hostKeyDigest:String(repeating:"b",count:64),trustProfileDigest:String(repeating:"c",count:64))==nil)
   let record=RememberedRobot(identity:identity,secureItemReference:"fixture-reference")!
   let store=MockStore();let revoker=MockRevoker();var model=RememberedPairing(storage:store,revoker:revoker)
   model.requestRemember(true);assert(model.requested && !model.activationAvailable && store.saved==nil)

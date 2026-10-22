@@ -2,6 +2,7 @@
 The operator confirms the original call and its two-bus route; no model, TTS,
 call-start API, device-default change or inferred conversation identity exists here.
 """
+import public_config as config
 from dataclasses import dataclass
 from pathlib import Path
 from array import array
@@ -15,9 +16,24 @@ from streaming_session import AudioBackpressure, SustainedAudioBackpressure, Str
 from gateway_connection import TransportComplete
 from transport_diagnostics import project_native_audio
 
-ROOT = Path('/Users/mikedemott/Developer/AgentWork/StackChan')
-LIBRARY = Path('/Users/mikedemott/Developer/AgentWork/Codex/2026-10-11/task-2/evidence/companion-reference-research/native-close-next/libstackchan_audio_checked.dylib')
-LIBRARY_HASH = '858e1769fb94fa99d040db119275ccea8bb4b9de5c5ee35e5ed24a182855ea16'
+ROOT = config.ROOT
+LIBRARY = config.LIBRARY
+LIBRARY_HASH = config.LIBRARY_HASH
+NATIVE_AUDIO_BACKEND = config.NATIVE_AUDIO_BACKEND
+NATIVE_AUDIO_TEST_SECONDS = config.NATIVE_AUDIO_TEST_SECONDS
+
+def _test_duration():
+    value = NATIVE_AUDIO_TEST_SECONDS
+    if value is not None and (NATIVE_AUDIO_BACKEND != 'directional_hal_v2' or type(value) is not int or not 1 <= value <= 15):
+        raise PermissionError('invalid trusted native test duration')
+    return value
+
+def _backend_route():
+    if NATIVE_AUDIO_BACKEND == 'legacy_bridge_v1':
+        return ('Pro Tools Audio Bridge 2-A_UID', 'Pro Tools Audio Bridge 2-B_UID')
+    if NATIVE_AUDIO_BACKEND == 'directional_hal_v2':
+        return ('local.mrkillbob.StackChan.hal.microphone.v2', 'local.mrkillbob.StackChan.hal.speaker.v2')
+    raise PermissionError('unsupported trusted native backend')
 
 @dataclass(frozen=True)
 class NativeRoute:
@@ -42,15 +58,15 @@ class HostAudioDeviceRoute:
     """OS audio endpoints. Physical Listen supplies capture consent separately."""
     input_uid: str
     output_uid: str
-    duration_seconds: None = None
+    duration_seconds: int | None = None
 
     @classmethod
     def from_dict(cls, value):
         if type(value) is not dict or set(value) != {'input_uid', 'output_uid'}:
             raise PermissionError('host audio endpoint route required')
-        if value.get('input_uid') != 'Pro Tools Audio Bridge 2-A_UID' or value.get('output_uid') != 'Pro Tools Audio Bridge 2-B_UID':
+        if (value.get('input_uid'), value.get('output_uid')) != _backend_route():
             raise PermissionError('unsupported host audio route')
-        return cls(value['input_uid'], value['output_uid'])
+        return cls(value['input_uid'], value['output_uid'], _test_duration())
 
 class NativeVoiceBridge(CodecHostBridge):
     """Drain real return PCM every20ms; gate turn-taking without storing speech."""
@@ -144,16 +160,18 @@ class NativeVoiceBridge(CodecHostBridge):
 class NativeConversationSession(StreamingSession):
     def __init__(self,*args,duration_seconds=60,**kwargs):
         super().__init__(*args,**kwargs)
-        self.duration_seconds=duration_seconds;self.started_at=None
+        test_seconds=_test_duration()
+        self.duration_seconds=(test_seconds if duration_seconds is None else min(test_seconds,duration_seconds)) if test_seconds is not None else duration_seconds
+        self.started_at=None
         self.on_complete=lambda:None;self.suppressed_mic_packets=0;self.backpressure_mic_packets=0
         self.backpressure_mic_streak=0
         self._pending_consent=None
-        # A numbered packet represents 60ms of audio, but network delivery may
-        # batch many packets into one instant. Count losses AND measure elapsed
-        # full-queue time before diagnosing a sustained 300ms uplink stall.
+        # Batched packet arrivals are not elapsed time: require a sustained300ms queue stall.
         self.max_backpressure_mic_streak=5
         self.max_backpressure_seconds=.30
         self._backpressure_since=None
+        from webcam_transport import ExistingSessionWebcamRoute
+        self.webcam_route=ExistingSessionWebcamRoute(self) # No camera authority in audio grant.
 
     def begin(self,request_id):
         epoch=self.epoch
@@ -207,12 +225,6 @@ class NativeConversationSession(StreamingSession):
         except BaseException:
             self._pending_consent=None;self.bridge.cancel_prepare();raise
 
-    def interrupt(self):
-        self._backpressure_since=None
-        self._pending_consent=None;self.armed=False;self.acknowledged=False
-        if callable(getattr(self.bridge,'cancel_prepare',None)):self.bridge.cancel_prepare()
-        return super().interrupt()
-
     def receive(self,wire):
         self._authorized();epoch,sequence,speaker,payload=decode_frame(wire)
         if not self.armed or not self._active() or epoch!=self.epoch or speaker:
@@ -250,6 +262,18 @@ class NativeConversationSession(StreamingSession):
             if self.speaker_seq==0xffffffff:raise OverflowError('speaker sequence exhausted')
             wire.append(encode_frame(self.epoch,self.speaker_seq,True,packet));self.speaker_seq+=1
         return active,wire
+
+    def interrupt(self):
+        self._backpressure_since=None
+        self._pending_consent=None;self.armed=False;self.acknowledged=False
+        if callable(getattr(self.bridge,'cancel_prepare',None)):self.bridge.cancel_prepare()
+        self.webcam_route.revoke()
+        try:super().interrupt()
+        finally:
+            camera_stop=getattr(self,'camera_stop_dispatcher',None)
+            if self.webcam_route.stop_pending or (camera_stop is not None and camera_stop.custodian.pending(self.device_id)):
+                # Existing gateway retains this exact session until checked camera closure.
+                raise RuntimeError("camera stop custody retained")
 
     def statistics(self):
         return dict(native_conversation=True,consent_received=self.started_at is not None,
@@ -413,6 +437,8 @@ class DeferredNativeBridge:
 
 def _build_native_bridge(cancelled=None):
     """Native library, codec allocation and CoreAudio startup happen at Listen."""
+    config.require_native()
+    _backend_route()  # reject unknown trusted selections before library/codec access
     if hashlib.sha256(LIBRARY.read_bytes()).hexdigest()!=LIBRARY_HASH:
         raise RuntimeError('reviewed native audio library changed')
     from native_adapter import NativeHostAdapter
@@ -422,8 +448,12 @@ def _build_native_bridge(cancelled=None):
         for create in (lambda:OpusCodec(16000),lambda:OpusCodec(24000),lambda:Resampler(16000,48000),lambda:Resampler(48000,24000)):
             components.append(create())
         bridge=NativeVoiceBridge(adapter,*components)
-        if cancelled is None:adapter.open_for_approved_test()
-        else:adapter.open_for_approved_test(cancelled=cancelled)
+        if NATIVE_AUDIO_BACKEND == 'directional_hal_v2':
+            if cancelled is None:adapter.open_directional_for_approved_test()
+            else:adapter.open_directional_for_approved_test(cancelled=cancelled)
+        else:
+            if cancelled is None:adapter.open_for_approved_test()
+            else:adapter.open_for_approved_test(cancelled=cancelled)
         return bridge
     except BaseException:
         owner=bridge if bridge is not None else _PartialCloseGroup([adapter,*components])
@@ -455,4 +485,6 @@ def host_audio_device_gateway(registry, sessions, route):
         raise PermissionError('host audio device route required')
     def session_factory(*args, **kwargs):
         return NativeConversationSession(*args, duration_seconds=route.duration_seconds, **kwargs)
-    return RemoteGateway(registry, sessions, lambda _: make_provider(route), session_factory=session_factory)
+    from camera_permission_wire import PairedSessionCameraPermissionDispatcher
+    return RemoteGateway(registry, sessions, lambda _: make_provider(route), session_factory=session_factory,
+        camera_dispatcher_factory=PairedSessionCameraPermissionDispatcher)

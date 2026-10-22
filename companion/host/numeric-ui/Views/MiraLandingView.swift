@@ -8,7 +8,7 @@ struct MiraLandingView: View {
     @ObservedObject var lifecycle: CompanionLifecycle
     @ObservedObject var controller: PairingController
     private var session: MiraHomeSession {
-        MiraHomeSession(phase: controller.phase, cleanupUnconfirmed: controller.cleanupPending || !controller.cleanupIssues.isEmpty || controller.stage == .restoring)
+        MiraHomeSession(phase: controller.phase, cleanupUnconfirmed: controller.cleanupPending || !controller.cleanupIssues.isEmpty || controller.stage == .restoring, persistentMode: controller.persistentMode)
     }
     var repair: () -> Void
     var localStop: () -> Void = {}
@@ -67,6 +67,10 @@ struct MiraLandingView: View {
                     }
                     Text("The robot’s physical stop also ends the session.").font(.caption).foregroundStyle(.secondary)
                 }
+            }
+            if session.canOpenSessionControls {
+                Button("Session and camera controls…", action: repair).buttonStyle(.bordered)
+                Text("Opening controls keeps this connection active.").font(.caption2).foregroundStyle(.secondary)
             }
             Button(pairTitle, action: repair).buttonStyle(.link).font(.caption)
                 .disabled(session.showsControls || lifecycle.presence.isLive || lifecycle.presence == .closing)

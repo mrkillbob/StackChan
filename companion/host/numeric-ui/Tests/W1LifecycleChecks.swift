@@ -70,7 +70,7 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
 
 @main struct W1LifecycleChecks {
     static func main() {
-        trustMapping(); sqliteReader(); presenceAndManualRoute(); closeReasons(); reconnect(); micStrip(); projection(); consentRevocation(); stopAudioSession()
+        trustMapping(); sqliteReader(); configuredReader(); coldLaunchRoute(); presenceAndManualRoute(); closeReasons(); reconnect(); micStrip(); projection(); consentRevocation(); stopAudioSession()
         print("PASS W1 lifecycle: registry trust, robot-vs-call presence, bounded reconnect, microphone strip, confirmed audio-worker stop; inert fixtures only")
     }
 
@@ -111,6 +111,67 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
         life.close(); mt.value = .valid; life.refreshTrust(); check(life.presence == .closed, "refresh never revives a closed session")
     }
 
+    static func configuredReader() {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("stackchan-configured-" + UUID().uuidString).resolvingSymlinksInPath()
+        let base = root.appendingPathComponent(".tools/persistent-companion")
+        let state = base.appendingPathComponent("reviewed-alternate-state")
+        try! FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        try! FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: base.path)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let binding = root.appendingPathComponent("binding.json"), profile = base.appendingPathComponent("profile.json")
+        let device = "stackchan-001122334455", digest = String(repeating: "a", count: 64)
+        func write(_ value: [String: Any], _ url: URL) { try! JSONSerialization.data(withJSONObject: value).write(to: url); try! FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
+        write(["device": device, "ca_sha256": digest, "expiry": 4000000000], binding)
+        let metadata: [String: Any] = ["exact_device_id": device, "ca_sha256": digest, "remember_until_unix": 4000000000, "state_directory": state.path]
+        write(metadata, profile)
+        var db: OpaquePointer?
+        check(sqlite3_open(state.appendingPathComponent("home-lab.sqlite3").path, &db) == SQLITE_OK, "configured fixture db")
+        sqlite(db, "CREATE TABLE stackchan_pair (device TEXT, state TEXT, expiry INTEGER)")
+        sqlite(db, "CREATE TABLE device_credentials (device_id TEXT, revoked_at TEXT)")
+        sqlite(db, "INSERT INTO stackchan_pair VALUES ('stackchan-001122334455','active',4000000000)")
+        sqlite(db, "INSERT INTO device_credentials VALUES ('stackchan-001122334455',NULL)")
+        sqlite(db, "INSERT INTO stackchan_pair VALUES ('stackchan-80456b561404','revoked',1)")
+        sqlite3_close(db)
+        let reader = ConfiguredRegistryReader(projectRoot: root, bindingURL: binding)
+        check(PersistentRegistryTrust(reader: reader, clock: { 1700000000 }).current() == .valid, "nonhistorical device and alternate checked state drive Home")
+        var reopened: OpaquePointer?
+        check(sqlite3_open(state.appendingPathComponent("home-lab.sqlite3").path, &reopened) == SQLITE_OK, "reopen configured db")
+        sqlite(reopened, "UPDATE stackchan_pair SET expiry=3999999999 WHERE device='stackchan-001122334455'")
+        check(PersistentRegistryTrust(reader: reader).current() == .unknown, "active row must match approved profile expiry")
+        sqlite(reopened, "UPDATE stackchan_pair SET expiry=4000000000 WHERE device='stackchan-001122334455'")
+        sqlite3_close(reopened)
+        write(["device": device, "ca_sha256": digest, "expiry": 4000000000.25], binding)
+        check(PersistentRegistryTrust(reader: reader).current() == .unknown, "fractional binding expiry rejected")
+        write(["device": device, "ca_sha256": digest, "expiry": 4000000000], binding)
+        var wrong = metadata; wrong["exact_device_id"] = "stackchan-ffffffffffff"; write(wrong, profile)
+        check(PersistentRegistryTrust(reader: reader).current() == .unknown, "mismatched profile device fails closed")
+        wrong = metadata; wrong["state_directory"] = root.path; write(wrong, profile)
+        check(PersistentRegistryTrust(reader: reader).current() == .unknown, "state outside profile base rejected")
+        write(metadata, profile)
+        try! FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: binding.path)
+        check(PersistentRegistryTrust(reader: reader).current() == .unknown, "nonprivate binding rejected")
+        write(["device": device, "ca_sha256": digest, "expiry": 4000000000], binding)
+        try! Data(("{\"device\":\"" + device + "\",\"device\":\"" + device + "\",\"ca_sha256\":\"" + digest + "\",\"expiry\":4000000000}").utf8).write(to: binding)
+        check(PersistentRegistryTrust(reader: reader).current() == .unknown, "duplicate binding keys rejected")
+    }
+
+    static func coldLaunchRoute() {
+        var checked = 0
+        let controller = PairingController(approved: true, root: URL(fileURLWithPath: "/tmp"), processFactory: { Process() }, audioRouteAvailability: { checked += 1; return false })
+        let adapter = PairingControllerRobotLink(); adapter.bind(controller)
+        adapter.openRobotLink(epoch: 1) { _, _ in }
+        check(checked == 1 && !controller.audioRouteEndpointsAvailable, "cold Home connection refreshes direction gate without visiting pairing UI; unavailable still refused")
+        var availableChecks = 0
+        let available = PairingController(approved: true, root: URL(fileURLWithPath: "/tmp"), processFactory: {
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/nonexistent/inert-stackchan-fixture"); return process
+        }, audioRouteAvailability: { availableChecks += 1; return true })
+        let readyAdapter = PairingControllerRobotLink(); readyAdapter.bind(available)
+        readyAdapter.openRobotLink(epoch: 2) { _, _ in }
+        check(availableChecks == 1 && available.audioRouteEndpointsAvailable && available.phase == .failed,
+              "available cold route reaches the inert worker start without requiring pairing-page onAppear")
+
+    }
+
     // MARK: (1b) the SQLite view: state/counts only, credential columns unreadable
     static func sqliteReader() {
         check(RegistryAuthorizer.allows(action: SQLITE_READ, table: "stackchan_pair", column: "state"), "state readable")
@@ -127,19 +188,19 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
         try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let missing = dir.appendingPathComponent("absent.sqlite3")
-        check((try? SQLiteRegistryReader(databaseURL: missing).snapshot()) == .empty && !FileManager.default.fileExists(atPath: missing.path), "missing db is empty and is not created")
+        check((try? SQLiteRegistryReader(databaseURL: missing, deviceID: "stackchan-80456b561404").snapshot()) == .empty && !FileManager.default.fileExists(atPath: missing.path), "missing db is empty and is not created")
 
         let url = dir.appendingPathComponent("home-lab.sqlite3")
         var w: OpaquePointer?
         check(sqlite3_open(url.path, &w) == SQLITE_OK, "fixture db")
         sqlite(w, "PRAGMA journal_mode = WAL")
         sqlite(w, "CREATE TABLE seed (x TEXT)")      // gives the WAL a header, as the real store has
-        let reader = SQLiteRegistryReader(databaseURL: url)
+        let reader = SQLiteRegistryReader(databaseURL: url, deviceID: "stackchan-80456b561404")
         // A bare database (nothing ever enrolled) has no tables: unpaired, and still not modified.
         let bare = dir.appendingPathComponent("bare.sqlite3"); var bw: OpaquePointer?
         check(sqlite3_open(bare.path, &bw) == SQLITE_OK, "bare fixture"); sqlite(bw, "CREATE TABLE unrelated (x TEXT)"); sqlite3_close(bw)
         let bareBefore = try! Data(contentsOf: bare)
-        check((try? SQLiteRegistryReader(databaseURL: bare).snapshot()) == RegistrySnapshot.empty, "database without registry tables is unpaired")
+        check((try? SQLiteRegistryReader(databaseURL: bare, deviceID: "stackchan-80456b561404").snapshot()) == RegistrySnapshot.empty, "database without registry tables is unpaired")
         check(try! Data(contentsOf: bare) == bareBefore, "reader never modifies the database")
         sqlite(w, "CREATE TABLE stackchan_pair (device TEXT PRIMARY KEY, ca TEXT NOT NULL, uri TEXT NOT NULL, expiry INTEGER NOT NULL, state TEXT NOT NULL, context TEXT)")
         sqlite(w, "CREATE TABLE device_credentials (device_id TEXT PRIMARY KEY, credential_hash TEXT NOT NULL UNIQUE, revoked_at TEXT)")
@@ -184,7 +245,7 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
         sqlite3_close(w)
         let garbage = dir.appendingPathComponent("garbage.sqlite3")
         try! Data("not a database, only synthetic bytes".utf8).write(to: garbage)
-        check(PersistentRegistryTrust(reader: SQLiteRegistryReader(databaseURL: garbage)).current() == .unknown, "unreadable database -> unknown, not absent")
+        check(PersistentRegistryTrust(reader: SQLiteRegistryReader(databaseURL: garbage, deviceID: "stackchan-80456b561404")).current() == .unknown, "unreadable database -> unknown, not absent")
     }
 
     // MARK: (2) presence and (6) ManualMacCallRoute

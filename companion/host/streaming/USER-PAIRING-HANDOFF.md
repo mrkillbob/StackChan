@@ -1,14 +1,14 @@
 # Human-operated USB pairing handoff
 
-`user_pairing.py` is a one-shot interactive transport for the existing SCPG v1 grant format. It is pinned in source to device `stackchan-80456b561404` and endpoint `wss://192.168.1.75:18443/companion/audio`. It neither issues credentials nor validates gateway readiness. A qualified route and a current, approved temporary token in a protected local preparation sheet are prerequisites; this source change does not mean either is ready.
+`user_pairing.py` is a one-shot interactive transport for the existing SCPG v1 grant format. It is pinned in source to device `<approved-device-id>` and endpoint `wss://<approved-lan-host>:18443/companion/audio`. It neither issues credentials nor validates gateway readiness. A qualified route and a current, approved temporary token in a protected local preparation sheet are prerequisites; this source change does not mean either is ready.
 
 Only the human operator runs the CLI and enters the token. Do not put a token in chat, command arguments, shell variables, a pipe, redirected input, or logs. The script reads no credential file; copy the token manually from the protected local sheet into its masked terminal prompt. Python may retain immutable token/frame data in process memory temporarily; the script does not promise secure memory erasure.
 
 Use the existing official pyserial 3.5 installation in the IDF Python environment. No dependency or USB driver installation is needed:
 
 ```
-cd /Users/mikedemott/Developer/AgentWork/StackChan/src/upstream/companion/host/streaming
-/Users/mikedemott/Developer/AgentWork/StackChan/.tools/espressif/python_env/idf5.5_py3.13_env/bin/python user_pairing.py --port <verified-robot-serial-port>
+cd $STACKCHAN_ROOT/companion/host/streaming
+$STACKCHAN_ROOT/.tools/espressif/python_env/idf5.5_py3.13_env/bin/python user_pairing.py --port <verified-robot-serial-port>
 ```
 
 Replace only the serial-port placeholder with the independently verified robot port. There is no automatic port discovery. Run in a real terminal without redirection; stdin, stdout and stderr must all be TTYs. Verify the printed pinned endpoint and device. Enter the current token at the masked prompt. After that prompt, physically open Companion on the robot and tap **Pair trusted host**. Type the exact word `PAIR` only while that window is open. Enter or any other response cancels before the serial port is opened.

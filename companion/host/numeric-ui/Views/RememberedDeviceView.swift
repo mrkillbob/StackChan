@@ -1,23 +1,25 @@
 import SwiftUI
+// Explicit wrapper alias avoids SDK27 State macro subprocesses in source-only builds.
+private typealias CompanionViewState<Value> = SwiftUI.State<Value>
 struct RememberedDeviceView: View {
     @ObservedObject var controller: PairingController
-    @State private var deviceFeedback = ""
+    @CompanionViewState private var deviceFeedback = ""
     var body: some View {
         GroupBox("Sync · Saved Mac pairing") {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Saved wireless trust is reused. To use StackChan as normal audio devices, select StackChan Microphone as your input and StackChan Speaker as your output in Sound or your Voice app, then call Mira normally. Sync prepares the listener without requiring a call to be open.").font(.caption).fixedSize(horizontal: false, vertical: true)
+                Text("Saved wireless trust is reused. The existing StackChan aliases appear in both Input and Output; dedicated input-only and output-only devices are not available yet. Sync still prepares the existing internal audio route. Physical Listen remains required.").font(.caption).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
                     Image(systemName: controller.audioRouteEndpointsAvailable ? "checkmark.circle.fill" : "exclamationmark.circle")
                         .foregroundStyle(controller.audioRouteEndpointsAvailable ? .green : .secondary)
-                    Text(controller.audioRouteEndpointsAvailable ? "Both CoreAudio endpoints are available" : "CoreAudio Bridge 2-A/2-B not found")
+                    Text(controller.audioRouteEndpointsAvailable ? "Both internal bridge buses are available" : "CoreAudio Bridge 2-A/2-B not found")
                         .font(.caption)
                 }
-                Button("Make StackChan selectable") {
+                Button("Check audio device directions") {
                     do {
                         _ = try StackChanAudioDevices.ensure()
-                        deviceFeedback = "Select StackChan Microphone for input and StackChan Speaker for output. Sync and physical Listen are still required."
+                        deviceFeedback = "Input-only StackChan Microphone and output-only StackChan Speaker verified. Sync and physical Listen are still required."
                     } catch {
-                        deviceFeedback = "Could not prepare StackChan devices: \(error). Existing Bridge 2-A input and 2-B output remain available."
+                        deviceFeedback = "Directional StackChan devices are unavailable: \(error). Existing Sync transport is unchanged; duplex aliases are not a direction fix."
                     }
                     controller.refreshAudioRouteAvailability()
                 }.disabled(controller.activity != nil || controller.cleanupPending)
@@ -43,6 +45,21 @@ struct RememberedDeviceView: View {
                 if controller.persistentMode {
                     Button(controller.activity == nil ? "Cancel" : "Disconnect", action: controller.cancel)
                         .disabled(!controller.canCancel)
+                }
+                GroupBox("Companion camera") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(controller.cameraPermissionFeedback).font(.caption).fixedSize(horizontal: false, vertical: true)
+                        HStack {
+                            Button("Request webcam permission") { controller.explicitCameraPermission(.webcam) }
+                                .disabled(controller.activity == nil || controller.cleanupPending)
+                            Button("Request gesture permission") { controller.explicitCameraPermission(.gestures) }
+                                .disabled(controller.activity == nil || controller.cleanupPending)
+                            Button("Camera permission Off") { controller.revokeCameraPermission(requestID: UUID().uuidString) }
+                        }
+                        Text("Confirm this purpose on StackChan. Capture stays unavailable until the device is qualified.").font(.caption)
+                        WebcamControlsView(controls: controller.webcam)
+                        GesturePerceptionControlsView(controls: controller.gestures)
+                    }.padding(.vertical, 4)
                 }
                 Text(controller.rememberedStatus).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if controller.phase == .paired && controller.activity == nil { Text("No microphone capture starts during enrollment. Sync is a separate action; physical Listen remains required.").font(.caption) }

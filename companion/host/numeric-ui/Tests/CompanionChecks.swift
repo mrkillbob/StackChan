@@ -14,9 +14,8 @@ final class MockRestorationVerifier: SessionRestorationVerifying {
   precondition(condition(),"bounded companion fixture did not complete")
  }
  static func fake(_ body: String) -> Process {
-  let process=Process();process.executableURL=URL(fileURLWithPath:"/usr/bin/python3")
-  let group=getpgrp()
-  process.arguments=["-B","-u","-c","import os\nos.setpgid(0, \(group))\nif os.getpgrp() != \(group): raise RuntimeError('fixture group mismatch')\n"+body]
+  let process=Process();process.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["STACKCHAN_TEST_PYTHON"] ?? "/usr/bin/python3")
+  process.arguments=["-B","-u","-c",FixtureCustody.wrap(body)]
   return process
  }
  static func main() {

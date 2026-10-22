@@ -1,8 +1,8 @@
 import Foundation
 
 struct AudioDeviceRoute {
-    static let voiceInputUID = "Pro Tools Audio Bridge 2-A_UID"
-    static let voiceOutputUID = "Pro Tools Audio Bridge 2-B_UID"
+    static let voiceInputUID = "local.mrkillbob.StackChan.hal.microphone.v2"
+    static let voiceOutputUID = "local.mrkillbob.StackChan.hal.speaker.v2"
 
     let endpointsAvailable: Bool
 

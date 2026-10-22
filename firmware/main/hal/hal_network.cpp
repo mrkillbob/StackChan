@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 #include "hal.h"
+#include <apps/runtime_lifecycle/session.h>
+#include <companion/station_authority.hpp>
 #include <stackchan/stackchan.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
@@ -46,6 +48,7 @@ void Hal::startSntp()
 
 void Hal::startNetwork(std::function<void(std::string_view)> onLog)
 {
+    if(companion::network::Authority().Current()!=companion::network::Owner::Vendor||!companion::network::Authority().CanAcquire(companion::network::Owner::Vendor)){if(onLog)onLog("Network ownership is unavailable; return Home.");return;}
     if (_is_network_connected) {
         mclog::tagInfo(_tag, "network already connected");
         return;
@@ -108,12 +111,13 @@ void Hal::startNetwork(std::function<void(std::string_view)> onLog)
     });
     board.StartNetwork();
 
-    while (!network_connected) {
-        GetHAL().delay(500);
+    while (!network_connected&&!runtime_lifecycle::HomeRequested()) {
+        GetHAL().delay(20);
     }
     mclog::tagInfo(_tag, "network connected");
     board.SetNetworkEventCallback(nullptr);
 
+    if(runtime_lifecycle::HomeRequested())return;
     startSntp();
 
     _is_network_connected = true;
@@ -138,3 +142,5 @@ WifiStatus Hal::getWifiStatus()
     }
     return WifiStatus::Low;
 }
+
+void Hal::forgetNativeNetwork(){_is_network_connected=false;}
