@@ -13,7 +13,7 @@ struct ContentView: View {
         } else {
             VStack(spacing: 0) {
                 PairingContentView(controller: controller)
-                if !controller.phase.busy {
+                if !controller.phase.busy || (controller.persistentMode && controller.phase == .paired && !controller.cleanupPending && controller.cleanupIssues.isEmpty) {
                     Button("Back to Mira") { showPairing = false }.buttonStyle(.link).font(.caption).padding(.bottom, 14)
                 }
             }

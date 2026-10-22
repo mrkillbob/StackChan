@@ -25,7 +25,10 @@ enum LaunchDestination: Equatable {
 struct MiraHomeSession {
     let phase: PairingPhase
     let cleanupUnconfirmed: Bool
-    var pairedThisSession: Bool { phase == .paired }
+    var persistentMode = false
+    var pairedThisSession: Bool { phase == .paired && !persistentMode }
+    var savedPairingSession: Bool { phase == .paired && persistentMode }
+    var canOpenSessionControls: Bool { persistentMode && phase == .paired && !cleanupUnconfirmed }
     var showsControls: Bool { phase.busy || cleanupUnconfirmed }
 }
 

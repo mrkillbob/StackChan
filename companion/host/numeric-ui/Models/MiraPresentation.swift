@@ -8,6 +8,7 @@ enum MiraPresentation {
         case .closing, .cleanupIncomplete: return status(presence)
         default: break
         }
+        if session.savedPairingSession && !presence.isLive { return "Saved pairing" }
         if session.pairedThisSession && !presence.isLive { return "Paired for this session" }
         if session.showsControls && !presence.isLive { return "Session cleanup pending" }
         return status(presence)
@@ -20,6 +21,7 @@ enum MiraPresentation {
             return detail(presence, workerActivity: workerActivity, closeRecord: closeRecord, lastFailure: lastFailure)
         default: break
         }
+        if session.savedPairingSession && !presence.isLive { return "Saved wireless trust is selected. Listener readiness, call continuity, microphone capture and playback are not verified here." }
         if session.pairedThisSession && !presence.isLive { return "The pairing is temporary. Companion cannot verify or join your existing Mira call through a supported route; call continuity and speaker playback remain unverified." }
         return detail(presence, workerActivity: workerActivity, closeRecord: closeRecord, lastFailure: lastFailure)
     }
