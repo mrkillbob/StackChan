@@ -1,4 +1,5 @@
 #include "feature_apps.h"
+#include <apps/common/home_indicator/home_indicator.h>
 #include <companion/direct_usb_pcm/usb_pcm_app.h>
 #include <apps/common/tool_visual.hpp>
 #include <companion/feature_link.h>
@@ -176,9 +177,13 @@ public:
   companion::OpenView(native_root_);companion::PublicStatusOwner().Set(this,[](void* owner){return static_cast<JointApp*>(owner)->PublicStatusIdle();});Render();RenderNativeControls();ShowControls(false);
   // Child builders release the LVGL lock independently. Publish only the final
   // companion mode, after the hidden feature/setup controls are ready.
-  {LvglLockGuard lock;lv_obj_remove_flag(frame_,LV_OBJ_FLAG_HIDDEN);}
+  {LvglLockGuard lock;lv_obj_remove_flag(frame_,LV_OBJ_FLAG_HIDDEN);
+   view::create_home_indicator([this]{closing_=true;usb_pending_=false;},
+                               0xB8D3FD,0x26206A,lv_layer_top(),false);
+  }
  }
  void onRunning()override{
+  {LvglLockGuard lock;view::update_home_indicator();}
   if(closing_){
    if(CloseUsbView()&&CloseAll())close();
    else ShowPending("Stopping Mira and USB.\nCleanup pending; keep this page open.");
@@ -225,7 +230,7 @@ public:
    open();return;
   }
   usb_active_=false;usb_return_=false;companion::PublicStatusOwner().Clear(this);
-  LvglLockGuard lock;if(frame_)lv_obj_delete(frame_);
+  LvglLockGuard lock;view::destroy_home_indicator();if(frame_)lv_obj_delete(frame_);
   frame_=root_=native_root_=native_controls_=native_actions_=status_=picker_=pending_panel_=pending_text_=nullptr;
   callbacks_.clear();native_callbacks_.clear();closing_=false;
  }

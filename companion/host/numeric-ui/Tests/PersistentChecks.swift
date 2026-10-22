@@ -6,7 +6,7 @@ import Foundation
         precondition(condition(), "bounded fixture did not complete")
     }
     static func fake(_ source: String) -> Process {
-        let p=Process();p.executableURL=URL(fileURLWithPath:"/opt/homebrew/bin/python3.14");p.arguments=["-B","-u","-c",FixtureCustody.wrap(source)];return p
+        let p=Process();p.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["STACKCHAN_TEST_PYTHON"] ?? "/usr/bin/python3");p.arguments=["-B","-u","-c",FixtureCustody.wrap(source)];return p
     }
     static func main() {
         let root=URL(fileURLWithPath:"/synthetic")
@@ -98,7 +98,7 @@ for line in sys.stdin:
         let importRoot = ProcessInfo.processInfo.environment["STACKCHAN_FIXTURE_PROJECT_ROOT"].map { URL(fileURLWithPath: $0) } ?? candidateRoot
         precondition(FileManager.default.fileExists(atPath: importRoot.appendingPathComponent("bridge/host-adapter/host_adapter.py").path), "fixture project dependency root required")
         let runtime = PairingController(approved: false, root: importRoot)
-        let probe=Process();probe.executableURL=URL(fileURLWithPath:"/opt/homebrew/bin/python3.14")
+        let probe=Process();probe.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["STACKCHAN_TEST_PYTHON"] ?? "/usr/bin/python3")
         probe.arguments=["-B","-c",FixtureCustody.wrap("import native_adapter, native_conversation")]
         probe.currentDirectoryURL=URL(fileURLWithPath:runtime.rememberedWorkerLaunchArguments.last!).deletingLastPathComponent()
         probe.environment=runtime.workerLaunchEnvironment

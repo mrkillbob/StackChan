@@ -6,6 +6,7 @@
 #include "hal.h"
 #include <apps/runtime_lifecycle/session.h>
 #include <companion/station_authority.hpp>
+#include <companion/station_event_barrier.hpp>
 #include <algorithm>
 #include <mooncake_log.h>
 #include <esp_wifi.h>
@@ -200,10 +201,13 @@ bool Hal::stopEspNow(){
     if(home_ip_handler){if(esp_event_handler_instance_unregister(IP_EVENT,IP_EVENT_STA_GOT_IP,home_ip_handler)!=ESP_OK)return false;home_ip_handler=nullptr;}
     if(home_sta_netif){
         auto result=esp_wifi_stop();if(result!=ESP_OK&&result!=ESP_ERR_WIFI_NOT_STARTED)return false;
-        esp_netif_destroy_default_wifi(home_sta_netif);home_sta_netif=nullptr;
     }
+    // Unregistering prevents new dispatch but a queued/running callback can still
+    // borrow the netif and event group. Keep both alive until the default loop drains.
+    if((home_sta_netif||s_wifi_event_group)&&!companion::network::DrainStationEvents())return false;
+    if(home_sta_netif){esp_netif_destroy_default_wifi(home_sta_netif);home_sta_netif=nullptr;}
     // Keep the boot-lifetime driver initialized for the vendor Wi-Fi manager.
-    // SDK event handlers were removed before their borrowed event group is freed.
+    // All callbacks have returned before their borrowed event group is freed.
     if(s_wifi_event_group){vEventGroupDelete(s_wifi_event_group);s_wifi_event_group=nullptr;}
     return true;
 }

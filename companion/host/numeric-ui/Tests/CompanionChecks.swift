@@ -14,7 +14,7 @@ final class MockRestorationVerifier: SessionRestorationVerifying {
   precondition(condition(),"bounded companion fixture did not complete")
  }
  static func fake(_ body: String) -> Process {
-  let process=Process();process.executableURL=URL(fileURLWithPath:"/opt/homebrew/bin/python3.14")
+  let process=Process();process.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["STACKCHAN_TEST_PYTHON"] ?? "/usr/bin/python3")
   process.arguments=["-B","-u","-c",FixtureCustody.wrap(body)]
   return process
  }

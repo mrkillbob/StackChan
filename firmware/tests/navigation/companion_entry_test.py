@@ -1,8 +1,7 @@
 """Run production entry/control bodies at inert UI, network and HAL boundaries.
 
 Regressions caught: configured Stackchan constructs an intermediate gate; Mira
-publishes partially assembled setup UI at a lock release; session Home becomes
-hidden behind a menu icon. Also cover setup, busy ownership, cancellation and
+publishes partially assembled setup UI at a lock release; session Home is duplicated by a persistent footer. Also cover setup, busy ownership, cancellation and
 repeated lifecycle cleanup. No device, microphone or call is opened.
 """
 from pathlib import Path
@@ -97,6 +96,7 @@ int main(){using stock_agent::StockAgentApp;
 
 joint = (main / 'apps/stock_shell/feature_apps.cc').read_text()
 mira = common + r'''
+namespace view {std::function<void()> home;template<class F>void create_home_indicator(F f,unsigned,unsigned,lv_obj_t* p,bool show){assert(p==lv_layer_top()&&!show);home=f;} }
 namespace companion {
  struct FeatureUiAction{};struct PublicStatus {template<class F>void Set(void*,F){}};
  PublicStatus& PublicStatusOwner(){static PublicStatus s;return s;}
@@ -134,7 +134,8 @@ int main(){
   assert(Visible(app.native_root_)&&!Visible(app.root_));
   app.ShowControls(true);assert(Text("Pair scopes")&&!Text("Connect"));
   app.ShowControls(false);assert(!Text("Pair scopes")&&Text("Connect"));
-  lv_obj_delete(app.frame_);assert(!LiveObjects());
+  app.usb_pending_=true;view::home();assert(app.closing_&&!app.usb_pending_);
+  view::home={};lv_obj_delete(app.frame_);assert(!LiveObjects());
  }
  puts("20 Mira constructions published only final companion mode at lock boundaries");
 }
@@ -144,32 +145,30 @@ namespace companion {
  struct FeatureUiAction''')
 
 controls = common + r'''
-#include "apps/stock_agent/session_controls.hpp"
 enum State {kDeviceStateWifiConfiguring,kDeviceStateActivating,kDeviceStateIdle,
  kDeviceStateConnecting,kDeviceStateListening,kDeviceStateSpeaking,kDeviceStateAudioTesting,kDeviceStateFatalError};
-State state=kDeviceStateIdle;bool home_requested=false;
+State state=kDeviceStateIdle;bool home_requested=false;unsigned stops=0;
 struct Application {static Application& GetInstance(){static Application a;return a;}State GetDeviceState(){return state;}};
 namespace runtime_lifecycle {bool HomeRequested(){return home_requested;}}
-namespace stock_agent {std::atomic<bool> slow_stop{false};
-''' + body(stock, 'const char* SessionText()') + r'''
-}
-unsigned stops=0;const char* status="Stackchan - idle";
-void Stop(){++stops;}const char* Status(){return status;}
-int main(){
- stock_agent::CleanSessionControls controls;
- controls.Create(Stop,stock_agent::SessionText);
- assert(Text("Stackchan - wake word on")&&"the newly visible footer must retain the Stackchan product label");
- home_requested=true;stock_agent::slow_stop=true;TickTimers();assert(Text("Stop pending; ownership retained"));
- controls.Destroy();home_requested=false;
- for(unsigned cycle=0;cycle<20;++cycle){
-  controls.Create(Stop,Status);
-  assert(!Text("LIST_ICON")&&"the companion session must not expose a dropdown/menu icon");
-  auto home=Button("Stop / Home");assert(home&&"Stop/Home must remain directly available without a menu");
-  Click(home);assert(stops==cycle+1);
-  status="Stop pending; ownership retained";TickTimers();assert(Text(status));
-  controls.Destroy();assert(!LiveObjects());TickTimers();assert(!LiveObjects());
+namespace view {
+ std::function<void()> home;std::function<const char*()> status;
+ void create_home_indicator(std::function<void()> stop,unsigned,unsigned,lv_obj_t* parent,bool show,std::function<const char*()> text){
+  assert(parent==lv_layer_top()&&!show);home=stop;status=text;
  }
- puts("20 session control create/stop/status/destroy cycles passed without a menu icon");
+}
+namespace stock_agent {std::atomic<bool> slow_stop{false};
+void ReturnHome(){home_requested=true;++stops;}
+''' + body(stock, 'const char* SessionText()') + body(stock, 'void SessionControls()') + r'''
+}
+int main(){
+ for(unsigned cycle=0;cycle<20;++cycle){
+  home_requested=false;stock_agent::SessionControls();
+  assert(!LiveObjects()&&"the companion session must not paint a persistent footer");
+  assert(std::string(view::status())=="Stackchan - wake word on");
+  view::home();assert(stops==cycle+1&&home_requested);
+  stock_agent::slow_stop=true;assert(std::string(view::status())=="Stop pending; ownership retained");
+ }
+ puts("20 session entries retained swipe Home, accurate transient status and no persistent footer");
 }
 '''
 

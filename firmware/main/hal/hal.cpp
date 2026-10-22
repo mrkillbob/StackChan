@@ -198,12 +198,15 @@ static void _stackchan_update_task(void* param)
         if (!is_setup_done) {
             // Setup when xiaozhi ready
             GetHAL().startSntp();
-            view::create_home_indicator([]() { GetHAL().requestWarmReboot(0); }, 0x81DBBD, 0x134233);
+            // Companion sessions own and poll Home from their outer stop loop,
+            // including before readiness and while workers are joining.
+            if (!runtime_lifecycle::Active())
+                view::create_home_indicator([]() { GetHAL().requestWarmReboot(0); }, 0x81DBBD, 0x134233);
             view::create_status_bar(0x81DBBD, 0x134233);
             is_setup_done = true;
         }
 
-        view::update_home_indicator();
+        if (!runtime_lifecycle::Active()) view::update_home_indicator();
         view::update_status_bar();
     }
     runtime_lifecycle::UpdateExited();

@@ -104,8 +104,8 @@ int main(){
   }
  }
  std::printf("selectable=%u playback_visible=%u preview_visible=%u painted_samples=%u\n",selectable,playback_visible,preview_visible,painted);std::fflush(stdout);
- assert(selectable==216);
- assert(playback_visible==216);assert(preview_visible==216);assert(painted>216);
+ assert(selectable==215);
+ assert(playback_visible==215);assert(preview_visible==215);assert(painted>215);
  // Invalid modes remain actual errors; valid slow timing must not reach this UI.
  lv_obj_t canvas;std::vector<uint16_t> pixels(320*240);
  Screensaver invalid;invalid._style=static_cast<view::saver::Style>(65535);

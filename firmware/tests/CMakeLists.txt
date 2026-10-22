@@ -66,3 +66,15 @@ add_test(NAME usb_actor_close_test COMMAND ${Python3_EXECUTABLE}
 
 add_test(NAME companion_entry_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/companion_entry_test.py)
+
+add_executable(moire_removal_test navigation/moire_removal_test.cpp
+    ../main/apps/app_launcher/view/effect_catalog/effect_catalog.cpp)
+target_include_directories(moire_removal_test PRIVATE ../main)
+target_compile_features(moire_removal_test PRIVATE cxx_std_17)
+add_test(NAME moire_removal_test COMMAND moire_removal_test)
+
+add_test(NAME companion_home_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/companion_home_test.py)
+
+add_test(NAME espnow_stop_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/espnow_stop_test.py)

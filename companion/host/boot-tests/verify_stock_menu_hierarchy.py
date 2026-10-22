@@ -9,6 +9,10 @@ screensaver_views={"firmware/main/apps/app_launcher/view/view.h"}
 # Reviewed navigation view/lifecycle snapshots. Inline hashes keep this check
 # self-contained without requiring the unpublished source candidate's Git object.
 navigation_views={
+ # Bottom-swipe Home gains initially-hidden companion mode and transient status;
+ # other callers retain default first-show behavior (companion_home_test.py).
+ 'firmware/main/apps/common/home_indicator/home_indicator.cpp':'489ad3496c004df47081277156c3fb3c567443bb2787b2fc6b358eb638523731',
+ 'firmware/main/apps/common/home_indicator/home_indicator.h':'ca2949cec90f6ea25b46dda5231840701596b5c4e4fdc0b8626fb91a2e8ee752',
  "firmware/main/apps/app_launcher/view/screensaver.cpp":"52900c120f8e1d1460b29e0f830cf2c5b1b3df2bbe526dfd2420dfd8449097af",
  "firmware/main/apps/common/toast/toast.cpp":"27aba8cce159c046fcf31374990a1598f9fc0a489a368d76b93481504ced03ca",
  "firmware/main/apps/common/toast/toast.h":"d6ea6796042b15bc14e0a468ba1c7df93280c3fd820fc1a60b58385f940709e2",
