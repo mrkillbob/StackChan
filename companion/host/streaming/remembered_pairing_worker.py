@@ -50,6 +50,7 @@ def load_trust_profile(profile_path=PROFILE):
     decoded=ssl._ssl._test_decode_cert(str(cert))
     ca_decoded=ssl._ssl._test_decode_cert(str(ca))
     expiry=int(ssl.cert_time_to_seconds(decoded['notAfter']))
+    config.require_server_certificate(cert.read_bytes(),int(ssl.cert_time_to_seconds(decoded['notBefore'])),expiry)
     if type(profile['remember_until_unix']) is not int or profile['remember_until_unix']!=expiry or int(ssl.cert_time_to_seconds(ca_decoded['notAfter']))!=expiry or int(ssl.cert_time_to_seconds(decoded['notBefore']))!=profile['begin'] or not ssl.cert_time_to_seconds(decoded['notBefore'])<=time.time()<expiry:raise ValueError('certificate expired or changed')
     if ('IP Address',config.HOST) not in decoded.get('subjectAltName',()):raise ValueError('wrong endpoint certificate')
     if key.stat().st_mode & 0o077 or base.stat().st_mode & 0o077:raise ValueError('private profile required')

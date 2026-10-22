@@ -262,6 +262,51 @@ class USBTrustTests(unittest.TestCase):
             with self.assertRaises(n.PairingError) as failure:n._runtime(args)
         self.assertEqual(str(failure.exception),'certificate_expired')
 
+class ServerCertificatePinTests(unittest.TestCase):
+    def check_profile(self, changed):
+        import hashlib
+        from contextlib import ExitStack
+        from datetime import datetime, timezone
+        from unittest.mock import MagicMock
+        import remembered_pairing_worker as w
+        with tempfile.TemporaryDirectory() as directory,ExitStack() as patches:
+            base=Path(directory);base.chmod(0o700)
+            ca=base/'ca.pem';cert=base/'server.pem';key=base/'server-key.pem'
+            ca.write_bytes(b'synthetic CA');cert.write_bytes(b'synthetic certificate');key.write_bytes(b'not a key');key.chmod(0o600)
+            digest=hashlib.sha256(cert.read_bytes()).hexdigest()
+            profile=dict(exact_device_id='stackchan-001122334455',host='192.168.42.10',port=18443,
+                pair_path='/companion/pair',audio_path='/companion/audio',ca_path=str(ca),
+                ca_sha256=hashlib.sha256(ca.read_bytes()).hexdigest(),cert_path=str(cert),key_path=str(key),
+                remember_until_unix=2000,state_directory=str(base/'state'),transport_scopes=['usb-tls-pcm-v1','wifi-wss'],
+                version=1,begin=1000,end=2000,not_after_utc=datetime.fromtimestamp(2000,timezone.utc).isoformat(),
+                approval_sha256='a'*64,ca_private_key_serialized=False,profile_activated=False,automatic_renewal=False)
+            path=base/'profile.json';path.write_text(json.dumps(profile))
+            pins=dict(DEVICE=profile['exact_device_id'],HOST=profile['host'],PORT=18443,
+                URI='wss://192.168.42.10:18443/companion/audio',CA_HASH=profile['ca_sha256'],EXPIRY=2000,
+                CERT_HASH=digest,CERT_BEGIN=1000,CERT_END=2000,_ERROR=None)
+            if changed=='bytes':cert.write_bytes(b'replacement with identical dates')
+            elif changed=='begin':pins['CERT_BEGIN']=999
+            elif changed=='end':pins['CERT_END']=2001
+            patches.enter_context(patch.multiple(w.config,**pins))
+            patches.enter_context(patch.object(w,'PROFILE',path))
+            patches.enter_context(patch.object(w,'DEVICE',profile['exact_device_id']))
+            patches.enter_context(patch.object(w.time,'time',return_value=1500))
+            patches.enter_context(patch.object(w.ssl,'cert_time_to_seconds',side_effect=lambda value:{'begin':1000,'end':2000}[value]))
+            patches.enter_context(patch.object(w.ssl._ssl,'_test_decode_cert',return_value=dict(notBefore='begin',notAfter='end',subjectAltName=(('IP Address',profile['host']),))))
+            context=MagicMock();factory=patches.enter_context(patch.object(w.ssl,'SSLContext',return_value=context))
+            if changed:
+                with self.assertRaises(ValueError):w.load_trust_profile(path)
+                factory.assert_not_called();context.load_cert_chain.assert_not_called()
+            else:
+                result,_,_=w.load_trust_profile(path)
+                self.assertIs(result,context);context.load_cert_chain.assert_called_once_with(cert,key)
+
+    def test_exact_certificate_reaches_tls_setup(self):self.check_profile(None)
+    def test_changed_certificate_or_each_pin_fails_before_private_key_loading(self):
+        for changed in ('bytes','begin','end'):
+            with self.subTest(changed=changed):self.check_profile(changed)
+
+
 class InitialForgetRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_initial_load_failure_retries_pinned_registry_on_close(self):
         import remembered_pairing_worker as w

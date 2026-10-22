@@ -5,6 +5,7 @@ STACKCHAN_BINDING_CONFIG; changes require restarting this process. It contains
 public trust pins and paths only, never keys, certificates or credentials.
 """
 import ipaddress
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -81,3 +82,13 @@ def require_native():
     require()
     if not _hash(LIBRARY_HASH) or not os.environ.get('HOME_LAB_ROOT'):
         raise ValueError('approved native dependency unavailable')
+
+
+def require_server_certificate(data, begin, end):
+    """Require the owner-bound exact server certificate before loading its key."""
+    require()
+    if (type(data) is not bytes or not 1 <= len(data) <= 8192
+            or not _hash(CERT_HASH) or hashlib.sha256(data).hexdigest() != CERT_HASH
+            or type(begin) is not int or type(end) is not int
+            or begin != CERT_BEGIN or end != CERT_END):
+        raise ValueError('unpinned server certificate')
