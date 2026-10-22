@@ -75,3 +75,6 @@ add_test(NAME moire_removal_test COMMAND moire_removal_test)
 
 add_test(NAME companion_home_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/companion_home_test.py)
+
+add_test(NAME espnow_stop_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/espnow_stop_test.py)

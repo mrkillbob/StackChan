@@ -19,8 +19,8 @@ without skips, after preparing the pinned SDK/vendor caches. Its initially
 empty cache exposed two failures and two skipped tests, so dependency-free
 CTest success must not be claimed. The sibling-worktree fallback in the nested
 USB fixture was removed; the documented in-checkout dependency is required.
-This follow-up changes test/documentation only; the firmware implementation
-remains byte-for-byte identical to the installed-image source.
+The initial reconciliation commit `fdac723` changes test/documentation only;
+its firmware implementation is byte-for-byte identical to the installed-image source.
 
 Physical face, Home touch/swipe, Moire/Moire2, voice, reconnect and device
 acceptance remain unrun. No flash, enrollment, trusted-device profile, firmware
@@ -29,3 +29,25 @@ security flags or gateway process was changed for this reconciliation.
 Publication is prepared locally. The recorded PR identity is historical;
 current GitHub head/CI could not be read because API connectivity was unavailable.
 No push or PR update is claimed, and no merge is authorized by this document.
+
+## Source-only callback lifetime correction after publication
+
+PR3's unresolved P1 review identified a real `stopEspNow()` ordering defect:
+station callbacks could still borrow the netif/event group when teardown freed
+them. The follow-up drains the default event loop after unregistering handlers
+and stopping Wi-Fi, before destroying either borrowed object. A failed drain
+retains both objects for the next checked-close attempt.
+
+The new ASan/UBSan fixture executes the production method. It fails on the old
+method when destruction occurs with queued callbacks, and passes the corrected
+method, including timeout retention, retry, Wi-Fi stop failure and repeated stop.
+All 22 firmware host CTests pass without skips. The new candidate therefore
+contains a firmware implementation correction beyond the installed image.
+No new binary is installed or claimed to match the saved installed bytes.
+
+A full ESP-IDF configure/build was attempted with local cached dependencies.
+Configure was blocked when idf_component_manager's psutil process lookup called
+sandbox-denied sysctl (`PermissionError: Operation not permitted`). It was not
+retried through a different access route. No full firmware build pass is claimed
+for this additional source fix. Hosted CI and final exact-head review remain
+separate merge prerequisites.
