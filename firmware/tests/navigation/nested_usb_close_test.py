@@ -106,7 +106,7 @@ int main(){
 '''
 mooncake=repo/'firmware/components/mooncake/src'
 if not (mooncake/'mooncake.h').exists():
- mooncake=repo.parent/'stackchan-screensaver-repair/firmware/components/mooncake/src'
+ raise SystemExit('Missing pinned Mooncake dependency; run firmware/fetch_repos.py before the host suite')
 with tempfile.TemporaryDirectory(prefix='stackchan-nested-usb-close-') as tmp:
  tmp=Path(tmp);(tmp/'test.cpp').write_text(fixture+pending+helper+opened+running+close+'\n};\n'+checks)
  subprocess.run(['clang++','-std=c++17','-O1','-g','-fsanitize=address,undefined','-Wno-sign-compare','-I'+str(main),'-I'+str(mooncake),str(tmp/'test.cpp'),*[str(p) for p in mooncake.rglob('*.cpp')],'-o',str(tmp/'test')],check=True)
