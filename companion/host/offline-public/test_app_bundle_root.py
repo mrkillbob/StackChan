@@ -14,7 +14,7 @@ UI = Path(__file__).resolve().parents[1] / 'numeric-ui'
 
 
 class AppBundleRoot(unittest.TestCase):
-    def build(self, mode, *, override=False, missing=False, cdpath=False):
+    def build(self, mode, *, override=False, missing=False, cdpath=False, relative_script=False):
         temporary = tempfile.TemporaryDirectory(prefix="bundle & <root> ' ")
         self.addCleanup(temporary.cleanup)
         base = Path(temporary.name).resolve()
@@ -66,7 +66,12 @@ with open(os.environ['BUNDLE_RECEIPT'], 'a') as stream: stream.write(json.dumps(
             selected.mkdir()
             env['STACKCHAN_ROOT'] = selected.name
             env['CDPATH'] = str(base)
-        result = subprocess.run(['/bin/bash', str(ui / 'script/build_and_run.sh'), mode],
+        script = str(ui / 'script/build_and_run.sh')
+        if relative_script:
+            caller = root
+            env['CDPATH'] = str(root)
+            script = 'companion/host/numeric-ui/script/build_and_run.sh'
+        result = subprocess.run(['/bin/bash', script, mode],
                                 env=env, cwd=caller, capture_output=True, text=True, timeout=15)
         records = [json.loads(line) for line in receipt.read_text().splitlines()] if receipt.exists() else []
         metadata = build / 'StackChanPairing.app/Contents/Info.plist'
@@ -88,6 +93,12 @@ with open(os.environ['BUNDLE_RECEIPT'], 'a') as stream: stream.write(json.dumps(
 
     def test_relative_checkout_from_cdpath_persists_exact_canonical_root(self):
         result, records, metadata, root = self.build('--compile-only', cdpath=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(plistlib.loads(metadata.read_bytes()).get('StackChanRoot'), str(root))
+        self.assertFalse(any(r['kind'] in ('open', 'codesign') for r in records))
+
+    def test_relative_helper_invocation_with_cdpath_preserves_derived_root(self):
+        result, records, metadata, root = self.build('--compile-only', relative_script=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(plistlib.loads(metadata.read_bytes()).get('StackChanRoot'), str(root))
         self.assertFalse(any(r['kind'] in ('open', 'codesign') for r in records))
