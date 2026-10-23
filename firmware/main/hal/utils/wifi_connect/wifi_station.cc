@@ -87,11 +87,14 @@ bool StackChanWifiStation::ApplyPending() {
     }
     return true;
 }
-void StackChanWifiStation::FailPending(WifiConnectionFailure failure) {
+void StackChanWifiStation::FailPending(WifiConnectionFailure failure, bool only_if_uncommitted) {
     std::string failed_ssid;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!pending_ && !is_connecting_) return;
+        // Poll's snapshot can race an IP event claiming persistence. The
+        // timeout and commit must claim the attempt under this same mutex.
+        if (only_if_uncommitted && committing_) return;
         failed_ssid = ssid_;
         WipePendingLocked();
         Wipe(ssid_);
@@ -115,9 +118,9 @@ void StackChanWifiStation::Poll() {
         band = band_;
     }
     if (!expired) return;
-    if (associated) FailPending({"dhcp_timeout", "Connected to the router, but no IP address was assigned. Check router DHCP settings."});
-    else if (band.has_5ghz_hint()) FailPending(wifiNot2G4Failure());
-    else FailPending({"connection_timeout", "Wi-Fi connection timed out. Check SSID, password and router range."});
+    if (associated) FailPending({"dhcp_timeout", "Connected to the router, but no IP address was assigned. Check router DHCP settings."}, true);
+    else if (band.has_5ghz_hint()) FailPending(wifiNot2G4Failure(), true);
+    else FailPending({"connection_timeout", "Wi-Fi connection timed out. Check SSID, password and router range."}, true);
 }
 void StackChanWifiStation::Stop(){(void)StopChecked();}
 bool StackChanWifiStation::StopChecked(){

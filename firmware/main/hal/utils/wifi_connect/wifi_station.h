@@ -62,7 +62,8 @@ private:
     bool awaiting_disconnect_ = false;
     bool committing_ = false;
     bool ApplyPending();
-    void FailPending(WifiConnectionFailure failure = {"connection_failed", "Wi-Fi connection failed."});
+    void FailPending(WifiConnectionFailure failure = {"connection_failed", "Wi-Fi connection failed."},
+                     bool only_if_uncommitted = false);
     void WipePendingLocked();
     EventGroupHandle_t event_group_;
     esp_event_handler_instance_t instance_any_id_ = nullptr;

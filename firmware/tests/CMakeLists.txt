@@ -58,6 +58,8 @@ add_test(NAME reconciliation_phone_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/reconciliation_phone_test.py)
 add_test(NAME reconciliation_vendor_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/reconciliation_vendor_test.py)
+add_test(NAME reconciliation_power_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/reconciliation_power_test.py)
 
 add_executable(screensaver_management_test navigation/screensaver_management_test.cpp)
 target_include_directories(screensaver_management_test PRIVATE ../main)

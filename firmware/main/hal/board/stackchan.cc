@@ -394,6 +394,10 @@ private:
 
     void UpdatePowerSaveEnabled(bool has_external_power, bool is_discharging)
     {
+        if (!power_save_timer_) return;
+#ifdef STACKCHAN_COMPANION_BOOT
+        if (companion::CurrentAudioOwner() != companion::AudioOwner::Stock) return;
+#endif
         const bool should_enable_power_save = ShouldEnablePowerSave(has_external_power, is_discharging);
         if (should_enable_power_save == last_power_save_enabled_) {
             return;
@@ -583,11 +587,11 @@ private:
 #ifdef STACKCHAN_COMPANION_BOOT
                     if(companion::CurrentAudioOwner()==companion::AudioOwner::Stock) {
                         if(!board->power_save_timer_)board->InitializePowerSaveTimer();
-                        board->PollPowerSaveState();
                     }else if(board->power_save_timer_){board->power_save_timer_->SetEnabled(false);board->last_power_save_enabled_=false;}
-#else
-                    board->PollPowerSaveState();
 #endif
+                    // Battery sampling remains live in Home/Native; enabling
+                    // Stock's sleep/shutdown timer is separately owner gated.
+                    board->PollPowerSaveState();
                 },
             .arg                   = this,
             .dispatch_method       = ESP_TIMER_TASK,
