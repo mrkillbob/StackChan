@@ -83,6 +83,14 @@ Neither value is populated by the public source build. No real credential, priva
 key, current certificate validity or physical card content is inferred here.
 The window has no token field, clipboard operation or credential log.
 
+Opus/FFmpeg libraries use platform discovery, with `/opt/homebrew/lib` and
+`/usr/local/lib` fallbacks on macOS and normal `.so` loader search on Linux.
+Custom installations can set `STACKCHAN_OPUS_LIBRARY`,
+`STACKCHAN_SWRESAMPLE_LIBRARY`, and `STACKCHAN_AVUTIL_LIBRARY` to absolute library
+paths. An empty, relative or unloadable override fails without fallback. Select
+libraries compatible with the Python process architecture and the existing codec
+API; this does not install libraries or enable audio.
+
 The worker anchors its finite deadline at robot Ready, including its startup and
 control-loop margin. This does not prove boot continuity, physical audio timing,
 route restoration or capture shutdown on actual hardware. See
