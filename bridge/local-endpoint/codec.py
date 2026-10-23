@@ -2,11 +2,41 @@
 State is connection-local. No audio device or network access occurs here.
 """
 import ctypes as C
+import ctypes.util
+import os
 import sys
 
 P=C.c_void_p
 U8=C.POINTER(C.c_ubyte)
 I16=C.POINTER(C.c_int16)
+
+
+def load_library(name):
+    """Resolve installed libraries without assuming one macOS architecture/prefix."""
+    option = 'STACKCHAN_' + name.upper() + '_LIBRARY'
+    override = os.environ.get(option)
+    if override is not None:
+        if not os.path.isabs(override):
+            raise OSError(option + ' must name an absolute library path')
+        try:
+            return C.CDLL(override)
+        except OSError as error:
+            raise OSError('Cannot load ' + option + ': ' + str(error)) from error
+    discovered = ctypes.util.find_library(name)
+    candidates = [discovered] if discovered else []
+    if sys.platform == 'darwin':
+        candidates += [prefix + '/lib' + name + '.dylib'
+                       for prefix in ('/opt/homebrew/lib', '/usr/local/lib')]
+    else:
+        candidates.append('lib' + name + '.so')
+    errors = []
+    for candidate in dict.fromkeys(candidates):
+        try:
+            return C.CDLL(candidate)
+        except OSError as error:
+            errors.append(str(error))
+    raise OSError('Cannot load ' + name + '; set ' + option +
+                  ' to its absolute installed library path: ' + '; '.join(errors))
 
 
 def bind(lib,name,result,args):
@@ -17,7 +47,7 @@ class OpusCodec:
     def __init__(self,rate):
         if sys.byteorder!='little' or rate not in (16000,24000,48000):raise ValueError('unsupported PCM format')
         self.rate=rate;self.encoder=self.decoder=None
-        self.lib=C.CDLL('/opt/homebrew/lib/libopus.dylib')
+        self.lib=load_library('opus')
         self.create_encoder=bind(self.lib,'opus_encoder_create',P,[C.c_int,C.c_int,C.c_int,C.POINTER(C.c_int)])
         self.create_decoder=bind(self.lib,'opus_decoder_create',P,[C.c_int,C.c_int,C.POINTER(C.c_int)])
         self.enc=bind(self.lib,'opus_encode',C.c_int,[P,I16,C.c_int,U8,C.c_int])
@@ -73,7 +103,7 @@ class Resampler:
     def __init__(self,input_rate,output_rate):
         if sys.byteorder!='little' or input_rate not in (16000,24000,48000) or output_rate not in (16000,24000,48000):raise ValueError('rate')
         self.input_rate=input_rate;self.output_rate=output_rate;self.ctx=P()
-        self.lib=C.CDLL('/opt/homebrew/lib/libswresample.dylib');self.av=C.CDLL('/opt/homebrew/lib/libavutil.dylib')
+        self.lib=load_library('swresample');self.av=load_library('avutil')
         self.layout_default=bind(self.av,'av_channel_layout_default',None,[C.POINTER(Layout),C.c_int])
         self.alloc=bind(self.lib,'swr_alloc_set_opts2',C.c_int,[C.POINTER(P),C.POINTER(Layout),C.c_int,C.c_int,C.POINTER(Layout),C.c_int,C.c_int,C.c_int,P])
         self.init=bind(self.lib,'swr_init',C.c_int,[P])
