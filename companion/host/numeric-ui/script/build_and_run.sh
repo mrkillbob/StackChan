@@ -3,7 +3,7 @@ set -euo pipefail
 MODE="${1:-run}"
 TASK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_ROOT="${STACKCHAN_ROOT:-$(cd "$TASK_ROOT/../../.." && pwd)}"
-PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd -P)"
+PROJECT_ROOT="$(cd -- "$PROJECT_ROOT" >/dev/null && pwd -P)"
 BUILD_ROOT="${STACKCHAN_UI_BUILD_ROOT:-$PROJECT_ROOT/.tools/numeric-ui}"
 if [[ "$MODE" == "--compile-only" && -z "${STACKCHAN_UI_BUILD_ROOT:-}" ]]; then
   BUILD_ROOT="$PROJECT_ROOT/.tools/numeric-ui/source-only"
