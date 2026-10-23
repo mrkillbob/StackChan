@@ -70,8 +70,41 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
 
 @main struct W1LifecycleChecks {
     static func main() {
-        trustMapping(); sqliteReader(); configuredReader(); coldLaunchRoute(); presenceAndManualRoute(); closeReasons(); reconnect(); micStrip(); projection(); consentRevocation(); stopAudioSession()
+        workerPython(); trustMapping(); sqliteReader(); configuredReader(); coldLaunchRoute(); presenceAndManualRoute(); closeReasons(); reconnect(); micStrip(); projection(); consentRevocation(); stopAudioSession()
         print("PASS W1 lifecycle: registry trust, robot-vs-call presence, bounded reconnect, microphone strip, confirmed audio-worker stop; inert fixtures only")
+    }
+
+    static func workerPython() {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("worker python " + UUID().uuidString)
+        try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func executable(_ path: String) -> URL {
+            let url = root.appendingPathComponent(path)
+            try! FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try! Data("inert fixture; never executed".utf8).write(to: url)
+            try! FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+            return url
+        }
+        let configured = executable("configured venv/bin/python")
+        let pathPython = executable("intel prefix/bin/python3")
+        let env = ["STACKCHAN_PYTHON": configured.path, "PATH": pathPython.deletingLastPathComponent().path]
+        check(WorkerPython.resolve(environment: env, root: root) == configured, "explicit executable with spaces takes precedence")
+        check(WorkerPython.resolve(environment: ["PATH": pathPython.deletingLastPathComponent().path], root: root) == pathPython, "PATH Python works without Apple Silicon prefix")
+        let venv = executable(".venv/bin/python3")
+        check(WorkerPython.resolve(environment: ["PATH": pathPython.deletingLastPathComponent().path], root: root) == venv, "checkout venv takes precedence over PATH")
+        for invalid in ["", "relative/python", root.appendingPathComponent("missing").path, root.path] {
+            check(WorkerPython.resolve(environment: ["STACKCHAN_PYTHON": invalid, "PATH": pathPython.deletingLastPathComponent().path], root: root) == nil, "invalid explicit Python fails closed instead of choosing another")
+        }
+        try! FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configured.path)
+        check(WorkerPython.resolve(environment: ["STACKCHAN_PYTHON": configured.path], root: root) == nil, "nonexecutable configured file rejects")
+        let emptyRoot = root.appendingPathComponent("empty")
+        _ = executable("empty/bin/python3")
+        _ = executable("empty/python3")
+        let previousDirectory = FileManager.default.currentDirectoryPath
+        check(FileManager.default.changeCurrentDirectoryPath(emptyRoot.path), "enter inert fixture cwd")
+        defer { _ = FileManager.default.changeCurrentDirectoryPath(previousDirectory) }
+        check(WorkerPython.resolve(environment: ["PATH": ":.:bin"], root: emptyRoot) == nil, "relative and empty PATH entries never select cwd executables")
+        check(WorkerPython.resolve(environment: [:], root: emptyRoot) == nil, "missing interpreter is unavailable, never an author-specific fallback")
     }
 
     // MARK: (1) LaunchTrustProviding backed by the registry view

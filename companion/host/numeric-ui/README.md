@@ -69,6 +69,13 @@ authorization. The installed, idle app is not modified by these source checks.
 Live operation requires separately approved bindings/configuration and existing
 operator/device consent gates. `STACKCHAN_BINDING_CONFIG` selects an explicit
 owner-only binding file; `HOME_LAB_ROOT` supplies the existing local host source.
+Set `STACKCHAN_PYTHON` to the absolute executable in the approved Python virtual
+environment (paths containing spaces are supported). An invalid explicit value
+fails setup without falling back. With no override, the worker uses this
+checkout's `.venv/bin/python3` or `.venv/bin/python`, then `python3` in an absolute
+directory of the inherited `PATH`. Empty/relative PATH entries are ignored. No
+interpreter or dependencies are provisioned by the build, and resolution does
+not launch a probe. Finder's PATH may be limited, so an explicit value is preferred.
 Neither value is populated by the public source build. No real credential, private
 key, current certificate validity or physical card content is inferred here.
 The window has no token field, clipboard operation or credential log.
