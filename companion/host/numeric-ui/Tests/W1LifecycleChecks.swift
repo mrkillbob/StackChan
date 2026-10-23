@@ -78,6 +78,8 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("worker python " + UUID().uuidString)
         try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        let controller = PairingController(approved: false, root: root)
+        check(controller.workerLaunchEnvironment["STACKCHAN_ROOT"] == root.path, "worker receives the resolved controller root, including bundle-selected overrides")
         func executable(_ path: String) -> URL {
             let url = root.appendingPathComponent(path)
             try! FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
