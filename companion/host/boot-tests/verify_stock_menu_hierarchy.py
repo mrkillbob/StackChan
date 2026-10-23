@@ -4,6 +4,8 @@ from pathlib import Path
 import subprocess,re,json,hashlib
 repo=Path(__file__).resolve().parents[3]
 base="1b5765599fba8aaad1811d9a79358ccc7051f5f3"
+# Preserve main's later Network Test row as well as the lifecycle additions.
+main_menu_base="eff0d6b5109663faec8f1d98848b4b0e5246bbfc"
 screensaver_base="4a24491761ffab19f3df758c93ebbdada4c29ddc"
 screensaver_views={"firmware/main/apps/app_launcher/view/view.h"}
 # Reviewed navigation view/lifecycle snapshots. Inline hashes keep this check
@@ -24,7 +26,7 @@ def menu_labels(source):
  source="\n".join(line.split("//",1)[0] for line in source.splitlines())
  return re.findall(r'"([^"\n]*)"',source)
 setup="firmware/main/apps/app_setup/app_setup.cpp"
-expected_setup=menu_labels(original(setup).decode())
+expected_setup=menu_labels(original(setup,main_menu_base).decode())
 # Keep official labels/order, the new Device row, and the requested agent rename.
 expected_setup.insert(expected_setup.index("Brightness"), "Screensaver")
 expected_setup[expected_setup.index("AI.Agent")]="Stackchan"

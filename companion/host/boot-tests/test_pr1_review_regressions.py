@@ -104,6 +104,7 @@ int main() {
             original = (REPO / setup).read_text()
             for label, replacement in (("Brightness", "Unexpected Brightness"),
                                        ("Brightness", "Screensaver"),
+                                       ("Testing service", "Unexpected service"),
                                        ("Stackchan", "AI.Agent")):
                 with self.subTest(label=label, replacement=replacement):
                     (fixture / setup).write_text(original.replace(
