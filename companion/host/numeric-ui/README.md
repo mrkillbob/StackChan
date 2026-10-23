@@ -69,6 +69,9 @@ authorization. The installed, idle app is not modified by these source checks.
 Live operation requires separately approved bindings/configuration and existing
 operator/device consent gates. `STACKCHAN_BINDING_CONFIG` selects an explicit
 owner-only binding file; `HOME_LAB_ROOT` supplies the existing local host source.
+The build helper embeds the canonical checkout root as `StackChanRoot` in the
+bundle before signing, so normal LaunchServices launch can resolve it without
+inheriting `STACKCHAN_ROOT`. Rebuild when moving the checkout.
 Set `STACKCHAN_PYTHON` to the absolute executable in the approved Python virtual
 environment (paths containing spaces are supported). An invalid explicit value
 fails setup without falling back. With no override, the worker uses this

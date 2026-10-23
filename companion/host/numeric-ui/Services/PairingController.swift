@@ -45,6 +45,7 @@ final class PairingController: ObservableObject {
     private var candidateHost: URL { URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent() }
     var workerLaunchEnvironment: [String: String] {
         var environment = ProcessInfo.processInfo.environment
+        environment["STACKCHAN_ROOT"] = root.path
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         environment["PYTHONPATH"] = [URL(fileURLWithPath: environment["HOME_LAB_ROOT"] ?? "/nonexistent/stackchan-home-lab").appendingPathComponent("src").path, root.appendingPathComponent("bridge/host-adapter").path,
           root.appendingPathComponent("bridge/local-endpoint").path, root.appendingPathComponent(".tools/bridge-python").path,
