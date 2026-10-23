@@ -12,5 +12,5 @@ bool ConsumePreviewRequest();
 bool AutoStartRequested();
 // One-shot authorization for the root boot dispatcher after validating opt-in.
 void AuthorizeAutoStart();
-[[noreturn]] void RunStockAgent();
+void RunStockAgent();
 }

@@ -1,28 +1,22 @@
 import SwiftUI
-/// Root: Mira home is always the launch surface. Pairing opens only from its button and
-/// returns home when this process's pairing reaches .paired. Diagnostics live only in the
-/// pairing flow.
+/// Root: Mira home is always the launch surface. Pairing and the remembered-device controls
+/// open only from its button. A live worker/session stays visible until it completes or is
+/// cancelled, so hiding the pairing view never leaves pairing or audio running behind Home.
 struct ContentView: View {
     @ObservedObject var controller: PairingController
     @ObservedObject var lifecycle: CompanionLifecycle
+    var localStop: () -> Void = {}
     @State private var showPairing = false
     var body: some View {
-        Group {
-            if !showPairing {
-                MiraLandingView(lifecycle: lifecycle, controller: controller, repair: { showPairing = true })
-            } else {
-                VStack(spacing: 0) {
-                    PairingContentView(controller: controller)
-                    // Keep a live worker/session visible until it completes or is cancelled.
-                    // Hiding the pairing view must not leave pairing or audio running behind Home.
-                    if !controller.phase.busy {
-                        Button("Back to Mira") { showPairing = false }
-                            .buttonStyle(.link).font(.caption).padding(.bottom, 14)
-                    }
+        if !showPairing {
+            MiraLandingView(lifecycle: lifecycle, controller: controller, repair: { showPairing = true }, localStop: localStop)
+        } else {
+            VStack(spacing: 0) {
+                PairingContentView(controller: controller)
+                if !controller.phase.busy || (controller.persistentMode && controller.phase == .paired && !controller.cleanupPending && controller.cleanupIssues.isEmpty) {
+                    Button("Back to Mira") { showPairing = false }.buttonStyle(.link).font(.caption).padding(.bottom, 14)
                 }
             }
-        }.onChange(of: controller.phase) { _, newPhase in
-            if newPhase == .paired { showPairing = false }
         }
     }
 }
@@ -34,16 +28,18 @@ struct PairingContentView: View {
                 Image(systemName: "desktopcomputer.and.arrow.down").font(.title)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("StackChan Companion").font(.title2.weight(.semibold))
-                    Text(controller.audioApproved ? controller.audioSubtitle : "USB + Wi-Fi · Temporary pairing check").font(.caption).foregroundStyle(.secondary)
+                    Text(controller.persistentMode ? "Remembered pairing · Manual connection" : (controller.audioApproved ? controller.audioSubtitle : "USB + Wi-Fi · Temporary pairing check")).font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if controller.audioApproved {
+            RememberedDeviceView(controller: controller)
+            DisclosureGroup("Temporary pairing diagnostic") {
+            if controller.audioApproved && !controller.persistentMode {
                 Text(controller.audioDisclosure)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             SessionFlowView(stage: controller.stage, readyNow: controller.readyNow)
             VStack(alignment: .leading, spacing: 12) {
-                if controller.canAcknowledgeCall {
+                if !controller.persistentMode && controller.canAcknowledgeCall {
                     Button("My original call is open", action: controller.acknowledgeOriginalCall)
                 }
                 Text(controller.instruction).font(.body).fixedSize(horizontal: false, vertical: true)
@@ -68,9 +64,9 @@ struct PairingContentView: View {
                 Spacer()
                 Button(controller.primaryTitle, action: controller.primary).buttonStyle(.borderedProminent).disabled(!controller.canPrimary)
             }
-            Text(controller.audioApproved ? "Match the number on both screens. The robot’s Pair & authorize mic/speaker button gives physical consent. Use its physical stop to end the session. Nothing is saved as permanent trust." : "Pairing keeps StackChan muted. Audio needs separate approval. Nothing is saved as permanent trust.")
+            Text(controller.persistentMode ? "Enrollment saves wireless trust. Use StackChan prepares the listener; physical Listen on the robot remains the audio gate." : (controller.audioApproved ? "Match the number on both screens. The robot’s Pair & authorize mic/speaker button gives physical consent. Use its physical stop to end the session. Nothing is saved as permanent trust." : "Pairing does not grant audio. Audio starts only after separate physical Listen consent."))
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            RememberedDeviceView(controller: controller)
+            }
             IntegrationReadinessView()
         }.padding(26).frame(width: 520)
     }

@@ -29,12 +29,20 @@ int main(){
  for(auto s:{Screen::Home,Screen::Infrared,Screen::Learn,Screen::Send,Screen::Library,Screen::Nfc,Screen::Edit,Screen::Emulate,Screen::Uart,Screen::UartEdit})assert(Allowed(s,Back));
  assert(Parent(Screen::Library)==Screen::Infrared&&Parent(Screen::UartEdit)==Screen::Uart);
  assert(Allowed(Screen::Home,OpenUart)&&Allowed(Screen::Infrared,OpenLibrary)&&Allowed(Screen::Send,SaveRemote));
- assert(Allowed(Screen::Library,ChooseRemote+7)&&!Allowed(Screen::Library,ChooseRemote+8));
+ // The current named IR archive and its consumer both bound the library to64.
+ assert(Allowed(Screen::Library,ChooseRemote+63)&&!Allowed(Screen::Library,ChooseRemote+64));
  assert(Allowed(Screen::Uart,StartDemo)&&Allowed(Screen::Uart,SendDemo)&&!Allowed(Screen::Uart,SendOnce));
  assert(!Allowed(Screen::Library,StartEmulate)&&!Allowed(Screen::UartEdit,SendDemo));
  assert(!Allowed(Screen::Home,StartLearn)&&!Allowed(Screen::Edit,StartEmulate)&&!Allowed(Screen::Send,StartLearn));
  using namespace companion;
- assert(CurrentAudioOwner()==AudioOwner::None);assert(AcquireAudio(AudioOwner::Mira));assert(!AcquireAudio(AudioOwner::Stock));
- ReleaseAudio(AudioOwner::Stock);assert(CurrentAudioOwner()==AudioOwner::Mira);
- ReleaseAudio(AudioOwner::Mira);assert(AcquireAudio(AudioOwner::Stock));assert(!AcquireAudio(AudioOwner::Mira));ReleaseAudio(AudioOwner::Stock);
+ // In-memory authority only: this fixture never opens hardware or workers.
+ AudioLease mira_lease,stock_lease;
+ assert(CurrentAudioOwner()==AudioOwner::None);
+ assert(AcquireAudio(AudioOwner::Mira,AudioPurpose::Session,1,mira_lease));
+ assert(!AcquireAudio(AudioOwner::Stock,AudioPurpose::StockRuntime,1,stock_lease));
+ assert(!ReleaseAudio(stock_lease,true));assert(CurrentAudioOwner()==AudioOwner::Mira);
+ assert(ReleaseAudio(mira_lease,true));
+ assert(AcquireAudio(AudioOwner::Stock,AudioPurpose::StockRuntime,2,stock_lease));
+ assert(!AcquireAudio(AudioOwner::Mira,AudioPurpose::Session,2,mira_lease));
+ assert(ReleaseAudio(stock_lease,true));assert(CurrentAudioOwner()==AudioOwner::None);
 }

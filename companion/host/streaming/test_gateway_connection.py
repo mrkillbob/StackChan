@@ -28,6 +28,13 @@ class Session:
 class Tests(unittest.IsolatedAsyncioTestCase):
     async def check_closed(self,socket,session):
         self.assertTrue(socket.closed);self.assertTrue(session.closed);self.assertEqual(socket.pending,0);self.assertLessEqual(socket.peak,1)
+    async def test_persistent_connection_keeps_revocation_and_cancel_cleanup(self):
+        w=Socket();s=Session();t=asyncio.create_task(run_connection(w,s,duration=None))
+        await asyncio.sleep(.03)
+        self.assertFalse(t.done())
+        s.revoked=True
+        with self.assertRaises(PermissionError):await t
+        await self.check_closed(w,s)
     async def test_controls_and_binary_dispatch_until_deadline(self):
         w=Socket(['{"type":"ack","epoch":1}',b'x'*17]);s=Session()
         with self.assertRaises(TimeoutError):await run_connection(w,s,duration=.04)

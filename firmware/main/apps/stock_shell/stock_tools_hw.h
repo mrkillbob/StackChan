@@ -14,6 +14,7 @@ class Infrared {
 
 public:
     std::vector<uint32_t> learned;
+    uint32_t carrier_hz = 38000; // Raw learning cannot measure carrier; known capture assumption.
     bool Learn(uint64_t now);
     bool Poll(uint64_t now);
     bool SendOnce();

@@ -3,6 +3,7 @@
 Open/stabilize precedes physical Pair. A receipt proves local staging only;
 Connect remains a separate physical action. No tokens in arguments/files/logs.
 """
+import public_config as config
 import argparse
 import getpass
 import signal
@@ -17,8 +18,8 @@ from pathlib import Path
 from provisioning import MAX_FRAME, pack_grant
 from pairing_receipt import READY, STAGED, REJECTED, EXPIRED, decode_receipt
 
-ENDPOINT = 'wss://192.168.1.75:18443/companion/audio'
-DEVICE = 'stackchan-80456b561404'
+ENDPOINT = config.URI
+DEVICE = config.DEVICE
 SESSION_SECONDS = 180
 INPUT_LIMIT = 4096
 
@@ -122,6 +123,7 @@ def main(argv=None):
             raise PairingFailure('interactive_terminal_required')
         if not args.port or len(args.port) > 256 or any(not 33 <= ord(c) <= 126 for c in args.port):
             raise PairingFailure('invalid_port')
+        config.require()
         print(f'Pinned device: {DEVICE}\nPinned endpoint: {ENDPOINT}')
         print('Opening or closing native USB MAY reset the robot despite DTR/RTS=False. The cause of a reboot cannot be inferred from a write.')
         print('Do NOT tap Pair trusted host yet. Open once first; no token or frame is sent during stabilization.')

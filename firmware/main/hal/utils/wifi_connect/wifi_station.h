@@ -4,6 +4,8 @@
 #include <string>
 #include <functional>
 #include <mutex>
+#include <atomic>
+#include <cstdint>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
@@ -21,7 +23,8 @@ public:
     ~StackChanWifiStation();
 
     bool AddAuth(const std::string& ssid, const std::string& password);
-    void Start();
+    bool Start();
+    bool StopChecked();
     void Stop();
     bool IsConnected();
     bool WaitForConnected(int timeout_ms = 10000);
@@ -45,6 +48,9 @@ public:
 
 private:
     mutable std::mutex mutex_;
+    std::atomic<bool> callbacks_enabled_{false};
+    uint64_t network_generation_=0;
+    bool driver_touched_=false;
     std::string pending_password_;
     bool pending_ = false;
     bool associated_ = false;

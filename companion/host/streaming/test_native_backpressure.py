@@ -183,19 +183,22 @@ class NativeBackpressureTests(unittest.TestCase):
             session.close()
             bridge.close()
 
-    def test_five_consecutive_queue_drops_interrupt_the_session(self):
+    def test_elapsed_full_queue_stall_interrupts_the_session(self):
         ring = NativeRing(queued=NativeRing.capacity)
         adapter, bridge, session = self._session(ring)
+        clock=[0.];session.clock=lambda:clock[0]
         try:
-            for sequence in range(session.max_backpressure_mic_streak - 1):
+            for sequence in range(6):
+                clock[0]=sequence*.05
                 session.receive(encode_frame(1, sequence, False, b'synthetic-packet'))
             self.assertTrue(session.armed)
+            clock[0]=.301
             with self.assertRaises(SustainedAudioBackpressure):
                 session.receive(encode_frame(1, session.mic_seq, False, b'synthetic-packet'))
             self.assertFalse(session.armed)
-            self.assertEqual(session.backpressure_mic_packets, 5)
-            self.assertEqual(session.mic_seq, 5)
-            self.assertEqual(adapter.diagnostics()['output_dropped'], 5 * 2880)
+            self.assertEqual(session.backpressure_mic_packets, 7)
+            self.assertEqual(session.mic_seq, 7)
+            self.assertEqual(adapter.diagnostics()['output_dropped'], 7 * 2880)
             self.assertEqual(ring.push_calls, 0)
         finally:
             session.close()

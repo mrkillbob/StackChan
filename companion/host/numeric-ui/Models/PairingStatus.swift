@@ -24,6 +24,8 @@ struct PairingStatus {
     let activity: PairingActivity?
     let recovery: PairingRecovery?
     let cleanupIssues: Set<PairingCleanupIssue>
+    let rememberedForgetVerified: Bool
+    let rememberedCleanupVerified: Bool
     static func decode(_ data: Data) -> PairingStatus? {
         guard data.count <= 1024,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -74,6 +76,6 @@ struct PairingStatus {
             }
         } else if message == "cleanup_unconfirmed" { return nil }
         return PairingStatus(phase: phase, code: code, acknowledged: ack, remaining: remaining, audioRemaining: audioRemaining,
-                             activity: activity, recovery: PairingRecovery.project(message), cleanupIssues: cleanupIssues)
+                             activity: activity, recovery: PairingRecovery.project(message), cleanupIssues: cleanupIssues, rememberedForgetVerified: phase == .cancelled && message == "remembered_forgotten", rememberedCleanupVerified: phase == .closed && message == "remembered_cleanup_verified")
     }
 }

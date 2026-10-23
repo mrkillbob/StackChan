@@ -12,7 +12,7 @@ if importlib.util.find_spec('transport_test'):
 else:
     transport_test=None
 
-DEVICE='stackchan-80456b561404'
+DEVICE='stackchan-001122334455'
 class Clock:
     def __init__(self):self.now=0.
     def __call__(self):return self.now

@@ -1,14 +1,21 @@
 #include "stock_services.h"
+#include <apps/runtime_lifecycle/session.h>
+#include <apps/runtime_lifecycle/cleanup.h>
+#include <apps/stock_shell/navigation.h>
+#include <esp_timer.h>
 #include <apps/stock_shell/menu_policy.hpp>
 #include "firmware_install_policy.h"
 #include "firmware_install_ui.h"
 #include <board.h>
+#include <audio_codec.h>
+#include <application.h>
 #include <apps/apps.h>
 #include <apps/app_setup/workers/workers.h>
 #include <apps/network_setup/persistence_gate.h>
 #include <assets/assets.h>
 #include <companion/audio_owner.hpp>
 #include <companion/boot.h>
+#include <companion/settings_policy.hpp>
 #include <hal/hal.h>
 #include <stackchan/stackchan.h>
 #include <esp_app_desc.h>
@@ -71,23 +78,8 @@ bool NeedsMotion(Feature feature)
     return feature == Feature::Avatar || feature == Feature::EspNow ||
         feature == Feature::EzData || feature == Feature::Dance || feature == Feature::Servo || feature == Feature::Onboarding;
 }
-bool NeedsFreshRuntime()
-{
-    wifi_mode_t mode;
-    return companion::NetworkWasStarted() || network_setup::NetworkWasStarted() ||
-        esp_wifi_get_mode(&mode) == ESP_OK;
-}
-void PreviewAfterReset(Feature feature)
-{
-    const uint32_t value = static_cast<uint32_t>(feature);
-    preview_cookie = {kPreviewMagic, value, ~value};
-    esp_restart();
-}
-[[noreturn]] void ReturnHome()
-{
-    GetHAL().reboot(); // also stores a stopped SETUP return for native settings
-    while(true)GetHAL().delay(1000);
-}
+bool NeedsFreshRuntime(){return !runtime_lifecycle::VendorNetworkAvailable();}
+void ReturnHome(){runtime_lifecycle::RequestHome();}
 lv_obj_t* Label(lv_obj_t* parent, const std::string& text, int x, int y, int width)
 {
     auto label = lv_label_create(parent);
@@ -103,6 +95,7 @@ class Preview {
     lv_obj_t* root_ = nullptr;
     lv_obj_t* message_ = nullptr;
     std::atomic<int> action_{0};
+    bool waiting_network_=false;
     void Button(const char* text, int x, int width, int action)
     {
         auto button = lv_button_create(root_);
@@ -119,7 +112,7 @@ class Preview {
         }, LV_EVENT_CLICKED, this);
     }
 public:
-    explicit Preview(Feature feature) : feature_(feature)
+    explicit Preview(Feature feature, bool activate=false) : feature_(feature)
     {
         LvglLockGuard lock;
         root_ = lv_obj_create(lv_screen_active());
@@ -131,7 +124,7 @@ public:
         lv_obj_set_style_text_color(root_, lv_color_hex(0xffffff), 0);
         lv_obj_set_style_text_font(root_, &lv_font_montserrat_14, 0);
         lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
-        Label(root_, std::string(Name(feature)) + " - stopped", 8, 6, 304);
+        Label(root_, std::string(Name(feature)) + (activate ? " - opening" : " - stopped"), 8, 6, 304);
         auto body = lv_obj_create(root_);
         lv_obj_set_pos(body, 4, 30);
         lv_obj_set_size(body, 312, 112);
@@ -141,10 +134,11 @@ public:
         lv_obj_set_scroll_dir(body, LV_DIR_VER);
         Label(body, Effects(feature), 4, 2, 296);
         bool restart = NeedsFreshRuntime();
-        message_ = Label(root_, restart ? "Restart this stopped preview, then tap Start." :
+        message_ = Label(root_, restart ? "Network owner still active. Return Home and stop Mira first." :
             "Stop / Home returns to the launcher. Companion remains available after return.", 8, 146, 304);
         Button("Back", 8, 88, 1);
-        Button(restart ? "Restart preview" : "Start", 104, 208, 2);
+        Button(activate ? "Retry" : (restart ? "Retry" : "Start"), 104, 208, 2);
+        if(activate)action_=2; // Same checked request as the former second Start.
     }
     ~Preview()
     {
@@ -155,13 +149,16 @@ public:
     int Poll()
     {
         int action = action_.exchange(0);
+        if(!action&&waiting_network_)action=2;
+        if(action==1)waiting_network_=false;
         if (action != 2) return action;
         if (companion::CurrentAudioOwner() != companion::AudioOwner::None) {
             LvglLockGuard lock;
             lv_label_set_text(message_, "Audio is still stopping. Retry Start.");
             return 0;
         }
-        if (NeedsFreshRuntime()) { PreviewAfterReset(feature_); return 0; }
+        if (!runtime_lifecycle::PrepareVendorNetwork()) {waiting_network_=true;LvglLockGuard lock;lv_label_set_text(message_,"Stopping previous Wi-Fi; waiting for cleanup. Back cancels opening.");return 0;}
+        waiting_network_=false;
         return 2;
     }
 };
@@ -188,7 +185,7 @@ class PreviewApp final : public mooncake::AppAbility {
     bool start_ = false;
 public:
     explicit PreviewApp(Feature feature) : feature_(feature) { setAppInfo() = AppInfo(feature); }
-    void onOpen() override { start_ = false; preview_ = std::make_unique<Preview>(feature_); }
+    void onOpen() override { start_ = false; preview_ = std::make_unique<Preview>(feature_,feature_==Feature::Avatar||feature_==Feature::Dance); }
     void onRunning() override
     {
         int action = preview_ ? preview_->Poll() : 0;
@@ -205,7 +202,7 @@ class PreviewWorker final : public setup_workers::WorkerBase {
     Feature feature_;
     Preview preview_;
 public:
-    explicit PreviewWorker(Feature feature) : feature_(feature), preview_(feature) {}
+    explicit PreviewWorker(Feature feature) : feature_(feature), preview_(feature,feature==Feature::Rgb) {}
     void update() override
     {
         int action = preview_.Poll();
@@ -220,9 +217,7 @@ public:
     explicit SetupTransferWorker(Feature feature):feature_(feature){}
     void update() override {
         if(_is_done)return;
-        // A used radio runtime restarts into SETUP. The row must be selected
-        // again; reset cookies never retain permission to start a worker.
-        if(NeedsFreshRuntime()){GetHAL().reboot();return;}
+        if(!runtime_lifecycle::PrepareVendorNetwork())return;
         requested.store(static_cast<int>(feature_));_is_done=true;
     }
 };
@@ -317,9 +312,9 @@ public:
         LvglLockGuard lock;
         if (worker_) worker_->update();
         GetStackChan().update();
-        if (!worker_ || worker_->isDone()) { worker_.reset(); ReturnHome(); }
+        if (!worker_ || worker_->isDone()) { ReturnHome();close(); }
     }
-    void onClose() override { ReturnHome(); }
+    void onClose() override {if(runtime_lifecycle::DeferNativeClose())return;LvglLockGuard lock;worker_.reset();}
 };
 std::unique_ptr<mooncake::AppAbility> ActualApp(Feature feature)
 {
@@ -391,35 +386,48 @@ std::optional<Feature> ConsumePreviewRequest()
         cookie.inverse != ~cookie.feature || !Valid(static_cast<int>(cookie.feature))) return std::nullopt;
     return static_cast<Feature>(cookie.feature);
 }
-[[noreturn]] void RunFeature(Feature feature)
+static companion::AudioLease runtime_audio_lease;
+void RunFeature(Feature feature)
 {
-    if (!Valid(static_cast<int>(feature)) || authorized.exchange(-1) != static_cast<int>(feature) ||
-        NeedsFreshRuntime() || !companion::AcquireAudio(companion::AudioOwner::Native)) ReturnHome();
-    preview_cookie = {};
-    active.store(static_cast<int>(feature));
+    if(!Valid(static_cast<int>(feature))||authorized.exchange(-1)!=static_cast<int>(feature)||NeedsFreshRuntime())return;
+    if(!companion::AcquireAudio(companion::AudioOwner::Native,companion::AudioPurpose::NativeRuntime,1,runtime_audio_lease))return;
+    if(!runtime_lifecycle::Begin()){companion::ReleaseAudio(runtime_audio_lease,true);return;}
+    runtime_lifecycle::ResetCleanupJob();preview_cookie={};active=static_cast<int>(feature);
     if(feature==Feature::AppCenter||feature==Feature::FirmwareCheck||feature==Feature::Avatar||feature==Feature::EzData||feature==Feature::Account)Board::GetInstance().GetUuid();
-    auto status = SessionControls(feature); // precedes hardware, network and every native constructor
-    if (!GetHAL().prepareStockFeatureHardware(NeedsMotion(feature), feature == Feature::Avatar)) {
-        {
-            LvglLockGuard lock;
-            lv_label_set_text(status, "Hardware unavailable. Stop / Home.");
-        }
-        while (true) GetHAL().delay(1000);
-    }
-    auto& shell = mooncake::GetMooncake();
-    auto launcher_owned = std::make_unique<AppLauncher>();
-    auto launcher = launcher_owned.get();
-    shell.installApp(std::move(launcher_owned));
-    int id = shell.installApp(ActualApp(feature));
-    launcher->openApp(id);
-    {
-        LvglLockGuard lock;
-        lv_label_set_text(status, Name(feature));
-    }
-    while (true) {
+    auto status=SessionControls(feature);auto bar=lv_obj_get_parent(status);
+    if(!Application::GetInstance().GetAudioService().BindAudioLease(runtime_audio_lease))ReturnHome();
+    bool ready=!runtime_lifecycle::HomeRequested()&&GetHAL().prepareStockFeatureHardware(NeedsMotion(feature),feature==Feature::Avatar);
+    if(!ready)ReturnHome();
+    auto& shell=mooncake::GetMooncake();
+    auto launcher_owned=std::make_unique<AppLauncher>();auto* launcher=launcher_owned.get();shell.installApp(std::move(launcher_owned));
+    auto owned=ActualApp(feature);auto* app=owned.get();int id=shell.installApp(std::move(owned));
+    if(ready&&!runtime_lifecycle::HomeRequested())launcher->openApp(id);
+    bool ui_closed=false;
+    while(true){
         GetHAL().feedTheDog();
-        shell.update();
+        if(!runtime_lifecycle::HomeRequested())shell.update();
+        auto& session=runtime_lifecycle::Session();
+        if(session.Poll(uint64_t(esp_timer_get_time()/1000),[]{companion::RevokeAudio(runtime_audio_lease);runtime_lifecycle::QuietHardware();},
+            [&]{return runtime_lifecycle::PollSourcesStopped(&shell);},
+            []{runtime_lifecycle::QuietHardware();auto& audio=Application::GetInstance().GetAudioService();if(!audio.Stop(10))return false;auto* codec=Board::GetInstance().GetAudioCodec();if(!codec)return false;const bool input=codec->EnableInputChecked(false),output=codec->EnableOutputChecked(false);return input&&output;},
+            [&]{
+                if(!ui_closed){
+                    runtime_lifecycle::FinalizeNativeUi(true);
+                    // A native app may already be sleeping after Home. Its UI
+                    // was deliberately retained by DeferNativeClose until now.
+                    if(ready)app->onClose();
+                    runtime_lifecycle::ResetSessionUi();
+                    {LvglLockGuard lock;if(lv_obj_is_valid(bar))lv_obj_delete(bar);shell.uninstallAllApps();mooncake::DestroyMooncake();}
+                    ui_closed=true;
+                }
+                return companion::ReleaseAudio(runtime_audio_lease,true);
+            }))break;
+        if(runtime_lifecycle::HomeRequested()&&!ui_closed){
+            LvglLockGuard lock;lv_label_set_text(status,session.Pending(uint64_t(esp_timer_get_time()/1000))?"Stop pending; ownership retained":"Stopping native service");
+        }
         GetHAL().delay(20);
     }
+    active=-1;runtime_lifecycle::FinalizeNativeUi(false);stock_shell::SetSetupContext(false);
+    companion::SetSettingsScope(companion::SettingsScope::None);
 }
 }

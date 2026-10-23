@@ -1,0 +1,13 @@
+#pragma once
+#include "stop_sequence.hpp"
+namespace runtime_lifecycle {
+StopSequence& Session();
+bool ConsumeStateReset();
+bool Begin();void RequestHome();bool HomeRequested();bool Active();
+bool DeferNativeClose();void FinalizeNativeUi(bool);
+// Wait-free notifications from the Application and HAL update worker.
+void ApplicationStarted();void ApplicationExited();bool ApplicationJoined();
+void ActivationStarted();void ActivationExited();bool ActivationJoined();
+void UpdateStarted();void UpdateExited();bool UpdateJoined();
+bool WaitCancelled(uint32_t milliseconds);
+}

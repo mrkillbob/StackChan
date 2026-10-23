@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "hal.h"
+#include <apps/runtime_lifecycle/session.h>
 #include <stackchan/stackchan.h>
 #include "board/hal_bridge.h"
 #include <mooncake.h>
@@ -33,6 +34,8 @@ static const std::string _setting_device_name_key = "device_name";
 
 class WebSocketAvatar {
 public:
+    ~WebSocketAvatar(){ Shutdown(); }
+    void Shutdown(){ _websocket.reset(); }
     enum class DataType : uint8_t {
         Opus              = 0x01,
         Jpeg              = 0x02,
@@ -502,6 +505,7 @@ public:
 
     void onDestroy() override
     {
+        if(_service)_service->Shutdown();
         _service.reset();
     }
 
@@ -515,6 +519,7 @@ void Hal::startWebSocketAvatarService(std::function<void(std::string_view)> onSt
     mclog::tagInfo(_tag, "start websocket avatar service");
 
     startNetwork(onStartLog);
+    if(runtime_lifecycle::HomeRequested())return;
 
     onStartLog("Connecting to\nserver...");
     mooncake::GetMooncake().extensionManager()->createAbility(std::make_unique<WebsocketAvatarWorker>());

@@ -28,4 +28,26 @@ class Tests(unittest.TestCase):
   with self.assertRaises(RuntimeError):self.a.pull_pcm(1,4)
  def test_diagnostics_mapping(self):
   d=self.a.diagnostics();self.assertEqual(d['output_callbacks'],10);self.assertEqual(d['output_consumed_frames'],12);self.assertEqual(d['input_callbacks'],13);self.assertEqual(d['output_dropped'],0);self.assertEqual(d['input_dropped'],10)
+ def test_directional_open_is_explicit_and_starts_only_after_success(self):
+  calls=[]
+  class Open:
+   def __call__(self,ptr):calls.append('directional');C.cast(ptr,C.POINTER(C.c_void_p))[0]=C.c_void_p(123);return 0
+  self.a.lib.sc_open_directional=Open();self.a.lib.sc_start=lambda ptr:calls.append(('start',ptr.value)) or 0
+  self.a.handle=C.c_void_p();self.a.open_directional_for_approved_test()
+  self.assertEqual(calls,['directional',('start',123)])
+  with self.assertRaises(RuntimeError):self.a.open_directional_for_approved_test()
+ def test_directional_open_failure_never_starts(self):
+  class Open:
+   def __call__(self,ptr):return -1
+  self.a.lib.sc_open_directional=Open();self.a.handle=C.c_void_p()
+  self.a.lib.sc_start=lambda ptr:self.fail('must not start')
+  with self.assertRaises(RuntimeError):self.a.open_directional_for_approved_test()
+ def test_directional_start_failure_preserves_checked_cleanup(self):
+  class Open:
+   def __call__(self,ptr):C.cast(ptr,C.POINTER(C.c_void_p))[0]=C.c_void_p(123);return 0
+  self.a.lib.sc_open_directional=Open();self.a.handle=C.c_void_p()
+  self.a.lib.sc_start=lambda ptr:-1
+  closed=[];self.a.close=lambda:closed.append(True)
+  with self.assertRaises(RuntimeError):self.a.open_directional_for_approved_test()
+  self.assertEqual(closed,[True])
 if __name__=='__main__':unittest.main()

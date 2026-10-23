@@ -29,6 +29,27 @@ class NativeTests(unittest.TestCase):
             native.NativeRoute.from_dict(dict(value, duration_seconds=900))
 
     @unittest.skipIf(native is None, 'implementation missing')
+    def test_host_audio_route_needs_endpoints_without_call_attestation(self):
+        value=dict(input_uid='Pro Tools Audio Bridge 2-A_UID', output_uid='Pro Tools Audio Bridge 2-B_UID')
+        route=native.HostAudioDeviceRoute.from_dict(value)
+        self.assertIsNone(route.duration_seconds)
+        for changed in (dict(value,input_uid='wrong-device'), dict(value,session_reference='fabricated-call')):
+            with self.assertRaises((ValueError,PermissionError)):native.HostAudioDeviceRoute.from_dict(changed)
+
+    def test_persistent_audio_has_no_sixty_second_cutoff_but_keeps_heartbeat(self):
+        fixture=streaming.Tests();fixture.setUp();now=[0.]
+        session=native.NativeConversationSession(fixture.registry,fixture.session.sessions,fixture.bridge,
+            fixture.token,fixture.device.id,fixture.arms.append,clock=lambda:now[0],fixture=True,duration_seconds=None)
+        session.begin('persistent-audio');session.control(dict(type='ack',epoch=1))
+        session.control(dict(type='consent',epoch=1,physical=True));session._authorized()
+        for second in range(1,121):
+            now[0]=float(second);session.control(dict(type='heartbeat',epoch=1))
+        self.assertTrue(session.armed)
+        now[0]=123.
+        with self.assertRaisesRegex(TimeoutError,'heartbeat expired'):session._authorized()
+        session.close()
+
+    @unittest.skipIf(native is None, 'implementation missing')
     def test_voice_return_drain_and_turn_taking_preserve_real_pcm(self):
         from codec import OpusCodec, Resampler
         class Adapter:

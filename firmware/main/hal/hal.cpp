@@ -1,4 +1,5 @@
 #include <apps/stock_shell/navigation.h>
+#include <apps/runtime_lifecycle/session.h>
 /*
  * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
  *
@@ -36,9 +37,12 @@ bool Hal::initCompanion()
 }
 
 bool Hal::prepareStockFeatureHardware(bool motion, bool camera) {
+    if(runtime_lifecycle::HomeRequested())return false;
     static bool peripherals=false, servos=false;
     if(!peripherals){head_touch_init();io_expander_init();imu_init();peripherals=true;}
-    if(motion&&!servos){setServoPowerEnabled(true);delay(200);servo_init();servos=true;}
+    if(runtime_lifecycle::HomeRequested())return false;
+    if(motion){setServoPowerEnabled(true);if(!servos){delay(200);servo_init();servos=true;}}
+    if(runtime_lifecycle::HomeRequested())return false;
     if(camera && !Board::GetInstance().GetCamera())return false;
     return true;
 }
@@ -173,8 +177,9 @@ static void _stackchan_update_task(void* param)
 {
     bool is_setup_done = false;
 
-    while (1) {
+    while (!runtime_lifecycle::HomeRequested()) {
         vTaskDelay(pdMS_TO_TICKS(20));
+        if(runtime_lifecycle::HomeRequested())break;
 
         tools::update_reminders();
 
@@ -193,22 +198,28 @@ static void _stackchan_update_task(void* param)
         if (!is_setup_done) {
             // Setup when xiaozhi ready
             GetHAL().startSntp();
-            view::create_home_indicator([]() { GetHAL().requestWarmReboot(0); }, 0x81DBBD, 0x134233);
+            // Companion sessions own and poll Home from their outer stop loop,
+            // including before readiness and while workers are joining.
+            if (!runtime_lifecycle::Active())
+                view::create_home_indicator([]() { GetHAL().requestWarmReboot(0); }, 0x81DBBD, 0x134233);
             view::create_status_bar(0x81DBBD, 0x134233);
             is_setup_done = true;
         }
 
-        view::update_home_indicator();
+        if (!runtime_lifecycle::Active()) view::update_home_indicator();
         view::update_status_bar();
     }
+    runtime_lifecycle::UpdateExited();
+    vTaskDelete(nullptr);
 }
 
 void Hal::startXiaozhi()
 {
+    if(runtime_lifecycle::HomeRequested())return;
     mclog::tagInfo(_tag, "start xiaozhi");
 #ifdef STACKCHAN_COMPANION_BOOT
     if(!prepareStockFeatureHardware(true,true)) {
-        while(true) delay(1000); // persistent Stop / Home remains available
+        runtime_lifecycle::RequestHome();return;
     }
     xiaozhi_mcp_init();
 #endif
@@ -230,7 +241,8 @@ void Hal::startXiaozhi()
     });
 
     // Start stackchan update task
-    xTaskCreatePinnedToCore(_stackchan_update_task, "stackchan", 4096, NULL, 3, NULL, 1);
+    runtime_lifecycle::UpdateStarted();
+    if(xTaskCreatePinnedToCore(_stackchan_update_task,"stackchan",4096,nullptr,3,nullptr,1)!=pdPASS){runtime_lifecycle::UpdateExited();runtime_lifecycle::RequestHome();return;}
 
     hal_bridge::start_xiaozhi_app();
 }
@@ -360,6 +372,9 @@ static std::string_view _warm_boot_nvs_key = "app_index";
 
 void Hal::requestWarmReboot(int appIndex)
 {
+#ifdef STACKCHAN_COMPANION_BOOT
+    if(runtime_lifecycle::Active()){runtime_lifecycle::RequestHome();return;}
+#endif
 #ifdef STACKCHAN_COMPANION_BOOT
     setServoPowerEnabled(false);
     setLaserEnabled(false);
