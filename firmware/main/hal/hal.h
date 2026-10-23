@@ -181,6 +181,7 @@ private:
 class Hal {
 public:
     void init();
+    bool initCompanion();
 
     /* --------------------------------- System --------------------------------- */
     void delay(std::uint32_t ms);
@@ -235,6 +236,8 @@ public:
     void setRgbColor(uint8_t index, uint8_t r, uint8_t g, uint8_t b);
     void showRgbColor(uint8_t r, uint8_t g, uint8_t b);
     void refreshRgb();
+    bool rgbHardwareAvailable() const;
+    bool submitRgb565Frame(const uint8_t* bytes, size_t size);
 
     /* ---------------------------------- Power --------------------------------- */
     void setServoPowerEnabled(bool enabled);
@@ -255,6 +258,7 @@ public:
 
     /* ----------------------------------- IMU ---------------------------------- */
     uitk::Signal<ImuMotionEvent> onImuMotionEvent;
+    bool prepareImuExpression(); // Explicit IMU-only start; no servo/head-touch/camera.
 
     /* ---------------------------------- Time ---------------------------------- */
     void syncRtcTimeToSystem();
@@ -302,6 +306,11 @@ public:
     std::string startMicTest(std::function<void(MicTestStatus)> onStatusUpdate);
     void getMicWaveformFrame(std::vector<int16_t>& data);
     void clearupMicTest();
+
+    void forgetNativeNetwork();
+    bool stopBleServer();
+    bool stopEspNow();
+    bool prepareStockFeatureHardware(bool motion, bool camera);
 
 private:
     bool _xiaozhi_start_requested = false;
