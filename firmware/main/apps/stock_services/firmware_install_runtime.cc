@@ -8,13 +8,16 @@
 #include <ota.h>
 #include <hal/hal.h>
 #include <application.h>
+#include <apps/runtime_lifecycle/session.h>
 #include <lvgl.h>
 #include <atomic>
 #include <memory>
 namespace stock_services {
 namespace {
 std::atomic<bool> install_allowed{false},offer_pending{false};
+lv_obj_t* install_panel=nullptr;
 bool ContextAllowed(){
+ if(runtime_lifecycle::HomeRequested())return false;
  auto owner=companion::CurrentAudioOwner();
  if(owner==companion::AudioOwner::Stock)return true;
  auto feature=CurrentFeature();
@@ -23,27 +26,38 @@ bool ContextAllowed(){
 struct Offer {std::string url,version;lv_obj_t* panel=nullptr;bool stock=false;};
 void NativeInstall(void* data){
  std::unique_ptr<Offer> request(static_cast<Offer*>(data));
+ auto run=[&]{
+ if(runtime_lifecycle::HomeRequested())return;
+ ResetFirmwareInstallUi();
  lv_obj_t* box=nullptr;lv_obj_t* label=nullptr;
  {LvglLockGuard lock;
   box=lv_obj_create(lv_layer_top());lv_obj_set_size(box,320,140);lv_obj_set_pos(box,0,48);
+  install_panel=box;
   label=lv_label_create(box);lv_obj_set_width(label,280);
   lv_label_set_text(label,"Downloading replacement firmware...\nStop / Home cancels before completion.");
  }
  bool success=false;
  {FirmwareInstallScope permission;
   success=Ota::Upgrade(request->url,[label](int progress,size_t){
+    if(runtime_lifecycle::HomeRequested())return;
     LvglLockGuard lock;std::string message="Installing: "+std::to_string(progress)+"%\nDevice restarts after validation.";
     lv_label_set_text(label,message.c_str());
   });
  }
- if(success){GetHAL().reboot();}
+ if(success){runtime_lifecycle::CommitFirmwareInstall([]{GetHAL().reboot();return true;});return;}
  // Failed download leaves the running app selected. A new attempt requires
  // another local confirmation; all temporary permission is already revoked.
  {LvglLockGuard lock;
   lv_obj_set_height(box,130);
   lv_label_set_text(label,"Firmware install failed.\nCurrent firmware is retained.\nStop / Home, then retry.");
  }
+ };
+ run();
+ // Free request/callback targets and revoke scoped permission before publishing
+ // join. FreeRTOS task deletion does not unwind C++ automatic objects.
+ request.reset();
  offer_pending=false;
+ runtime_lifecycle::InstallerExited();
  vTaskDelete(nullptr);
 }
 void Confirm(lv_event_t* event){
@@ -60,10 +74,15 @@ void Confirm(lv_event_t* event){
     offer_pending=false;
   });
  }else{
+  if(!runtime_lifecycle::InstallerStarted()){offer_pending=false;return;}
   auto raw=owned.release();
-  if(xTaskCreate(NativeInstall,"stock_install",8192,raw,2,nullptr)!=pdPASS){delete raw;offer_pending=false;}
+  if(xTaskCreate(NativeInstall,"stock_install",8192,raw,2,nullptr)!=pdPASS){delete raw;offer_pending=false;runtime_lifecycle::InstallerExited();}
  }
 }
+}
+void ResetFirmwareInstallUi(){
+ LvglLockGuard lock;
+ if(install_panel){lv_obj_delete(install_panel);install_panel=nullptr;}
 }
 bool FirmwareInstallAllowed(){return install_allowed.load()&&ContextAllowed();}
 void SetFirmwareInstallAllowed(bool allowed){install_allowed=allowed&&ContextAllowed();}
@@ -92,6 +111,6 @@ bool OfferFirmwareInstall(const std::string& url,const std::string& version){
 extern "C" bool stackchan_stock_install_firmware(const char* url,void(*progress)(int)){
  if(!url||!stock_services::FirmwareInstallAllowed()||!stock_services::IsFirmwareImageUrl(url))return false;
  bool result=Ota::Upgrade(url,[progress](int value,size_t){if(progress)progress(value);});
- if(result)GetHAL().reboot();
+ if(result)runtime_lifecycle::CommitFirmwareInstall([]{GetHAL().reboot();return true;});
  return false;
 }

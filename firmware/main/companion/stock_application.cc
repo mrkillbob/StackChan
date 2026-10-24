@@ -1005,7 +1005,7 @@ void Application::Reboot() {
     }
 
     if(runtime_lifecycle::WaitCancelled(1000))return;
-    GetHAL().reboot();
+    runtime_lifecycle::CommitFirmwareInstall([]{GetHAL().reboot();return true;});
 }
 
 bool Application::UpgradeFirmware(const std::string& url, const std::string& version) {
@@ -1028,7 +1028,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     ESP_LOGI(TAG, "Starting firmware upgrade from URL: %s", upgrade_url.c_str());
 
     Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "download", Lang::Sounds::OGG_UPGRADE);
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    if(runtime_lifecycle::WaitCancelled(3000))return false;
 
     SetDeviceState(kDeviceStateUpgrading);
 
@@ -1039,9 +1039,10 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     if(!audio_service_.Stop()){
         display->SetStatus("Audio cleanup pending");return false;
     }
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    if(runtime_lifecycle::WaitCancelled(1000))return false;
 
     bool upgrade_success = Ota::Upgrade(upgrade_url, [this, display](int progress, size_t speed) {
+        if(runtime_lifecycle::HomeRequested())return;
         char buffer[32];
         snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
         Schedule([display, message = std::string(buffer)]() {
@@ -1049,6 +1050,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
         });
     });
 
+    if(runtime_lifecycle::HomeRequested())return false;
     if (!upgrade_success) {
         // Upgrade failed, restart audio service and continue running
         ESP_LOGE(TAG, "Firmware upgrade failed, restarting audio service and continuing operation...");
@@ -1065,7 +1067,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
         // Upgrade success, reboot immediately
         ESP_LOGI(TAG, "Firmware upgrade successful, rebooting...");
         display->SetChatMessage("system", "Upgrade successful, rebooting...");
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Brief pause to show message
+        if(runtime_lifecycle::WaitCancelled(1000))return false; // Brief cancellable pause.
         Reboot();
         return true;
     }

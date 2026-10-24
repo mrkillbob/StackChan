@@ -6,6 +6,7 @@
 #include <stackchan/stackchan.h>
 #include <apps/common/common.h>
 #include <apps/network_setup/persistence_gate.h>
+#include <apps/stock_services/firmware_install_ui.h>
 #include <companion/boot.h>
 #include <companion/station_authority.hpp>
 #include <companion/station_event_barrier.hpp>
@@ -37,6 +38,9 @@ void ClearNativeSignals(){
  h.onWsVideoFrame.clear();h.onWsVideoModeChange.clear();h.onEzdataPairCode.clear();h.onEspNowData.clear();
 }
 bool PollSourcesStopped(mooncake::Mooncake* shell){
+ // The installer may be blocked in a bounded HTTP/flash operation. Keep its
+ // UI targets and network owner until cancellation has returned and joined.
+ if(!InstallerJoined())return false;
  int state=job.load();if(state==2)return true;
  if(state==1)return false;
  old_shell=shell;job=1;
@@ -72,6 +76,7 @@ bool PollSourcesStopped(mooncake::Mooncake* shell){
 }
 void ResetCleanupJob(){if(job!=1){job=0;old_shell=nullptr;}}
 void ResetSessionUi(){
+ stock_services::ResetFirmwareInstallUi();
  LvglLockGuard lock;
  tools::on_reminder_triggered().clear();
  view::destroy_home_indicator();view::destroy_status_bar();view::reset_toast_runtime();

@@ -62,6 +62,10 @@ add_test(NAME reconciliation_power_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/reconciliation_power_test.py)
 add_test(NAME host_dependency_preparation_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/host_dependency_preparation_test.py)
+add_test(NAME installer_cancellation_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/installer_cancellation_test.py)
+add_test(NAME installer_session_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/installer_session_test.py)
 
 add_executable(screensaver_management_test navigation/screensaver_management_test.cpp)
 target_include_directories(screensaver_management_test PRIVATE ../main)

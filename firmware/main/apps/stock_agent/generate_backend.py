@@ -76,13 +76,14 @@ def generate(xiaozhi, wifi, output):
     source = replace_once(source,
         '        ESP_LOGE(TAG, "Failed to activate, code: %d, body: %s", status_code, http->ReadAll().c_str());',
         '        ESP_LOGE(TAG, "Failed to activate, code: %d", status_code);')
-    source = '#include <apps/stock_services/firmware_install_policy.h>\n#include <apps/stock_services/firmware_install_ui.h>\n' + source
+    source = '#include <apps/runtime_lifecycle/session.h>\n#include <apps/stock_services/firmware_install_policy.h>\n#include <apps/stock_services/firmware_install_ui.h>\n' + source
     source = replace_once(source,
         'bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback) {',
         '''bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback) {
-    if (!stock_services::FirmwareInstallAllowed() ||
+    if (runtime_lifecycle::HomeRequested() || !stock_services::FirmwareInstallAllowed() ||
         !stock_services::IsFirmwareImageUrl(firmware_url) ||
-        !stock_services::PrepareOriginalFirmwareWifi()) return false;''')
+        !stock_services::PrepareOriginalFirmwareWifi()) return false;
+    if (runtime_lifecycle::HomeRequested() || !stock_services::FirmwareInstallAllowed()) return false;''')
     source = replace_once(source, '    if (content_length == 0) {',
         '    if (content_length < sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t) || content_length > update_partition->size) {')
     source = replace_once(source, '    auto http = network->CreateHttp(0);\n    if (!http->Open("GET", firmware_url)) {',
@@ -94,6 +95,32 @@ def generate(xiaozhi, wifi, output):
     source = replace_once(source, '            image_header.append(buffer, buffer_offset);',
         '            image_header.assign(buffer, buffer_offset);')
     source = source.replace('    auto http = network->CreateHttp(0);', '    auto http = network->CreateHttp(0);\n    http->SetTimeout(4000);')
+    source = replace_once(source, '    size_t buffer_offset = 0;  // Current data size in buffer', '''    auto cancelled = [] { return runtime_lifecycle::HomeRequested() || !stock_services::FirmwareInstallAllowed(); };
+    auto abort_download = [&] {
+        if (image_header_checked) esp_ota_abort(update_handle);
+        http->Close();
+        heap_caps_free(buffer);
+    };
+    size_t buffer_offset = 0;  // Current data size in buffer''')
+    source = replace_once(source, '        if (esp_timer_get_time() > install_deadline) {\n            if (image_header_checked) esp_ota_abort(update_handle);\n            heap_caps_free(buffer);\n            return false;\n        }',
+        '        if (cancelled() || esp_timer_get_time() > install_deadline) { abort_download(); return false; }')
+    source = replace_once(source, '        if (ret < 0) {',
+        '        if (cancelled()) { abort_download(); return false; }\n        if (ret < 0) {')
+    source = replace_once(source, '        if (!image_header_checked) {',
+        '        if (cancelled()) { abort_download(); return false; }\n        if (!image_header_checked) {')
+    source = replace_once(source, '        if (buffer_offset == PAGE_SIZE || (is_last_chunk && buffer_offset > 0)) {',
+        '        if (buffer_offset == PAGE_SIZE || (is_last_chunk && buffer_offset > 0)) {\n            if (cancelled()) { abort_download(); return false; }')
+    source = replace_once(source, '    esp_err_t err = esp_ota_end(update_handle);',
+        '    if (cancelled()) { if (image_header_checked) esp_ota_abort(update_handle); return false; }\n    esp_err_t err = esp_ota_end(update_handle);')
+    source = replace_once(source, '''    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {''', '''    // RequestHome and final boot selection share a serialization point. A
+    // canceled download can validate, but can never select the new image.
+    const bool selected = runtime_lifecycle::CommitFirmwareInstall([&] {
+        if (!stock_services::FirmwareInstallAllowed()) return false;
+        err = esp_ota_set_boot_partition(update_partition);
+        return err == ESP_OK;
+    });
+    if (!selected) {''')
     (output / 'stock_ota.cc').write_text(source)
 
     source = pinned(xiaozhi / 'boards/common/wifi_board.cc', 'boards/common/wifi_board.cc')
