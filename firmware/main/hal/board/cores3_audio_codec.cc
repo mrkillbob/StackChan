@@ -1,4 +1,19 @@
 #include "cores3_audio_codec.h"
+#include <esp_memory_utils.h>
+#include <companion/diagnostics.h>
+#include <companion/audio_owner.hpp>
+namespace {
+void companion_codec_stage(companion::diagnostic::StageCode stage){
+    if(companion::CurrentAudioOwner()==companion::AudioOwner::Mira)
+        companion::diagnostic::Stage(companion::diagnostic::Task::Codec,stage);
+}
+void companion_codec_fault(companion::diagnostic::FaultCode fault,int32_t status){
+    if(status!=0 && companion::CurrentAudioOwner()==companion::AudioOwner::Mira){
+        companion::diagnostic::Fault(companion::diagnostic::Task::Codec,fault,status);
+        companion::diagnostic::Sample(companion::diagnostic::Task::Codec);
+    }
+}
+}
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -77,6 +92,16 @@ CoreS3AudioCodec::CoreS3AudioCodec(void* i2c_master_handle, int input_sample_rat
 }
 
 CoreS3AudioCodec::~CoreS3AudioCodec() {
+    // Never free ISR user_data while its channel can invoke our callback.
+    if (direct_callback_ready_) {
+        auto stopped = i2s_channel_disable(tx_handle_);
+        ESP_ERROR_CHECK(stopped == ESP_ERR_INVALID_STATE ? ESP_OK : stopped);
+        i2s_event_callbacks_t none = {};
+        // Registration rejects RUNNING; success independently confirms no TX ISR.
+        ESP_ERROR_CHECK(i2s_channel_register_event_callback(tx_handle_, &none, nullptr));
+        direct_callback_ready_ = false;
+    }
+
     ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
     esp_codec_dev_delete(output_dev_);
     ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
@@ -177,6 +202,12 @@ void CoreS3AudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gp
 
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle_, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_init_tdm_mode(rx_handle_, &tdm_cfg));
+    // Normal behavior stays available if internal ISR context cannot be bound.
+    if (esp_ptr_internal(this)) {
+        i2s_event_callbacks_t callbacks = {};
+        callbacks.on_sent = DirectOnSent;
+        direct_callback_ready_ = i2s_channel_register_event_callback(tx_handle_, &callbacks, this) == ESP_OK;
+    }
     ESP_ERROR_CHECK(i2s_channel_enable(tx_handle_));
     ESP_ERROR_CHECK(i2s_channel_enable(rx_handle_));
     ESP_LOGI(TAG, "Duplex channels created");
@@ -188,6 +219,8 @@ void CoreS3AudioCodec::SetOutputVolume(int volume) {
 }
 
 void CoreS3AudioCodec::EnableInput(bool enable) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (direct_generation_ && !direct_call_) return;
     if (enable == input_enabled_) {
         return;
     }
@@ -202,15 +235,31 @@ void CoreS3AudioCodec::EnableInput(bool enable) {
         if (input_reference_) {
             fs.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
         }
-        ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
-        ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_));
+        companion_codec_stage(companion::diagnostic::StageCode::DriverInputOpen);
+        {
+            auto status=esp_codec_dev_open(input_dev_, &fs);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverInputOpen,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK(status);
+        }
+        {
+            auto status=esp_codec_dev_set_in_channel_gain(input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverInputGain,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK(status);
+        }
     } else {
-        ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
+        companion_codec_stage(companion::diagnostic::StageCode::DriverInputClose);
+        {
+            auto status=esp_codec_dev_close(input_dev_);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverInputClose,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK(status);
+        }
     }
     AudioCodec::EnableInput(enable);
 }
 
 void CoreS3AudioCodec::EnableOutput(bool enable) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (direct_generation_ && !direct_call_) return;
     if (enable == output_enabled_) {
         return;
     }
@@ -223,24 +272,240 @@ void CoreS3AudioCodec::EnableOutput(bool enable) {
             .sample_rate = (uint32_t)output_sample_rate_,
             .mclk_multiple = 0,
         };
-        ESP_ERROR_CHECK(esp_codec_dev_open(output_dev_, &fs));
-        ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
+        companion_codec_stage(companion::diagnostic::StageCode::DriverOutputOpen);
+        {
+            auto status=esp_codec_dev_open(output_dev_, &fs);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverOutputOpen,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK(status);
+        }
+        {
+            auto status=esp_codec_dev_set_out_vol(output_dev_, output_volume_);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverOutputVolume,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK(status);
+        }
     } else {
-        ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
+        companion_codec_stage(companion::diagnostic::StageCode::DriverOutputClose);
+        {
+            auto status=esp_codec_dev_close(output_dev_);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverOutputClose,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK(status);
+        }
     }
     AudioCodec::EnableOutput(enable);
 }
 
 int CoreS3AudioCodec::Read(int16_t* dest, int samples) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (direct_generation_ && !direct_call_) return 0;
     if (input_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t)));
+        companion_codec_stage(companion::diagnostic::StageCode::DriverRead);
+        {
+            auto status=esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t));
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverRead,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK_WITHOUT_ABORT(status);
+            if(status!=ESP_CODEC_DEV_OK)return 0;
+        }
     }
-    return samples;
+    return input_enabled_ ? samples : 0;
 }
 
 int CoreS3AudioCodec::Write(const int16_t* data, int samples) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (direct_generation_ && (!direct_call_ || direct_draining_)) return 0;
     if (output_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
+        companion_codec_stage(companion::diagnostic::StageCode::DriverWrite);
+        {
+            auto status=esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t));
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverWrite,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK_WITHOUT_ABORT(status);
+            if(status!=ESP_OK)return 0;
+        }
+        return samples;
     }
-    return samples;
+    return 0;
+}
+
+bool CoreS3AudioCodec::EnableInputChecked(bool enable) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (direct_generation_ && !direct_call_) return false;
+    if (enable == input_enabled_) {
+        return true;
+    }
+    if (enable) {
+        AudioCodec::EnableInput(true); // Retain owned state on partial open failure until checked close succeeds.
+        esp_codec_dev_sample_info_t fs = {
+            .bits_per_sample = 16,
+            .channel = 2,
+            .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
+            .sample_rate = (uint32_t)output_sample_rate_,
+            .mclk_multiple = 0,
+        };
+        if (input_reference_) {
+            fs.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
+        }
+        companion_codec_stage(companion::diagnostic::StageCode::DriverInputOpen);
+        {
+            auto status=esp_codec_dev_open(input_dev_, &fs);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverInputOpen,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK_WITHOUT_ABORT(status);
+            if(status!=ESP_CODEC_DEV_OK)return false;
+        }
+        {
+            auto status=esp_codec_dev_set_in_channel_gain(input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverInputGain,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK_WITHOUT_ABORT(status);
+            if(status!=ESP_CODEC_DEV_OK)return false;
+        }
+    } else {
+        companion_codec_stage(companion::diagnostic::StageCode::DriverInputClose);
+        {
+            auto status=esp_codec_dev_close(input_dev_);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverInputClose,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK_WITHOUT_ABORT(status);
+            if(status!=ESP_CODEC_DEV_OK)return false;
+        }
+    }
+    AudioCodec::EnableInput(enable);
+    return true;
+}
+bool CoreS3AudioCodec::EnableOutputChecked(bool enable) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (direct_generation_ && !direct_call_) return false;
+    if (enable == output_enabled_) {
+        return true;
+    }
+    if (enable) {
+        AudioCodec::EnableOutput(true); // Retain owned state on partial open failure until checked close succeeds.
+        // Play 16bit 1 channel
+        esp_codec_dev_sample_info_t fs = {
+            .bits_per_sample = 16,
+            .channel = 1,
+            .channel_mask = 0,
+            .sample_rate = (uint32_t)output_sample_rate_,
+            .mclk_multiple = 0,
+        };
+        companion_codec_stage(companion::diagnostic::StageCode::DriverOutputOpen);
+        {
+            auto status=esp_codec_dev_open(output_dev_, &fs);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverOutputOpen,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK_WITHOUT_ABORT(status);
+            if(status!=ESP_CODEC_DEV_OK)return false;
+        }
+        {
+            auto status=esp_codec_dev_set_out_vol(output_dev_, output_volume_);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverOutputVolume,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK_WITHOUT_ABORT(status);
+            if(status!=ESP_CODEC_DEV_OK)return false;
+        }
+    } else {
+        companion_codec_stage(companion::diagnostic::StageCode::DriverOutputClose);
+        {
+            auto status=esp_codec_dev_close(output_dev_);
+            companion_codec_fault(companion::diagnostic::FaultCode::DriverOutputClose,static_cast<int32_t>(status));
+            ESP_ERROR_CHECK_WITHOUT_ABORT(status);
+            if(status!=ESP_CODEC_DEV_OK)return false;
+        }
+    }
+    AudioCodec::EnableOutput(enable);
+    return true;
+}
+
+// No authority is issued here: caller already owns the approved HAL codec lease.
+bool CoreS3AudioCodec::DirectUsbCodecAcquire(uint64_t generation) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (!direct_callback_ready_ || !generation || generation <= direct_last_generation_ || direct_generation_ || input_enabled_ || output_enabled_) return false;
+    if (!companion::AcquireAudio(companion::AudioOwner::DirectUsb,companion::AudioPurpose::DirectUsbSession,generation,direct_common_lease_)) return false;
+    direct_last_generation_ = generation;
+    direct_generation_ = generation;
+    direct_input_stopped_ = direct_output_stopped_ = false;
+    portENTER_CRITICAL(&direct_mux_);
+    direct_draining_ = false;
+    portEXIT_CRITICAL(&direct_mux_);
+    return true;
+}
+bool CoreS3AudioCodec::DirectUsbEnableInputChecked(uint64_t generation, bool enable) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (!generation || generation != direct_generation_) return false;
+    if (!enable) return DirectUsbStopInputChecked(generation);
+    if (!companion::CommonAudioAuthority().Current(direct_common_lease_)) return false;
+    if (direct_input_stopped_ && input_enabled_) return false;
+    direct_call_ = true; bool ok = EnableInputChecked(true); direct_call_ = false;
+    direct_input_stopped_ = false; return ok;
+}
+bool CoreS3AudioCodec::DirectUsbEnableOutputChecked(uint64_t generation, bool enable) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (!generation || generation != direct_generation_ || direct_draining_) return false;
+    if (!enable) return DirectUsbStopOutputChecked(generation);
+    if (!companion::CommonAudioAuthority().Current(direct_common_lease_)) return false;
+    if (direct_output_stopped_ && output_enabled_) return false;
+    direct_call_ = true; bool ok = EnableOutputChecked(true); direct_call_ = false;
+    direct_output_stopped_ = false; return ok;
+}
+bool CoreS3AudioCodec::DirectUsbInputDataChecked(uint64_t generation, std::vector<int16_t>& data) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (!generation || generation != direct_generation_ || direct_input_stopped_) return false;
+    if (!companion::CommonAudioAuthority().Current(direct_common_lease_)) return false;
+    direct_call_ = true; bool ok = InputDataChecked(data); direct_call_ = false; return ok;
+}
+bool CoreS3AudioCodec::DirectUsbOutputDataChecked(uint64_t generation, std::vector<int16_t>& data) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (!generation || generation != direct_generation_ || direct_output_stopped_ || direct_draining_) return false;
+    if (!companion::CommonAudioAuthority().Current(direct_common_lease_)) return false;
+    direct_call_ = true; bool ok = OutputDataChecked(data); direct_call_ = false; return ok;
+}
+bool CoreS3AudioCodec::DirectUsbDrainBegin(uint64_t generation) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (!generation || generation != direct_generation_ || !output_enabled_ || direct_output_stopped_ || direct_draining_) return false;
+    portENTER_CRITICAL(&direct_mux_);
+    bool ok = direct_fence_generation_ != UINT64_MAX && direct_fence_.Begin(++direct_fence_generation_);
+    if (ok) direct_draining_ = true;
+    portEXIT_CRITICAL(&direct_mux_);
+    return ok;
+}
+AudioCodec::DirectUsbDrain CoreS3AudioCodec::DirectUsbDrainState(uint64_t generation) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (!generation || generation != direct_generation_ || !direct_draining_) return DirectUsbDrain::Unavailable;
+    portENTER_CRITICAL(&direct_mux_);
+    auto state = direct_fence_.state();
+    portEXIT_CRITICAL(&direct_mux_);
+    if (state == codec_drain::DmaSentFence::State::Sent) return DirectUsbDrain::Sent;
+    return state == codec_drain::DmaSentFence::State::Pending ? DirectUsbDrain::Pending : DirectUsbDrain::Failed;
+}
+bool IRAM_ATTR CoreS3AudioCodec::DirectOnSent(i2s_chan_handle_t handle, i2s_event_data_t* event, void* context) {
+    auto* codec = static_cast<CoreS3AudioCodec*>(context);
+    if (!codec || handle != codec->tx_handle_) return false;
+    portENTER_CRITICAL_ISR(&codec->direct_mux_);
+    if (codec->direct_draining_ && event) codec->direct_fence_.OnSent(codec->direct_fence_generation_, reinterpret_cast<uintptr_t>(event->dma_buf), event->size);
+    portEXIT_CRITICAL_ISR(&codec->direct_mux_);
+    return false;
+}
+bool CoreS3AudioCodec::DirectStopChecked(uint64_t generation, bool output) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (!generation || generation != direct_generation_) return false;
+    bool& stopped = output ? direct_output_stopped_ : direct_input_stopped_;
+    if (!stopped) {
+        auto status = i2s_channel_disable(output ? tx_handle_ : rx_handle_);
+        // INVALID_STATE is not a fresh proof; retain until an actual owner knows.
+        if (status != ESP_OK) { companion::RevokeAudio(direct_common_lease_); return false; }
+        stopped = true;
+    }
+    auto status = esp_codec_dev_close(output ? output_dev_ : input_dev_);
+    if (status != ESP_CODEC_DEV_OK) { companion::RevokeAudio(direct_common_lease_); return false; }
+    if (output) {
+        AudioCodec::EnableOutput(false);
+        portENTER_CRITICAL(&direct_mux_);
+        direct_fence_.Cancel(direct_fence_generation_); direct_draining_ = false;
+        portEXIT_CRITICAL(&direct_mux_);
+    } else AudioCodec::EnableInput(false);
+    return true;
+}
+bool CoreS3AudioCodec::DirectUsbStopInputChecked(uint64_t generation) { return DirectStopChecked(generation, false); }
+bool CoreS3AudioCodec::DirectUsbStopOutputChecked(uint64_t generation) { return DirectStopChecked(generation, true); }
+bool CoreS3AudioCodec::DirectUsbCodecRelease(uint64_t generation) {
+    std::lock_guard<std::recursive_mutex> lock(direct_io_mutex_);
+    if (!generation || generation != direct_generation_) return false;
+    companion::RevokeAudio(direct_common_lease_);
+    if (!direct_input_stopped_ || !direct_output_stopped_ || input_enabled_ || output_enabled_) return false;
+    if (!companion::ReleaseAudio(direct_common_lease_,true)) return false;
+    direct_generation_ = 0; return true;
 }
