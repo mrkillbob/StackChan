@@ -77,6 +77,18 @@ int main(){using namespace runtime_lifecycle;using companion::network::Owner;
  std::thread stop([&]{requested=true;RequestHome();});while(!requested)std::this_thread::yield();
  release.set_value();commit.join();stop.join();assert(accepted&&selected==1&&HomeRequested());
  assert(!CommitFirmwareInstall([&]{++selected;return true;}));assert(selected==1);finish();
+ // Preparation never changes persistent boot selection. Rejected admission
+ // cannot discard the current session's staged candidate.
+ assert(Begin());int boots=0,reboots=0;
+ assert(StageFirmwareInstall([&]{++boots;return true;}));assert(boots==0&&!Begin());
+ assert(!StageFirmwareInstall([]{assert(false);return true;}));
+ assert(CommitFirmwareInstall([&]{assert(boots==1);++reboots;return true;}));assert(reboots==1);finish();
+ assert(Begin());assert(StageFirmwareInstall([&]{++boots;return true;}));RequestHome();
+ assert(!CommitFirmwareInstall([&]{++reboots;return true;}));assert(boots==1&&reboots==1);finish();
+ assert(Begin());assert(StageFirmwareInstall([]{return false;}));
+ assert(!CommitFirmwareInstall([&]{++reboots;return true;}));assert(reboots==1);
+ assert(StageFirmwareInstall([&]{++boots;return true;}));DiscardFirmwareInstall();
+ assert(CommitFirmwareInstall([&]{++reboots;return true;}));assert(boots==1&&reboots==2);finish();
 }
 '''
 
@@ -177,12 +189,54 @@ int main(){Hal hal;auto log=[](std::string_view){assert(!home);};
  home=false;cancel_at_commit=false;new_version=false;assert(hal.updateFirmware(log)&&reboots==2);
 }
 '''
+stock_source = (main / 'companion/stock_application.cc').read_text()
+stock_code = r'''
+#include <cassert>
+#include <cstdio>
+#include <functional>
+#include <memory>
+#include <string>
+#define ESP_LOGI(...) ((void)0)
+#define ESP_LOGE(...) ((void)0)
+#define pdMS_TO_TICKS(ms) (ms)
+void vTaskDelay(int){}
+bool home=false,pending_boot=false,selection_ok=true;int boots=0,reboots=0,waits=0,cancel_wait=0,stops=0,fail_stop=0;
+std::string status;
+namespace runtime_lifecycle{
+bool HomeRequested(){return home;}
+bool WaitCancelled(int){if(++waits==cancel_wait){home=true;pending_boot=false;}return home;}
+void DiscardFirmwareInstall(){pending_boot=false;}
+bool CommitFirmwareInstall(const std::function<bool()>& reboot){if(home)return false;bool selected=pending_boot;pending_boot=false;if(selected){if(!selection_ok)return false;++boots;}return reboot();}
+}
+namespace stock_services{bool FirmwareInstallAllowed(){return !home;}bool IsFirmwareImageUrl(const std::string&){return true;}void OfferFirmwareInstall(const std::string&,const std::string&){} }
+namespace Lang{namespace Strings{const char* OTA_UPGRADE="ota";const char* UPGRADING="upgrade";const char* NEW_VERSION="new";const char* ERROR="error";const char* UPGRADE_FAILED="failed";}namespace Sounds{const char* OGG_UPGRADE="sound";const char* OGG_EXCLAMATION="sound";}}
+enum PowerSaveLevel{PERFORMANCE,LOW_POWER};constexpr int kDeviceStateUpgrading=1;
+struct Display{void SetStatus(const char* message){status=message;}void SetChatMessage(const char*,const char*){}};
+struct Board{Display display;static Board& GetInstance(){static Board board;return board;}Display* GetDisplay(){return &display;}void SetPowerSaveLevel(int){}void* GetAudioCodec(){return nullptr;}};
+struct Protocol{bool IsAudioChannelOpened(){return true;}void CloseAudioChannel(){}};
+struct Audio{bool Stop(){return ++stops!=fail_stop;}bool Initialize(void*){return true;}bool Start(){return true;}};
+struct Hal{void reboot(){assert(!home);++reboots;}};Hal& GetHAL(){static Hal h;return h;}
+struct Ota{static bool Upgrade(const std::string&,std::function<void(int,size_t)> progress){progress(100,1000);pending_boot=true;return true;}};
+struct Application{std::unique_ptr<Protocol> protocol_;Audio audio_service_;
+ template<class...T>void Alert(T...){}void SetDeviceState(int){}void Schedule(const std::function<void()>& action){action();}
+ void Reboot();bool UpgradeFirmware(const std::string&,const std::string&);};
+''' + extract(stock_source, 'void Application::Reboot()') + '\n' + extract(stock_source, 'bool Application::UpgradeFirmware(') + r'''
+void reset(){assert(!pending_boot);home=false;selection_ok=true;boots=reboots=waits=cancel_wait=stops=fail_stop=0;status.clear();}
+int main(){Application app;
+ reset();assert(app.UpgradeFirmware("https://example.invalid/fw.bin","test"));assert(boots==1&&reboots==1&&!pending_boot);
+ for(int cancel:{3,4}){reset();cancel_wait=cancel;assert(!app.UpgradeFirmware("https://example.invalid/fw.bin","test"));assert(!boots&&!reboots&&!pending_boot);}
+ reset();fail_stop=2;assert(!app.UpgradeFirmware("https://example.invalid/fw.bin","test"));assert(!boots&&!reboots&&!pending_boot&&status=="Audio cleanup pending");
+ fail_stop=0;app.Reboot();assert(!boots&&reboots==1);
+ reset();selection_ok=false;assert(!app.UpgradeFirmware("https://example.invalid/fw.bin","test"));assert(!boots&&!reboots&&!pending_boot&&status=="Firmware boot selection failed");
+ reset();pending_boot=true;fail_stop=1;app.Reboot();assert(!pending_boot&&!boots&&!reboots);
+}
+'''
 with tempfile.TemporaryDirectory(prefix='stackchan-installer-session-') as temporary:
     directory = Path(temporary)
-    for name, code in [('session', session_code), ('native', native_code), ('hal', hal_code)]:
+    for name, code in [('session', session_code), ('native', native_code), ('hal', hal_code), ('stock', stock_code)]:
         cpp, exe = directory / (name + '.cpp'), directory / name
         cpp.write_text(code)
         subprocess.run([shutil.which('clang++') or 'c++', '-std=c++17', '-pthread',
                         '-fsanitize=address,undefined', '-I' + str(main), str(cpp), '-o', str(exe)], check=True)
         subprocess.run([str(exe)], check=True, timeout=30)
-print('Production installer registration/failure/exit, retained network cleanup, HAL cancellation and Home/commit serialization passed')
+print('Production installer registration/failure/exit, retained network cleanup, HAL/stock cancellation, staged selection and Home/commit serialization passed')

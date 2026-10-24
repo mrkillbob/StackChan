@@ -1000,12 +1000,15 @@ void Application::Reboot() {
     }
     protocol_.reset();
     if(!audio_service_.Stop()){
+        runtime_lifecycle::DiscardFirmwareInstall();
         Board::GetInstance().GetDisplay()->SetStatus("Audio cleanup pending");
         return;
     }
 
     if(runtime_lifecycle::WaitCancelled(1000))return;
-    runtime_lifecycle::CommitFirmwareInstall([]{GetHAL().reboot();return true;});
+    if(!runtime_lifecycle::CommitFirmwareInstall([]{GetHAL().reboot();return true;}) && !runtime_lifecycle::HomeRequested()){
+        Board::GetInstance().GetDisplay()->SetStatus("Firmware boot selection failed");
+    }
 }
 
 bool Application::UpgradeFirmware(const std::string& url, const std::string& version) {
@@ -1068,8 +1071,16 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
         ESP_LOGI(TAG, "Firmware upgrade successful, rebooting...");
         display->SetChatMessage("system", "Upgrade successful, rebooting...");
         if(runtime_lifecycle::WaitCancelled(1000))return false; // Brief cancellable pause.
-        Reboot();
-        return true;
+        // Finish cleanup before the one non-cancellable selection/reboot commit.
+        protocol_.reset();
+        if(!audio_service_.Stop()){
+            runtime_lifecycle::DiscardFirmwareInstall();
+            display->SetStatus("Audio cleanup pending");return false;
+        }
+        if(runtime_lifecycle::WaitCancelled(1000))return false;
+        const bool committed=runtime_lifecycle::CommitFirmwareInstall([]{GetHAL().reboot();return true;});
+        if(!committed&&!runtime_lifecycle::HomeRequested())display->SetStatus("Firmware boot selection failed");
+        return committed;
     }
 }
 

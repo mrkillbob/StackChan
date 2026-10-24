@@ -44,7 +44,7 @@ void NativeInstall(void* data){
     lv_label_set_text(label,message.c_str());
   });
  }
- if(success){runtime_lifecycle::CommitFirmwareInstall([]{GetHAL().reboot();return true;});return;}
+ if(success&&runtime_lifecycle::CommitFirmwareInstall([]{GetHAL().reboot();return true;}))return;
  // Failed download leaves the running app selected. A new attempt requires
  // another local confirmation; all temporary permission is already revoked.
  {LvglLockGuard lock;

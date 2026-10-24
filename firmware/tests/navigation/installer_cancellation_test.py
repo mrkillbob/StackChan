@@ -37,7 +37,7 @@ struct esp_image_header_t{char bytes[24];};struct esp_image_segment_header_t{cha
 struct esp_app_desc_t{char version[32];};
 struct esp_partition_t{const char* label="test";uint32_t address=0,size=65536;}partition;
 enum Mode{Success,CancelRead,CancelCallback,CancelWrite,CancelClose,CancelValidation,CancelCommit,RevokeValidation,WriteFailure,CancelPrepare,Oversize};
-Mode mode=Success;bool home=false,permission=true,active_handle=false;int opens=0,reads=0,writes=0,aborts=0,ends=0,selections=0,allocations=0;
+Mode mode=Success;bool home=false,permission=true,active_handle=false;std::function<bool()> pending_boot;int opens=0,reads=0,writes=0,aborts=0,ends=0,selections=0,allocations=0;
 int64_t clock_us=0;int64_t esp_timer_get_time(){return clock_us+=1000000;}
 void* heap_caps_malloc(size_t size,int){++allocations;return malloc(size);}
 void heap_caps_free(void* ptr){assert(allocations>0);--allocations;free(ptr);}
@@ -49,7 +49,8 @@ int esp_ota_end(int handle){assert(handle==17&&active_handle);active_handle=fals
 int esp_ota_set_boot_partition(const esp_partition_t*){++selections;assert(!home);return 0;}
 namespace runtime_lifecycle {
 bool HomeRequested(){return home;}
-bool CommitFirmwareInstall(const std::function<bool()>& commit){if(mode==CancelCommit)home=true;return !home&&commit();}
+bool StageFirmwareInstall(const std::function<bool()>& select){if(mode==CancelCommit)home=true;if(home)return false;pending_boot=select;return true;}
+bool CommitFirmwareInstall(const std::function<bool()>& reboot){if(home){pending_boot={};return false;}auto select=std::move(pending_boot);pending_boot={};return (!select||select())&&reboot();}
 }
 namespace stock_services {
 bool FirmwareInstallAllowed(){return permission&&!home;}
@@ -67,10 +68,15 @@ struct Board{Network network;static Board& GetInstance(){static Board b;return b
 struct Ota{static bool Upgrade(const std::string&,std::function<void(int,size_t)>);};
 '''
 cases = r'''
-void reset(Mode next){assert(!active_handle&&allocations==0);mode=next;home=false;permission=true;opens=reads=writes=aborts=ends=selections=0;clock_us=0;}
+void reset(Mode next){assert(!active_handle&&allocations==0);pending_boot={};mode=next;home=false;permission=true;opens=reads=writes=aborts=ends=selections=0;clock_us=0;}
 bool run(){return Ota::Upgrade("https://example.invalid/test.bin",[](int,size_t){if(mode==CancelCallback)home=true;});}
 int main(){
- reset(Success);assert(run());assert(writes==2&&ends==1&&selections==1&&!active_handle&&!allocations);
+ // Returning from Upgrade must not persist boot selection before caller delays.
+ reset(Success);assert(run());assert(writes==2&&ends==1&&selections==0&&!active_handle&&!allocations);
+ // Scope permission expires before NativeInstall's final reboot; staging must
+ // retain only the validated partition, never a permission/stack reference.
+ permission=false;assert(runtime_lifecycle::CommitFirmwareInstall([]{return true;}));assert(selections==1);
+ reset(Success);assert(run());home=true;assert(!runtime_lifecycle::CommitFirmwareInstall([]{assert(false);return true;}));assert(selections==0);
  for(auto next:{CancelRead,CancelCallback,CancelWrite,CancelClose,CancelValidation,CancelCommit,CancelPrepare,RevokeValidation}){
   reset(next);assert(!run());assert(selections==0&&!active_handle&&!allocations);
   if(next==CancelRead||next==CancelCallback)assert(writes==0);

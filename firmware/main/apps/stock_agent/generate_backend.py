@@ -113,14 +113,13 @@ def generate(xiaozhi, wifi, output):
     source = replace_once(source, '    esp_err_t err = esp_ota_end(update_handle);',
         '    if (cancelled()) { if (image_header_checked) esp_ota_abort(update_handle); return false; }\n    esp_err_t err = esp_ota_end(update_handle);')
     source = replace_once(source, '''    err = esp_ota_set_boot_partition(update_partition);
-    if (err != ESP_OK) {''', '''    // RequestHome and final boot selection share a serialization point. A
-    // canceled download can validate, but can never select the new image.
-    const bool selected = runtime_lifecycle::CommitFirmwareInstall([&] {
-        if (!stock_services::FirmwareInstallAllowed()) return false;
-        err = esp_ota_set_boot_partition(update_partition);
-        return err == ESP_OK;
-    });
-    if (!selected) {''')
+    if (err != ESP_OK) {''', '''    // Leave the running image selected through caller cleanup and delays.
+    // Only the final serialized reboot commit can select this candidate.
+    const bool staged = stock_services::FirmwareInstallAllowed() &&
+        runtime_lifecycle::StageFirmwareInstall([update_partition] {
+            return esp_ota_set_boot_partition(update_partition) == ESP_OK;
+        });
+    if (!staged) {''')
     (output / 'stock_ota.cc').write_text(source)
 
     source = pinned(xiaozhi / 'boards/common/wifi_board.cc', 'boards/common/wifi_board.cc')
