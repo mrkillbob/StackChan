@@ -50,9 +50,9 @@ def main():
                 with urlopen(url, timeout=30) as response:
                     output.write_bytes(response.read())
             if destination == 'xiaozhi-esp32':
-                # Only this patched unit is consumed by these fixtures. Other
+                # Only these patched units are consumed by these fixtures. Other
                 # firmware patch units are deliberately not fetched or built.
-                subprocess.run(['git', 'apply', '--include=main/application.cc',
+                subprocess.run(['git', 'apply', '--include=main/application.cc', '--include=main/ota.cc',
                                 str(FIRMWARE / 'patches/xiaozhi-e77dedb.patch')],
                                cwd=stage / destination, check=True)
             for relative, expected in files.items():

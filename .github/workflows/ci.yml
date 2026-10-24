@@ -68,6 +68,14 @@ jobs:
         run: |
           python3 -m unittest discover -s companion/host/offline-public -v
           python3 companion/host/numeric-ui/script/test_fixture_custody.py
+      - name: App transport and LAN lifecycle regressions without Flutter or device IO
+        run: |
+          archive="$RUNNER_TEMP/dart-sdk.zip"
+          curl --fail --location --retry 2 https://storage.googleapis.com/dart-archive/channels/stable/release/3.13.5/sdk/dartsdk-linux-x64-release.zip -o "$archive"
+          printf '%s  %s\n' 'ea864bc64df30a6b8bdf30b2e32550f7717d9a890de8f40293aeabb924fe232b' "$archive" | sha256sum --check
+          unzip -q "$archive" -d "$RUNNER_TEMP/app-regression-sdk"
+          "$RUNNER_TEMP/app-regression-sdk/dart-sdk/bin/dart" --disable-analytics
+          python3 scripts/ci/test_app_transport.py --dart "$RUNNER_TEMP/app-regression-sdk/dart-sdk/bin/dart"
 
   companion-swift:
     name: Companion Swift offline checks
