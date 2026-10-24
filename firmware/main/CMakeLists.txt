@@ -337,6 +337,7 @@ if(STACKCHAN_COMPANION_BOOT AND NOT CMAKE_BUILD_EARLY_EXPANSION)
     if(NOT STOCK_WIFI_DIR)
         message(FATAL_ERROR "Pinned Wi-Fi component is required for Stock AI")
     endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/apps/stock_agent/generate_backend.py")
     set(STOCK_BACKEND_DIR "${CMAKE_CURRENT_BINARY_DIR}/stock_agent_backend")
     execute_process(
         COMMAND ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/apps/stock_agent/generate_backend.py"
@@ -349,8 +350,10 @@ if(STACKCHAN_COMPANION_BOOT AND NOT CMAKE_BUILD_EARLY_EXPANSION)
         message(FATAL_ERROR "Stock AI pinned backend adaptation failed")
     endif()
     list(REMOVE_ITEM SOURCES "${XIAOZHI_MAIN_DIR}/application.cc"
-        "${XIAOZHI_MAIN_DIR}/ota.cc" "${XIAOZHI_MAIN_DIR}/boards/common/wifi_board.cc")
-    list(APPEND SOURCES "${STOCK_BACKEND_DIR}/stock_application.cc"
+        "${XIAOZHI_MAIN_DIR}/ota.cc" "${XIAOZHI_MAIN_DIR}/boards/common/wifi_board.cc" "${XIAOZHI_MAIN_DIR}/device_state_machine.cc"
+        "${XIAOZHI_MAIN_DIR}/protocols/mqtt_protocol.cc" "${XIAOZHI_MAIN_DIR}/protocols/websocket_protocol.cc")
+    list(APPEND SOURCES "${STOCK_BACKEND_DIR}/stock_websocket_protocol.cc" "${STOCK_BACKEND_DIR}/stock_mqtt_protocol.cc"
+        "${STOCK_BACKEND_DIR}/stock_device_state_machine.cc" "${STOCK_BACKEND_DIR}/stock_application.cc"
         "${STOCK_BACKEND_DIR}/stock_ota.cc" "${STOCK_BACKEND_DIR}/stock_wifi_board.cc")
 endif()
 
@@ -365,6 +368,9 @@ idf_component_register(SRCS ${SOURCES}
                         esp_pm
                         esp_psram
                         esp_netif
+                        esp_http_client
+                        mbedtls
+                        json
                         esp_driver_gpio
                         M5Unit-NFC
                         esp_driver_rmt
@@ -401,7 +407,7 @@ endif()
 if(STACKCHAN_COMPANION_BOOT AND NOT CMAKE_BUILD_EARLY_EXPANSION)
     idf_component_get_property(STOCK_WIFI_LIB ${STOCK_WIFI_COMPONENT} COMPONENT_LIB)
     get_target_property(STOCK_WIFI_SOURCES ${STOCK_WIFI_LIB} SOURCES)
-    list(FILTER STOCK_WIFI_SOURCES EXCLUDE REGEX "(^|/)(wifi_manager|ssid_manager|wifi_configuration_ap)\\.cc$")
+    list(FILTER STOCK_WIFI_SOURCES EXCLUDE REGEX "(^|/)(wifi_manager|ssid_manager|wifi_configuration_ap|dns_server)\\.cc$")
     get_target_property(STOCK_WIFI_SOURCE_DIR ${STOCK_WIFI_LIB} SOURCE_DIR)
     set(STOCK_WIFI_ABSOLUTE_SOURCES "")
     foreach(STOCK_WIFI_SOURCE IN LISTS STOCK_WIFI_SOURCES)
@@ -412,7 +418,7 @@ if(STACKCHAN_COMPANION_BOOT AND NOT CMAKE_BUILD_EARLY_EXPANSION)
         endif()
     endforeach()
     set(STOCK_WIFI_SOURCES ${STOCK_WIFI_ABSOLUTE_SOURCES})
-    list(APPEND STOCK_WIFI_SOURCES "${STOCK_BACKEND_DIR}/stock_wifi_manager.cc"
+    list(APPEND STOCK_WIFI_SOURCES "${STOCK_BACKEND_DIR}/stock_dns_server.cc" "${STOCK_BACKEND_DIR}/stock_wifi_manager.cc"
         "${STOCK_BACKEND_DIR}/stock_ssid_manager.cc"
         "${STOCK_BACKEND_DIR}/stock_wifi_configuration_ap.cc")
     set_property(TARGET ${STOCK_WIFI_LIB} PROPERTY SOURCES "${STOCK_WIFI_SOURCES}")
@@ -655,4 +661,51 @@ option(STACKCHAN_COMPANION_WIRELESS_PAIRING "Enable reviewed wireless pairing fl
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE STACKCHAN_COMPANION_REMEMBERED_RUNTIME=$<BOOL:${STACKCHAN_COMPANION_REMEMBERED_RUNTIME}> STACKCHAN_COMPANION_WIRELESS_PAIRING=$<BOOL:${STACKCHAN_COMPANION_WIRELESS_PAIRING}>)
     target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,-u,MiraWakeBackendLinkReference" "-Wl,-u,MiraWakeFactoryLinkReference")
+endif()
+
+# Shutdown variants are generated from immutable reviewed dependency hashes.
+# A timed-out receiver never becomes permission to free transport state.
+if(STACKCHAN_COMPANION_BOOT AND NOT CMAKE_BUILD_EARLY_EXPANSION)
+    find_component_by_pattern("78__esp-ml307" JOIN_NETWORK_COMPONENT JOIN_NETWORK_DIR)
+    find_component_by_pattern("^esp-now$" JOIN_ESPNOW_COMPONENT JOIN_ESPNOW_DIR)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/apps/runtime_lifecycle/generate_teardown.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/apps/runtime_lifecycle/teardown_pins.json")
+    set(JOIN_BACKEND_DIR "${CMAKE_CURRENT_BINARY_DIR}/joined_backend")
+    execute_process(COMMAND ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/apps/runtime_lifecycle/generate_teardown.py"
+        --network "${JOIN_NETWORK_DIR}" --espnow "${JOIN_ESPNOW_DIR}" --output "${JOIN_BACKEND_DIR}"
+        RESULT_VARIABLE JOIN_RESULT)
+    if(NOT JOIN_RESULT EQUAL 0)
+        message(FATAL_ERROR "Reviewed shutdown dependency adaptation failed")
+    endif()
+    function(replace_joined_unit component original replacement)
+        idf_component_get_property(lib ${component} COMPONENT_LIB)
+        get_target_property(units ${lib} SOURCES)
+        get_target_property(base ${lib} SOURCE_DIR)
+        set(replaced "")
+        set(found FALSE)
+        foreach(unit IN LISTS units)
+            if(unit MATCHES "(^|/)${original}$")
+                list(APPEND replaced "${JOIN_BACKEND_DIR}/${replacement}")
+                set(found TRUE)
+            elseif(IS_ABSOLUTE "${unit}" OR unit MATCHES "^\\$<")
+                list(APPEND replaced "${unit}")
+            else()
+                list(APPEND replaced "${base}/${unit}")
+            endif()
+        endforeach()
+        if(NOT found)
+            message(FATAL_ERROR "Shutdown source unit missing: ${original}")
+        endif()
+        set_property(TARGET ${lib} PROPERTY SOURCES "${replaced}")
+    endfunction()
+    foreach(unit esp_tcp esp_udp esp_ssl esp_mqtt)
+        replace_joined_unit(${JOIN_NETWORK_COMPONENT} "${unit}.cc" "joined_${unit}.cc")
+    endforeach()
+    replace_joined_unit(${JOIN_NETWORK_COMPONENT} "web_socket.cc" "joined_web_socket.cc")
+    replace_joined_unit(${JOIN_ESPNOW_COMPONENT} "espnow.c" "joined_espnow.c")
+    idf_component_get_property(join_net_lib ${JOIN_NETWORK_COMPONENT} COMPONENT_LIB)
+    target_include_directories(${join_net_lib} PRIVATE "${JOIN_NETWORK_DIR}/src/esp")
+    idf_component_get_property(join_now_lib ${JOIN_ESPNOW_COMPONENT} COMPONENT_LIB)
+    target_include_directories(${join_now_lib} PRIVATE "${JOIN_ESPNOW_DIR}/src/espnow/src")
 endif()

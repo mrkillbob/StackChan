@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "hal.h"
+#include <apps/runtime_lifecycle/session.h>
 #include <stackchan/stackchan.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
@@ -23,6 +24,8 @@ static std::string _tag = "EzData";
 
 class EzData {
 public:
+    ~EzData(){ Shutdown(); }
+    void Shutdown(){ if(_mqtt)_mqtt->Disconnect(); _mqtt.reset(); }
     enum class CmdType : int {
         // --- 数据操作 (100-102) ---
         DeviceAddData    = 100,  ///< 设备端新增数据
@@ -161,6 +164,7 @@ private:
         auto network = board.GetNetwork();
 
         auto http = network->CreateHttp(0);
+        if(http)http->SetTimeout(4000);
         if (!http) {
             ESP_LOGE(_tag.c_str(), "failed to create HTTP instance");
             return "";
@@ -211,7 +215,7 @@ private:
 
     void _connect()
     {
-        _mqtt.reset();
+        Shutdown();
 
         _token = _get_device_token();
         if (_token.empty()) {
@@ -219,7 +223,7 @@ private:
             _last_reconnect_attempt = GetHAL().millis();
             return;
         }
-        ESP_LOGI(_tag.c_str(), "get token %s", _token.c_str());
+        ESP_LOGI(_tag.c_str(), "Device authorization acquired");
 
         auto& board  = Board::GetInstance();
         auto network = board.GetNetwork();
@@ -326,7 +330,7 @@ private:
             case CmdType::DeviceGetMatchCode: {
                 if (doc["body"]["pairCode"].is<std::string>()) {
                     std::string pair_code = doc["body"]["pairCode"].as<std::string>();
-                    ESP_LOGI(_tag.c_str(), "Pair code: %s", pair_code.c_str());
+                    ESP_LOGI(_tag.c_str(), "Pair code received");
 
                     if (onPairCodeReceived) {
                         onPairCodeReceived(pair_code);
@@ -403,6 +407,7 @@ public:
 
     void onDestroy() override
     {
+        if(_service)_service->Shutdown();
         _service.reset();
     }
 
@@ -459,6 +464,7 @@ void Hal::startEzDataService(std::function<void(std::string_view)> onStartLog)
     mclog::tagInfo(_tag, "start ezdata service");
 
     startNetwork(onStartLog);
+    if(runtime_lifecycle::HomeRequested())return;
 
     onStartLog("Connecting to\nserver...");
     mooncake::GetMooncake().extensionManager()->createAbility(std::make_unique<EzdataWorker>());

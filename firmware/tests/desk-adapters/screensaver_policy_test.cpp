@@ -3,7 +3,8 @@
 using namespace view::saver;
 int main(){
  static_assert(SlideDurationMs==30000);
- static_assert(AllowedCount==217);
+ static_assert(AllowedCount==216); // Stable Moire ID226 remains a tombstone.
+ assert(!Allowed(226)&&Allowed(225)); // Moire2 stays selectable.
  Selection legacy;legacy.bits.fill(255);legacy.order=Order::Random;
  auto migrated=Selection::fromPayload(legacy.payload());assert(migrated.count()==AllowedCount&&migrated.order==Order::Random);
  for(auto id:ExcludedSlides){assert(!migrated.selected(id));migrated.set(id,true);assert(!migrated.selected(id));assert(Allowed(AdjacentAllowed(id,true))&&Allowed(AdjacentAllowed(id,false)));}

@@ -129,6 +129,9 @@ void Screensaver::onRender(float dt)
         // Clamp stalled frame delta; only visual time is advanced.
         if (dt > 0 && dt < 1) _animation_ms += uint32_t(dt * 1000);
         const uint16_t index=uint16_t(static_cast<unsigned>(_style)-1);
+        // Playback needs a complete frame. A wall-clock preview deadline can
+        // expire while clearing PSRAM and must not disable a usable effect.
+        // The renderer's finite work budget and clipped primitives still apply.
         if(!effect_catalog::Render(index,_animation_ms,_effect_pixels,320,240)) {
             showEffectError(); return;
         }

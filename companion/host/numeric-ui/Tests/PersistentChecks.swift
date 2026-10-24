@@ -6,7 +6,7 @@ import Foundation
         precondition(condition(), "bounded fixture did not complete")
     }
     static func fake(_ source: String) -> Process {
-        let p=Process();p.executableURL=URL(fileURLWithPath:"/opt/homebrew/bin/python3.14");p.arguments=["-B","-u","-c",FixtureCustody.wrap(source)];return p
+        let p=Process();p.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["STACKCHAN_TEST_PYTHON"] ?? "/usr/bin/python3");p.arguments=["-B","-u","-c",FixtureCustody.wrap(source)];return p
     }
     static func main() {
         let root=URL(fileURLWithPath:"/synthetic")
@@ -38,15 +38,28 @@ for line in sys.stdin:
  elif c=='connect':
   assert set(message['audio_route']) == {'input_uid','output_uid'}
   print(json.dumps({'state':'paired','acknowledged':True,'activity':'physical_consent'}),flush=True)
+  import time;time.sleep(.05)
+  print(json.dumps({'state':'paired','acknowledged':True,'activity':'conversation','audio_remaining':60}),flush=True)
  elif c=='cancel':print(json.dumps({'state':'cancelled'}),flush=True)
 """)},audioRouteAvailability:{ true })
         enrolled.enrollRemembered();pump { enrolled.phase == .paired }
         enrolled.refreshAudioRouteAvailability()
         precondition(enrolled.canUseStackChan)
         enrolled.useStackChan();pump { enrolled.activity == .physicalConsent }
+        pump { enrolled.activity == .conversation }
+        precondition(enrolled.rememberedStatus.localizedCaseInsensitiveContains("conversation activity") &&
+                     enrolled.rememberedStatus.localizedCaseInsensitiveContains("capture state is unknown") &&
+                     !enrolled.rememberedStatus.localizedCaseInsensitiveContains("press listen"),
+                     "remembered-device status cannot claim audio remains muted after conversation activity")
         precondition(!enrolled.canUseStackChan)
         enrolled.cancel();pump { enrolled.phase == .cancelled }
+        precondition(enrolled.rememberedStatus.localizedCaseInsensitiveContains("release is not confirmed") &&
+                     enrolled.rememberedStatus.localizedCaseInsensitiveContains("capture state is unknown") &&
+                     !enrolled.rememberedStatus.localizedCaseInsensitiveContains("audio is closed"),
+                     "cancelled worker status cannot imply process release or known capture state")
         var done=false;enrolled.shutdown { done=$0 };pump { done }
+        precondition(enrolled.rememberedStatus.localizedCaseInsensitiveContains("process release is confirmed"),
+                     "remembered-device status advances only after confirmed process exit")
         let retry = PairingController(approved:true,root:root,processFactory:{fake("""
 import sys,json
 count=0
@@ -98,7 +111,7 @@ for line in sys.stdin:
         let importRoot = ProcessInfo.processInfo.environment["STACKCHAN_FIXTURE_PROJECT_ROOT"].map { URL(fileURLWithPath: $0) } ?? candidateRoot
         precondition(FileManager.default.fileExists(atPath: importRoot.appendingPathComponent("bridge/host-adapter/host_adapter.py").path), "fixture project dependency root required")
         let runtime = PairingController(approved: false, root: importRoot)
-        let probe=Process();probe.executableURL=URL(fileURLWithPath:"/opt/homebrew/bin/python3.14")
+        let probe=Process();probe.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["STACKCHAN_TEST_PYTHON"] ?? "/usr/bin/python3")
         probe.arguments=["-B","-c",FixtureCustody.wrap("import native_adapter, native_conversation")]
         probe.currentDirectoryURL=URL(fileURLWithPath:runtime.rememberedWorkerLaunchArguments.last!).deletingLastPathComponent()
         probe.environment=runtime.workerLaunchEnvironment

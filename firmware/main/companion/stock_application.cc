@@ -1,3 +1,4 @@
+#include <apps/runtime_lifecycle/session.h>
 #include <apps/stock_services/firmware_install_policy.h>
 #include <apps/stock_services/firmware_install_ui.h>
 #include <hal/hal.h>
@@ -78,6 +79,7 @@ void Application::Initialize() {
     auto& board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);
 
+    if(runtime_lifecycle::HomeRequested())return;
     // Setup the display
     auto display = board.GetDisplay();
     display->SetupUI();
@@ -105,21 +107,25 @@ void Application::Initialize() {
     };
     audio_service_.SetCallbacks(callbacks);
 
-    // Add state change listeners
-    state_machine_.AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
+    // Boot-lifetime observer is installed once across repeated sessions.
+    static bool listener_added=false;
+    if(!listener_added)state_machine_.AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
         xEventGroupSetBits(event_group_, MAIN_EVENT_STATE_CHANGED);
     });
 
+    listener_added=true;
+    if(runtime_lifecycle::HomeRequested())return;
     // Start the clock timer to update the status bar
     esp_timer_start_periodic(clock_timer_handle_, 1000000);
 
     // Add MCP common tools (only once during initialization)
     auto& mcp_server = McpServer::GetInstance();
-    mcp_server.AddCommonTools();
-    mcp_server.AddUserOnlyTools();
+    static bool tools_added=false;
+    if(!tools_added){mcp_server.AddCommonTools();mcp_server.AddUserOnlyTools();tools_added=true;}
 
     // Set network event callback for UI updates and network state handling
     board.SetNetworkEventCallback([this](NetworkEvent event, const std::string& data) {
+        if(runtime_lifecycle::HomeRequested())return;
         auto display = Board::GetInstance().GetDisplay();
         
         switch (event) {
@@ -176,6 +182,7 @@ void Application::Initialize() {
     });
 
     // Start network asynchronously
+    if(runtime_lifecycle::HomeRequested())return;
     board.StartNetwork();
 
     // Update the status bar immediately to show the network state
@@ -202,7 +209,20 @@ void Application::Run() {
         MAIN_EVENT_STATE_CHANGED;
 
     while (true) {
-        auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
+        auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, pdMS_TO_TICKS(20));
+        if(runtime_lifecycle::HomeRequested()){
+            // This task owns protocol/OTA and remains retained while any child
+            // is still exiting. No UI lock is held across audio or network joins.
+            const bool audio_joined=audio_service_.Stop(10);
+            if(!audio_joined||!runtime_lifecycle::ActivationJoined()||!runtime_lifecycle::UpdateJoined())continue;
+            esp_timer_stop(clock_timer_handle_);
+            Board::GetInstance().SetNetworkEventCallback(nullptr);
+            protocol_.reset(); // adapted transport destructors require actual receive exit
+            ota_.reset();AudioServiceCallbacks stopped_callbacks{};audio_service_.SetCallbacks(stopped_callbacks);
+            {std::lock_guard<std::mutex> lock(mutex_);main_tasks_.clear();}
+            xEventGroupClearBits(event_group_,ALL_EVENTS);
+            return;
+        }
         if(!audio_service_.IsRunning()){
             PollInactiveAudioService(audio_service_,Board::GetInstance().GetDisplay(),
                 hal_bridge::is_xiaozhi_mode()||stock_services::IsActive(),GetDeviceState());
@@ -290,17 +310,19 @@ void Application::HandleNetworkConnectedEvent() {
     if (state == kDeviceStateStarting || state == kDeviceStateWifiConfiguring) {
         // Network is ready, start activation
         SetDeviceState(kDeviceStateActivating);
-        if (activation_task_handle_ != nullptr) {
+        if (!runtime_lifecycle::ActivationJoined()) {
             ESP_LOGW(TAG, "Activation task already running");
             return;
         }
 
-        xTaskCreate([](void* arg) {
+        runtime_lifecycle::ActivationStarted();
+        if(xTaskCreate([](void* arg) {
             Application* app = static_cast<Application*>(arg);
             app->ActivationTask();
             app->activation_task_handle_ = nullptr;
+            runtime_lifecycle::ActivationExited();
             vTaskDelete(NULL);
-        }, "activation", 4096 * 2, this, 2, &activation_task_handle_);
+        }, "activation", 4096 * 2, this, 2, &activation_task_handle_)!=pdPASS){runtime_lifecycle::ActivationExited();runtime_lifecycle::RequestHome();}
     }
 
     // Update the status bar immediately to show the network state
@@ -346,20 +368,23 @@ void Application::HandleActivationDoneEvent() {
 }
 
 void Application::ActivationTask() {
+    if(runtime_lifecycle::HomeRequested())return;
     // Create OTA object for activation process
     ota_ = std::make_unique<Ota>();
 
     // Check for new assets version
     CheckAssetsVersion();
 
+    if(runtime_lifecycle::HomeRequested())return;
     // Check for new firmware version
     CheckNewVersion();
 
+    if(runtime_lifecycle::HomeRequested())return;
     // Initialize the protocol
     InitializeProtocol();
 
     // Signal completion to main loop
-    xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
+    if(!runtime_lifecycle::HomeRequested())xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
 }
 
 void Application::CheckAssetsVersion() {
@@ -390,7 +415,7 @@ void Application::CheckAssetsVersion() {
         Alert(Lang::Strings::LOADING_ASSETS, message, "cloud_arrow_down", Lang::Sounds::OGG_UPGRADE);
         
         // Wait for the audio service to be idle for 3 seconds
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        if(runtime_lifecycle::WaitCancelled(3000))return;
         SetDeviceState(kDeviceStateUpgrading);
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         display->SetChatMessage("system", Lang::Strings::PLEASE_WAIT);
@@ -404,11 +429,11 @@ void Application::CheckAssetsVersion() {
         });
 
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        if(runtime_lifecycle::WaitCancelled(1000))return;
 
         if (!success) {
             Alert(Lang::Strings::ERROR, Lang::Strings::DOWNLOAD_ASSETS_FAILED, "circle_xmark", Lang::Sounds::OGG_EXCLAMATION);
-            vTaskDelay(pdMS_TO_TICKS(2000));
+            if(runtime_lifecycle::WaitCancelled(2000))return;
             SetDeviceState(kDeviceStateActivating);
             return;
         }
@@ -424,9 +449,10 @@ void Application::CheckNewVersion() {
     const int MAX_RETRY = 10;
     int retry_count = 0;
     int retry_delay = 10; // Initial retry delay in seconds
+    int challenge_rounds = 0;
 
     auto& board = Board::GetInstance();
-    while (true) {
+    while (!runtime_lifecycle::HomeRequested()) {
         auto display = board.GetDisplay();
         display->SetStatus(Lang::Strings::CHECKING_NEW_VERSION);
 
@@ -446,7 +472,7 @@ void Application::CheckNewVersion() {
 
             ESP_LOGW(TAG, "Check new version failed, retry in %d seconds (%d/%d)", retry_delay, retry_count, MAX_RETRY);
             for (int i = 0; i < retry_delay; i++) {
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                if(runtime_lifecycle::WaitCancelled(1000))return;
                 if (GetDeviceState() == kDeviceStateIdle) {
                     break;
                 }
@@ -463,15 +489,20 @@ void Application::CheckNewVersion() {
 
         // No new version, mark the current version as valid
         ota_->MarkCurrentVersionValid();
-        if (!ota_->HasActivationCode() && !ota_->HasActivationChallenge()) {
+        if (ota_->RequiresAppBinding()) {
+            if(runtime_lifecycle::HomeRequested())return;
+            GetHAL().requestAppSetup();
+        }
+        if (!ota_->HasActivationChallenge()) {
             // Exit the loop if done checking new version
             break;
         }
 
         display->SetStatus(Lang::Strings::ACTIVATION);
-        // Activation code is shown to the user and waiting for the user to input
-        if (ota_->HasActivationCode()) {
-            ShowActivationCode(ota_->GetActivationCode(), ota_->GetActivationMessage());
+        // Manual activation belongs in StackChan World; bound automatic challenges.
+        if (++challenge_rounds > 3) {
+            if(runtime_lifecycle::HomeRequested())return;
+            GetHAL().requestAppSetup();
         }
 
         // This will block the loop until the activation is done or timeout
@@ -481,9 +512,9 @@ void Application::CheckNewVersion() {
             if (err == ESP_OK) {
                 break;
             } else if (err == ESP_ERR_TIMEOUT) {
-                vTaskDelay(pdMS_TO_TICKS(3000));
+                if(runtime_lifecycle::WaitCancelled(3000))return;
             } else {
-                vTaskDelay(pdMS_TO_TICKS(10000));
+                if(runtime_lifecycle::WaitCancelled(10000))return;
             }
             if (GetDeviceState() == kDeviceStateIdle) {
                 break;
@@ -493,7 +524,7 @@ void Application::CheckNewVersion() {
 }
 
 void Application::InitializeProtocol() {
-    if(!audio_service_.IsRunning())return;
+    if(runtime_lifecycle::HomeRequested()||!audio_service_.IsRunning())return;
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
     auto codec = board.GetAudioCodec();
@@ -510,21 +541,25 @@ void Application::InitializeProtocol() {
     }
 
     protocol_->OnConnected([this]() {
+        if(runtime_lifecycle::HomeRequested())return;
         DismissAlert();
     });
 
     protocol_->OnNetworkError([this](const std::string& message) {
+        if(runtime_lifecycle::HomeRequested())return;
         last_error_message_ = message;
         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
     });
     
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
+        if(runtime_lifecycle::HomeRequested())return;
         if (GetDeviceState() == kDeviceStateSpeaking) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
     });
     
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
+        if(runtime_lifecycle::HomeRequested())return;
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG, "Server sample rate %d does not match device output sample rate %d, resampling may cause distortion",
@@ -533,6 +568,7 @@ void Application::InitializeProtocol() {
     });
     
     protocol_->OnAudioChannelClosed([this, &board]() {
+        if(runtime_lifecycle::HomeRequested())return;
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
             auto display = Board::GetInstance().GetDisplay();
@@ -542,6 +578,7 @@ void Application::InitializeProtocol() {
     });
     
     protocol_->OnIncomingJson([this, display](const cJSON* root) {
+        if(runtime_lifecycle::HomeRequested())return;
         // Parse JSON data
         auto type = cJSON_GetObjectItem(root, "type");
         if (strcmp(type->valuestring, "tts") == 0) {
@@ -632,39 +669,6 @@ void Application::InitializeProtocol() {
     protocol_->Start();
 }
 
-void Application::ShowActivationCode(const std::string& code, const std::string& message) {
-    // struct digit_sound {
-    //     char digit;
-    //     const std::string_view& sound;
-    // };
-    // static const std::array<digit_sound, 10> digit_sounds{{
-    //     digit_sound{'0', Lang::Sounds::OGG_0},
-    //     digit_sound{'1', Lang::Sounds::OGG_1}, 
-    //     digit_sound{'2', Lang::Sounds::OGG_2},
-    //     digit_sound{'3', Lang::Sounds::OGG_3},
-    //     digit_sound{'4', Lang::Sounds::OGG_4},
-    //     digit_sound{'5', Lang::Sounds::OGG_5},
-    //     digit_sound{'6', Lang::Sounds::OGG_6},
-    //     digit_sound{'7', Lang::Sounds::OGG_7},
-    //     digit_sound{'8', Lang::Sounds::OGG_8},
-    //     digit_sound{'9', Lang::Sounds::OGG_9}
-    // }};
-
-    // // This sentence uses 9KB of SRAM, so we need to wait for it to finish
-    // Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", Lang::Sounds::OGG_ACTIVATION);
-
-    // for (const auto& digit : code) {
-    //     auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
-    //         [digit](const digit_sound& ds) { return ds.digit == digit; });
-    //     if (it != digit_sounds.end()) {
-    //         audio_service_.PlaySound(it->sound);
-    //     }
-    // }
-
-    auto display = Board::GetInstance().GetDisplay();
-    display->SetChatMessage("system", "Please bind and set up in the mobile app.");
-}
-
 void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
     ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
     auto display = Board::GetInstance().GetDisplay();
@@ -742,8 +746,13 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
         return;
     }
 
+    // Restore performance before the control handshake, including channel reuse.
+    auto& board = Board::GetInstance();
+    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+
     if (!protocol_->IsAudioChannelOpened()) {
         if (!protocol_->OpenAudioChannel()) {
+            board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
             return;
         }
     }
@@ -851,8 +860,13 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
         return;
     }
 
+    // Restore performance before the control handshake, including channel reuse.
+    auto& board = Board::GetInstance();
+    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+
     if (!protocol_->IsAudioChannelOpened()) {
         if (!protocol_->OpenAudioChannel()) {
+            board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
             audio_service_.EnableWakeWordDetection(true);
             return;
         }
@@ -953,6 +967,7 @@ void Application::HandleStateChangedEvent() {
 }
 
 void Application::Schedule(std::function<void()>&& callback) {
+    if(runtime_lifecycle::HomeRequested())return;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         main_tasks_.push_back(std::move(callback));
@@ -989,7 +1004,7 @@ void Application::Reboot() {
         return;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    if(runtime_lifecycle::WaitCancelled(1000))return;
     GetHAL().reboot();
 }
 

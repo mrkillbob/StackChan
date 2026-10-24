@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Explicit, bounded network setup using official StackChan World / browser flows.
 #include "network_setup.h"
+#include <apps/runtime_lifecycle/session.h>
+#include <apps/runtime_lifecycle/cleanup.h>
 #include <apps/app_setup/workers/workers.h>
 #include <apps/stock_services/policy.h>
 #include <application.h>
@@ -49,20 +51,7 @@ void OpenPersistenceScope(PersistenceScope scope) {
     persistence_allowed = true;
 }
 
-[[noreturn]] void ReturnHome() {
-    persistence_allowed = false;
-    preview_cookie = 0;
-    // Neither upstream radio implementation offers a joined, repeatable cross-
-    // driver teardown. Reset ends all radio callbacks before the stopped shell.
-    GetHAL().reboot();
-    while (true) GetHAL().delay(1000);
-}
-[[noreturn]] void RestartPreview() {
-    persistence_allowed = false;
-    preview_cookie = preview_magic;
-    esp_restart();
-    while (true) GetHAL().delay(1000);
-}
+void ReturnHome(){persistence_allowed=false;preview_cookie=0;runtime_lifecycle::RequestHome();}
 lv_obj_t* Label(lv_obj_t* parent, const char* text, int x, int y, int width) {
     auto label = lv_label_create(parent);
     lv_obj_set_pos(label, x, y);
@@ -74,6 +63,7 @@ lv_obj_t* Label(lv_obj_t* parent, const char* text, int x, int y, int width) {
 class Controller {
     enum class Mode { Preview, PhoneApp, Browser };
     Mode mode_ = Mode::Preview;
+    Mode waiting_mode_=Mode::Preview;
     std::atomic<int> action_{0};
     lv_obj_t* panel_ = nullptr;
     lv_obj_t* info_ = nullptr;
@@ -115,10 +105,9 @@ class Controller {
         Panel();
         Label(panel_, "Change Wi-Fi - stopped", 10, 12, 224);
         Button(panel_, "Back", 245, 2, 65, 1);
-        bool restart_needed = companion::NetworkWasStarted() || network_started.load() ||
-                              WifiManager::GetInstance().IsInitialized();
-        info_ = Label(panel_, restart_needed
-            ? "Shared Wi-Fi was used.\nStart restarts stopped setup.\nTap Start again after reboot."
+        bool owner_busy = !runtime_lifecycle::VendorNetworkAvailable();
+        info_ = Label(panel_, owner_busy
+            ? "Network owner is still active.\nStop the current companion, then retry."
             : "Choose a setup method.\nYour phone submits the new Wi-Fi.\nAI, audio and motion stay off.", 10, 57, 300);
         Button(panel_, "Start phone app", 10, 130, 300, 2);
         Button(panel_, "Start browser", 10, 182, 300, 3);
@@ -141,9 +130,15 @@ class Controller {
             lv_label_set_text(info_, "Audio is still stopping.\nRetry setup when it is off.");
             return;
         }
-        if (companion::NetworkWasStarted() || network_started.load() ||
-            WifiManager::GetInstance().IsInitialized()) RestartPreview();
-        network_started = true; // partial initialization also requires a reset
+        if(!runtime_lifecycle::PrepareVendorNetwork()){
+            waiting_mode_=requested;lv_label_set_text(info_,"Stopping previous Wi-Fi. Back cancels setup.");return;
+        }
+        waiting_mode_=Mode::Preview;
+        if(!runtime_lifecycle::Begin()){
+            lv_label_set_text(info_,"Network owner still active. Stop it first; no restart performed.");return;
+        }
+        runtime_lifecycle::ResetCleanupJob();
+        network_started = true;
         OpenPersistenceScope(PersistenceScope::Standalone);
         save_result = 0;
         browser_exit = false;
@@ -199,10 +194,13 @@ public:
     }
     bool Done() const { return done_; }
     void Tick() {
+        if(runtime_lifecycle::HomeRequested())return;
         LvglLockGuard lock;
         int action = action_.exchange(0);
+        if(!action&&mode_==Mode::Preview&&waiting_mode_!=Mode::Preview)action=waiting_mode_==Mode::PhoneApp?2:3;
         if (action == 1) {
-            if (started_) ReturnHome();
+            waiting_mode_=Mode::Preview;
+            if (started_) {ReturnHome();return;}
             done_ = true;
             return;
         }

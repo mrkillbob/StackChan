@@ -16,7 +16,11 @@ void Run(void*){
   if(action==Command::Confirm)runtime->ConfirmDisplayedCode(displayed,context);
   if(action==Command::Stop)runtime->Stop();
   runtime->Tick();View next;next.state=runtime->State();next.issue=runtime->Issue();next.code=runtime->Code();next.stamp=runtime->ConsentStamp();next.audio=runtime->Audio();next.closed=runtime->Closed();
-  {std::lock_guard<std::mutex> held(lock);next.configured=selected.epoch&&selected.stream;view=std::move(next);}
+  {std::lock_guard<std::mutex> held(lock);
+   // Select may have arrived while this iteration stopped the previous session.
+   // Its false receipt must survive until the sequential actor consumes it.
+   next.closed=next.closed&&command==Command::None;
+   next.configured=selected.epoch&&selected.stream;view=std::move(next);}
   vTaskDelay(pdMS_TO_TICKS(10));
  }
 }

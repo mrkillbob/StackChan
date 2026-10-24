@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "app_launcher.h"
+#include "view/screensaver_library.hpp"
 #include <hal/hal.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
@@ -30,12 +31,20 @@ void AppLauncher::onLauncherOpen()
     mclog::tagInfo(getAppInfo().name, "on open");
 
     LvglLockGuard lock;
+    // Returning from an app means Home, independent of its former category.
+    _category.reset();
 
+#ifndef STACKCHAN_COMPANION_BOOT
+    if (!_startup_checked && GetHAL().consumeAppSetupRequest()) {
+        mclog::tagInfo(getAppInfo().name, "resume App setup after network/binding failure");
+        _startup_worker = std::make_unique<setup_workers::WifiSetupWorker>();
+    } else
+#endif
     if (
 #ifndef STACKCHAN_COMPANION_BOOT
         !_startup_checked && !GetHAL().isAppConfiged()
 #else
-        false // Safe shell never starts account/network onboarding automatically.
+        false // Companion boot never opens account/network setup automatically.
 #endif
     ) {
         mclog::tagInfo(getAppInfo().name, "app not configured, start startup worker");
@@ -99,6 +108,8 @@ void AppLauncher::create_launcher_view()
             }
         }
     }
+    // Retire callbacks/helpers before replacing their shared runtime.
+    _view.reset();
     _view = std::make_unique<view::LauncherView>();
     _view->init(std::move(shown));
     _view->onAppClicked = [&](int appID) {_pending_navigation=appID;};
@@ -139,7 +150,7 @@ void AppLauncher::screensaver_update()
     if (!_screensaver) {
         if(!view::saver::MayEnterIdle(idle,launcher_active,_going_to_open_app_id>=0,media_owned))return;
         Settings settings("screensaver");
-        auto selection=view::saver::Selection::fromPayload(settings.GetString("playlist"));
+        auto selection=view::saver::Library::fromPayload(settings.GetString("playlist")).effective();
         auto style=static_cast<view::saver::Style>(_slideshow.start(selection,now));
         _screensaver=std::make_unique<view::Screensaver>(style);
         _screensaver->init();

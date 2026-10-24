@@ -1,7 +1,10 @@
 #include "feature_apps.h"
+#include <apps/common/home_indicator/home_indicator.h>
+#include <companion/direct_usb_pcm/usb_pcm_app.h>
 #include <apps/common/tool_visual.hpp>
 #include <companion/feature_link.h>
 #include <companion/boot.h>
+#include <companion/station_authority.hpp>
 #include <companion/public_status_owner.hpp>
 #include <companion/numeric_usb.hpp>
 #include <companion/diagnostics.h>
@@ -18,6 +21,7 @@
 #include <lvgl.h>
 #include <cJSON.h>
 #include <memory>
+#include <atomic>
 #include <vector>
 #include <mutex>
 #include <optional>
@@ -39,9 +43,10 @@ struct Mode {bool Requested()const{return usb_composite_v2::CompositeRequested()
 using Driver=companion::FeatureUsbDriver<Legacy,usb_composite_v2::TinyUsbBridge,Mode>;
 struct Runtime {
  Driver driver;companion::NumericUsbOwner<Driver> usb{driver};companion::FeatureLink link;
+ companion::network::StationBorrow network_use;
  bool pending_wifi=false,audio_selected=false,audio_stage_attempted=false;companion::NumericUsbRequest request;
  std::vector<std::string> scopes;uint64_t expires=0;
- bool CloseFeatures(){pending_wifi=false;request={};expires=0;audio_stage_attempted=false;link.Close();return usb.Close();}
+ bool CloseFeatures(){pending_wifi=false;request={};expires=0;audio_stage_attempted=false;link.Close();const bool closed=link.Stopped()&&usb.Close();if(closed)network_use.Reset();return closed;}
 };
 Runtime& State(){static auto* state=new Runtime;return *state;}
 const std::vector<std::vector<std::string>> Groups={{"desktop.health"},{"network.wol"},{"apple.home.execute","apple.home.scenes","apple.now_playing"},{"mira.forwarding.interrupt","mira.forwarding.metadata","mira.forwarding.status"}};
@@ -52,6 +57,9 @@ class JointApp final:public mooncake::AppAbility {
  std::vector<std::unique_ptr<Callback>> callbacks_,native_callbacks_;
  std::mutex action_mutex_;std::optional<companion::FeatureUiAction> action_;
  lv_obj_t *frame_=nullptr,*native_root_=nullptr,*root_=nullptr,*native_controls_=nullptr,*native_actions_=nullptr,*status_=nullptr,*picker_=nullptr;
+ lv_obj_t* pending_panel_=nullptr;lv_obj_t* pending_text_=nullptr;
+ std::unique_ptr<direct_usb_pcm::Page> usb_view_;
+ std::atomic<bool> usb_pending_{false},usb_active_{false};bool usb_return_=false;
  bool controls_visible_=false,closing_=false,ready_ui_=false;unsigned group_=0;uint32_t rendered_epoch_=UINT32_MAX;
  std::string shown_code_,shown_request_,shown_session_,shown_mira_,rendered_text_,formatted_raw_,formatted_text_,local_notice_,scenes_result_;
  struct Scene {std::string home,id,label;};std::vector<Scene> scenes_;
@@ -68,7 +76,8 @@ class JointApp final:public mooncake::AppAbility {
  }
  void RenderNativeControls(){LvglLockGuard lock;lv_obj_clean(native_controls_);lv_obj_clean(native_actions_);native_callbacks_.clear();auto& link=State().link;rendered_epoch_=companion::FeatureAudioEpoch(link);
   Button(native_controls_,"Controls",0,0,70,20,native_callbacks_);Button(native_controls_,"Back",74,0,58,1,native_callbacks_);
-  if(companion::FeatureAudioStaged(link)){Button(native_actions_,"Connect Mira",0,0,146,22,native_callbacks_);Button(native_actions_,"Listen",150,0,154,23,native_callbacks_);}
+  Button(native_actions_,"USB Mira",0,0,96,24,native_callbacks_);
+  if(companion::FeatureAudioStaged(link)){Button(native_actions_,"Connect",100,0,98,22,native_callbacks_);Button(native_actions_,"Listen",202,0,102,23,native_callbacks_);}
  }
  void ShowControls(bool visible){controls_visible_=visible;LvglLockGuard lock;if(visible){lv_obj_add_flag(native_root_,LV_OBJ_FLAG_HIDDEN);lv_obj_add_flag(native_controls_,LV_OBJ_FLAG_HIDDEN);lv_obj_add_flag(native_actions_,LV_OBJ_FLAG_HIDDEN);lv_obj_remove_flag(root_,LV_OBJ_FLAG_HIDDEN);}else{lv_obj_add_flag(root_,LV_OBJ_FLAG_HIDDEN);lv_obj_remove_flag(native_root_,LV_OBJ_FLAG_HIDDEN);lv_obj_remove_flag(native_controls_,LV_OBJ_FLAG_HIDDEN);lv_obj_remove_flag(native_actions_,LV_OBJ_FLAG_HIDDEN);}}
  void Render(){
@@ -103,13 +112,23 @@ class JointApp final:public mooncake::AppAbility {
  void ReadScenes(){auto& raw=State().link.Result();if(raw==scenes_result_)return;
 scenes_result_=raw;auto p=cJSON_Parse(raw.c_str());if(!p)return;
 auto a=cJSON_GetObjectItemCaseSensitive(p,"scenes");if(cJSON_IsArray(a)&&cJSON_GetArraySize(a)<=16){std::vector<Scene> next;for(auto v=a->child;v;v=v->next){auto h=cJSON_GetObjectItemCaseSensitive(v,"homeID"),s=cJSON_GetObjectItemCaseSensitive(v,"sceneID"),name=cJSON_GetObjectItemCaseSensitive(v,"name");if(cJSON_IsString(h)&&cJSON_IsString(s)&&h->valuestring&&s->valuestring&&std::strlen(h->valuestring)==36&&std::strlen(s->valuestring)==36){std::string label=cJSON_IsString(name)&&name->valuestring?name->valuestring:"Unnamed scene";for(auto& c:label)if(static_cast<unsigned char>(c)<32||c==127)c=' ';next.push_back({h->valuestring,s->valuestring,label});}}scenes_=std::move(next);Render();}cJSON_Delete(p);}
- bool CloseAll(){if(!companion::CloseView())return false;return State().CloseFeatures();}
- bool PublicStatusIdle(){std::lock_guard<std::mutex> lock(action_mutex_);auto& s=State();return !closing_&&!action_&&!s.usb.OwnsDriver()&&!s.pending_wifi&&s.link.Stopped();}
+ void ShowPending(const char* text){if(!frame_)return;LvglLockGuard lock;if(!pending_panel_){pending_panel_=stock_ui::Card(frame_,8,72,304,96);pending_text_=stock_ui::Text(pending_panel_,text,12,12,280);}else lv_label_set_text(pending_text_,text);}
+ void ClearPending(){LvglLockGuard lock;if(pending_panel_)lv_obj_delete(pending_panel_);pending_panel_=pending_text_=nullptr;}
+ bool CloseUsbView(){
+  if(!usb_view_)return true;
+  if(!usb_view_->RequestClose()){usb_view_->onRunning();return false;}
+  usb_view_->onClose();usb_view_.reset();usb_active_=false;usb_return_=false;
+  {LvglLockGuard lock;if(frame_)lv_obj_remove_flag(frame_,LV_OBJ_FLAG_HIDDEN);}
+  return true;
+ }
+ bool CloseAll(){if(!companion::CloseView()||!State().CloseFeatures())return false;return companion::PollSavedNetworkStopped();}
+ bool PublicStatusIdle(){if(usb_pending_.load()||usb_active_.load())return false;std::lock_guard<std::mutex> lock(action_mutex_);auto& s=State();return !closing_&&!action_&&!s.usb.OwnsDriver()&&!s.pending_wifi&&s.link.Stopped();}
  void Handle(const companion::FeatureUiAction& a,uint64_t now){auto& s=State();auto& link=s.link;
   if(a.id==1){closing_=true;return;
 }if(a.id==20){ShowControls(true);Render();return;
 }if(a.id==21){ShowControls(false);RenderNativeControls();return;
 }
+  if(a.id==24){usb_pending_=true;return;}
   if(a.id==22){if(!a.request.empty()&&a.request==link.PairRequest())companion::ConnectFeatureAudio(link,a.request);return;
 }
   if(a.id==23){if(a.AudioMatches(link.PairRequest(),companion::FeatureAudioEpoch(link)))companion::ListenFeatureAudio(link,a.request,a.epoch);return;
@@ -141,25 +160,61 @@ auto a=cJSON_GetObjectItemCaseSensitive(p,"scenes");if(cJSON_IsArray(a)&&cJSON_G
   }
  }
 public:
- JointApp(){setAppInfo().name="COMPANION";static auto icon=assets::get_image("icon_ai_agent.bin");setAppInfo().icon=&icon;}
+ JointApp(){setAppInfo().name="Mira";static auto icon=assets::get_image("icon_ai_agent.bin");setAppInfo().icon=&icon;}
  ~JointApp()override{companion::PublicStatusOwner().Clear(this);}
  void onOpen()override{
+  // Mooncake re-enters Running while an external close waits; retain this UI.
+  if(closing_)return;
+  usb_pending_=false;usb_active_=false;usb_return_=false;
   closing_=controls_visible_=ready_ui_=false;rendered_epoch_=UINT32_MAX;{std::lock_guard<std::mutex> lock(action_mutex_);action_.reset();}
   local_notice_=State().CloseFeatures()?"":"USB cleanup pending.";scenes_.clear();scenes_result_.clear();
-  {LvglLockGuard lock;frame_=lv_obj_create(lv_screen_active());lv_obj_set_pos(frame_,0,0);lv_obj_set_size(frame_,320,240);lv_obj_set_style_pad_all(frame_,0,0);lv_obj_remove_flag(frame_,LV_OBJ_FLAG_SCROLLABLE);
+  {LvglLockGuard lock;frame_=lv_obj_create(lv_screen_active());lv_obj_add_flag(frame_,LV_OBJ_FLAG_HIDDEN);lv_obj_set_pos(frame_,0,0);lv_obj_set_size(frame_,320,240);lv_obj_set_style_pad_all(frame_,0,0);lv_obj_remove_flag(frame_,LV_OBJ_FLAG_SCROLLABLE);
    native_root_=lv_obj_create(frame_);lv_obj_set_pos(native_root_,0,0);lv_obj_set_size(native_root_,320,240);lv_obj_set_style_pad_all(native_root_,0,0);
    root_=lv_obj_create(frame_);lv_obj_set_pos(root_,0,0);stock_ui::Page(root_);lv_obj_set_style_pad_all(root_,0,0);lv_obj_remove_flag(root_,LV_OBJ_FLAG_SCROLLABLE);lv_obj_set_style_text_font(root_,&lv_font_montserrat_16,0);
    native_controls_=lv_obj_create(frame_);lv_obj_set_pos(native_controls_,188,2);lv_obj_set_size(native_controls_,132,40);lv_obj_set_style_pad_all(native_controls_,0,0);lv_obj_set_style_bg_opa(native_controls_,LV_OPA_TRANSP,0);lv_obj_set_style_border_width(native_controls_,0,0);lv_obj_remove_flag(native_controls_,LV_OBJ_FLAG_SCROLLABLE);
    native_actions_=lv_obj_create(frame_);lv_obj_set_pos(native_actions_,4,198);lv_obj_set_size(native_actions_,312,40);lv_obj_set_style_pad_all(native_actions_,0,0);lv_obj_set_style_bg_opa(native_actions_,LV_OPA_TRANSP,0);lv_obj_set_style_border_width(native_actions_,0,0);lv_obj_remove_flag(native_actions_,LV_OBJ_FLAG_SCROLLABLE);
   }
   companion::OpenView(native_root_);companion::PublicStatusOwner().Set(this,[](void* owner){return static_cast<JointApp*>(owner)->PublicStatusIdle();});Render();RenderNativeControls();ShowControls(false);
+  // Child builders release the LVGL lock independently. Publish only the final
+  // companion mode, after the hidden feature/setup controls are ready.
+  {LvglLockGuard lock;lv_obj_remove_flag(frame_,LV_OBJ_FLAG_HIDDEN);
+   view::create_home_indicator([this]{closing_=true;usb_pending_=false;},
+                               0xB8D3FD,0x26206A,lv_layer_top(),false);
+  }
  }
  void onRunning()override{
+  {LvglLockGuard lock;view::update_home_indicator();}
+  if(closing_){
+   if(CloseUsbView()&&CloseAll())close();
+   else ShowPending("Stopping Mira and USB.\nCleanup pending; keep this page open.");
+   return;
+  }
+  if(usb_view_){
+   usb_view_->onRunning();
+   if(usb_return_){
+    usb_view_->onClose();usb_view_.reset();usb_return_=false;
+    {LvglLockGuard lock;lv_obj_clean(native_root_);}
+    companion::OpenView(native_root_);RenderNativeControls();ShowControls(false);
+    {LvglLockGuard lock;lv_obj_remove_flag(frame_,LV_OBJ_FLAG_HIDDEN);}
+    usb_active_=false;
+   }
+   return;
+  }
+  if(closing_){if(CloseAll())close();else ShowPending("Stopping Mira and Wi-Fi.\nCleanup pending; keep this page open.");return;}
+  if(usb_pending_){
+   // Join existing Mira/feature ownership before opening the USB transport.
+   // Failed cleanup retains this page and retries; no second audio owner starts.
+   if(!CloseAll()){ShowPending("Stopping Mira before USB.\nWaiting for confirmed cleanup.");return;}
+   ClearPending();
+   usb_active_=true;usb_pending_=false;
+   {LvglLockGuard lock;lv_obj_add_flag(frame_,LV_OBJ_FLAG_HIDDEN);}
+   usb_view_=direct_usb_pcm::MakeApp([this]{usb_return_=true;});usb_view_->onOpen();return;
+  }
   auto& s=State();auto now=Now();s.link.Tick(now);std::optional<companion::FeatureUiAction> action;{std::lock_guard<std::mutex> lock(action_mutex_);action=std::move(action_);action_.reset();}if(action)Handle(*action,now);
-  if(closing_){if(CloseAll())close();else{local_notice_="Cleanup pending; keep this page open.";Update();}return;
+  if(closing_){if(CloseAll())close();else ShowPending("Stopping Mira and Wi-Fi.\nCleanup pending; keep this page open.");return;
 }
   if(s.usb.Active()){companion::NumericUsbRequest r;auto result=s.usb.Poll(now,r);if(result==companion::NumericUsbRead::Accepted){s.request=r;s.expires=now+120000;s.pending_wifi=companion::EnsureSavedNetwork();if(!s.pending_wifi)local_notice_="Saved Wi-Fi unavailable.";}else if(result==companion::NumericUsbRead::Rejected){s.CloseFeatures();local_notice_="Host request expired or rejected.";}}
-  if(s.pending_wifi){if(now>=s.expires)s.CloseFeatures();else if(companion::IsWifiConnected()){s.pending_wifi=false;auto network=Board::GetInstance().GetNetwork();if(network)s.link.StartPair(*network,s.request.request,s.request.boot_nonce,s.scopes,now,s.audio_selected);}}
+  if(s.pending_wifi){if(now>=s.expires)s.CloseFeatures();else if(companion::IsWifiConnected()){s.pending_wifi=false;auto network=Board::GetInstance().GetNetwork();if(network){s.network_use=companion::network::Authority().BorrowSaved();if(s.network_use)s.link.StartPair(*network,s.request.request,s.request.boot_nonce,s.scopes,now,s.audio_selected);}}}
   if(s.link.Ready(now)&&s.link.AudioSelected()&&!s.audio_stage_attempted){s.audio_stage_attempted=true;if(!companion::StageFeatureAudioGrant(s.link,now))local_notice_="Audio grant could not be staged; no retry.";RenderNativeControls();}
   companion::TickView(); // Native route supervision and cleanup continue underneath overlay.
   bool ready=s.link.Ready(now);if(ready!=ready_ui_||shown_code_!=s.link.Code()||shown_request_!=s.link.PairRequest()||shown_session_!=s.link.SessionId()||shown_mira_!=s.link.MiraReference()+std::to_string(s.link.MiraEpoch())){ready_ui_=ready;Render();}
@@ -167,6 +222,17 @@ public:
   if(group_==2&&ready)ReadScenes();
   Update();
  }
- void onClose()override{companion::PublicStatusOwner().Clear(this);CloseAll();LvglLockGuard lock;if(frame_)lv_obj_delete(frame_);frame_=root_=native_root_=native_controls_=native_actions_=status_=picker_=nullptr;callbacks_.clear();native_callbacks_.clear();}
+ void onClose()override{
+  closing_=true;usb_pending_=false;
+  if(!CloseUsbView()||!CloseAll()){
+   ShowPending("Stopping Mira and USB.\nCleanup pending; keep this page open.");
+   // baseUpdate must not mark this app Sleeping and rebuild Home yet.
+   open();return;
+  }
+  usb_active_=false;usb_return_=false;companion::PublicStatusOwner().Clear(this);
+  LvglLockGuard lock;view::destroy_home_indicator();if(frame_)lv_obj_delete(frame_);
+  frame_=root_=native_root_=native_controls_=native_actions_=status_=picker_=pending_panel_=pending_text_=nullptr;
+  callbacks_.clear();native_callbacks_.clear();closing_=false;
+ }
 };
 }std::unique_ptr<mooncake::AppAbility> MakeJointCompanionApp(){return std::make_unique<JointApp>();}}

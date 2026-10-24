@@ -26,6 +26,9 @@ bool CloseView(); // false: retain app/UI while codec worker stops
 namespace companion {
 // Explicit saved-Wi-Fi connection for a user-requested catalog browse, no cloud/audio.
 bool EnsureSavedNetwork();
+// Main-owner polling only: stop new starts/borrows, wait consumers/scan, then
+// unregister callbacks and stop the retained station on a worker without LVGL.
+bool PollSavedNetworkStopped();
 bool IsWifiConnected();
 bool NetworkWasStarted();
 SavedWifiPhase SavedNetworkPhase();

@@ -8,6 +8,8 @@ from pathlib import Path
 from array import array
 import hashlib
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from host_adapter import CodecHostBridge
 from remote_gateway import RemoteGateway, QualifiedProvider, ProviderCleanupError
 from streaming_session import AudioBackpressure, SustainedAudioBackpressure, StreamingSession, decode_frame, encode_frame
@@ -163,10 +165,20 @@ class NativeConversationSession(StreamingSession):
         self.started_at=None
         self.on_complete=lambda:None;self.suppressed_mic_packets=0;self.backpressure_mic_packets=0
         self.backpressure_mic_streak=0
-        # A mic packet is 60 ms; five consecutive queue misses bound a silent uplink to 300 ms.
+        self._pending_consent=None
+        # Batched packet arrivals are not elapsed time: require a sustained300ms queue stall.
         self.max_backpressure_mic_streak=5
+        self.max_backpressure_seconds=.30
+        self._backpressure_since=None
         from webcam_transport import ExistingSessionWebcamRoute
         self.webcam_route=ExistingSessionWebcamRoute(self) # No camera authority in audio grant.
+
+    def begin(self,request_id):
+        epoch=self.epoch
+        answer=super().begin(request_id)
+        if self.epoch!=epoch:
+            self.backpressure_mic_streak=0;self._backpressure_since=None
+        return answer
 
     def _authorized(self):
         super()._authorized()
@@ -176,6 +188,43 @@ class NativeConversationSession(StreamingSession):
                 self.on_complete()
                 raise TransportComplete('bounded native conversation completed')
 
+    def start_control(self,value):
+        # Only native preparation leaves the event-loop thread. Registry/turn
+        # mutation and physical-consent authority remain on this thread.
+        if value.get('type')!='consent' or not callable(getattr(self.bridge,'prepare',None)):
+            return self.control(value)
+        self._authorized()
+        if not self._active() or type(value.get('epoch')) is not int or value['epoch']!=self.epoch:
+            raise PermissionError('stale consent')
+        if set(value)!={'type','epoch','physical'} or value['physical'] is not True:
+            raise ValueError('physical consent required')
+        if not self.acknowledged:raise PermissionError('handshake acknowledgement required')
+        if self.armed:return self.control(value)
+        if self._pending_consent is None:
+            # Matches firmware PhysicalConsent's existing 5000ms gesture bound.
+            self._pending_consent=(self.epoch,self.turn.id,self.turn.generation,self.clock()+5.)
+            try:self.bridge.prepare(self.epoch)
+            except BaseException:self._pending_consent=None;raise
+        return None
+
+    def poll_control(self):
+        pending=self._pending_consent
+        if pending is None:return None
+        try:
+            self._authorized()
+            epoch,turn,generation,until=pending
+            if not self._active() or not self.acknowledged or (self.epoch,self.turn.id,self.turn.generation)!=(epoch,turn,generation):
+                raise PermissionError('startup consent changed')
+            if self.clock()>=until:raise TimeoutError('physical consent startup expired')
+            if not self.bridge.prepared():return None
+            self._authorized()
+            # No await between final authority check and the nonprompt sc_arm.
+            self.arm_callback(epoch)
+            self.armed=True;self._pending_consent=None
+            return {'type':'armed','epoch':epoch}
+        except BaseException:
+            self._pending_consent=None;self.bridge.cancel_prepare();raise
+
     def receive(self,wire):
         self._authorized();epoch,sequence,speaker,payload=decode_frame(wire)
         if not self.armed or not self._active() or epoch!=self.epoch or speaker:
@@ -184,7 +233,7 @@ class NativeConversationSession(StreamingSession):
             self.interrupt();raise ValueError('native microphone sequence gap')
         if self.bridge.adapter.playing:
             self.suppressed_mic_packets+=1;self.mic_seq+=1
-            self.backpressure_mic_streak=0
+            self.backpressure_mic_streak=0;self._backpressure_since=None
             return
         try:
             super().receive(wire)
@@ -194,11 +243,14 @@ class NativeConversationSession(StreamingSession):
             # live-looking session with a dead microphone.
             self.backpressure_mic_packets+=1;self.mic_seq+=1
             self.backpressure_mic_streak+=1
-            if self.backpressure_mic_streak>=self.max_backpressure_mic_streak:
+            now=self.clock()
+            if self._backpressure_since is None:self._backpressure_since=now
+            if (self.backpressure_mic_streak>=self.max_backpressure_mic_streak
+                    and now-self._backpressure_since>=self.max_backpressure_seconds):
                 self.interrupt()
                 raise SustainedAudioBackpressure('sustained native microphone queue backpressure')
         else:
-            self.backpressure_mic_streak=0
+            self.backpressure_mic_streak=0;self._backpressure_since=None
 
     def audio_tick(self,frames):
         self._authorized()
@@ -212,6 +264,9 @@ class NativeConversationSession(StreamingSession):
         return active,wire
 
     def interrupt(self):
+        self._backpressure_since=None
+        self._pending_consent=None;self.armed=False;self.acknowledged=False
+        if callable(getattr(self.bridge,'cancel_prepare',None)):self.bridge.cancel_prepare()
         self.webcam_route.revoke()
         try:super().interrupt()
         finally:
@@ -242,9 +297,14 @@ class _PartialCloseGroup:
         if first is not None:raise first
 
 
+class NativeStartupPending(RuntimeError):
+    """Exact native owner is still preparing; retain and retry checked close."""
+
+
 class DeferredNativeBridge:
     """Connect/handshake are inert. Only accepted epoch-bound consent opens IO."""
-    def __init__(self,builder):
+    def __init__(self,builder,*,prepare_builder=None):
+        self.prepare_builder=prepare_builder;self._startup=None;self._startup_cancel=None
         self.builder=builder;self.epoch=0;self.inner=None;self.partial=None
         self.armed=False;self.closed=False;self.adapter=self
         self._counts=dict(mic_packets=0,speaker_packets=0,return_frames=0)
@@ -266,12 +326,53 @@ class DeferredNativeBridge:
         if self.closed or type(epoch) is not int or not self.epoch<epoch<=0xffffffff:raise PermissionError('new native epoch required')
         self._release()
         self.epoch=epoch
+    def prepare(self,epoch):
+        if self.closed or type(epoch) is not int or epoch!=self.epoch or not epoch or self.partial is not None:
+            raise PermissionError('native preparation unavailable')
+        if self._startup is not None:return
+        if self.inner is not None:raise PermissionError('native cleanup pending')
+        cancelled=threading.Event();self._startup_cancel=cancelled
+        builder=self.builder;prepare_builder=self.prepare_builder
+        def build_muted():
+            if cancelled.is_set():return None
+            owner=prepare_builder(cancelled.is_set) if prepare_builder is not None else builder()
+            if cancelled.is_set():
+                try:owner.close()
+                except BaseException:
+                    raise ProviderCleanupError(QualifiedProvider(owner,None,owner.close,'retained-native-owner',False)) from None
+                return None
+            return owner
+        executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='companion-native-prepare')
+        try:self._startup=executor.submit(build_muted)
+        finally:executor.shutdown(wait=False)
+
+    def startup_done(self):return self._startup is None or self._startup.done()
+    def cancel_prepare(self):
+        if self._startup_cancel is not None:self._startup_cancel.set()
+        self.armed=False
+    def _take_startup(self):
+        future=self._startup
+        if future is None:return None
+        if not future.done():raise NativeStartupPending('native startup pending')
+        self._startup=None
+        try:return future.result()
+        except ProviderCleanupError as failure:self.partial=failure.provider;raise
+    def prepared(self):
+        if self._startup is None:return False
+        if not self._startup.done():return False
+        if self._startup.exception() is not None:self._take_startup()
+        if self._startup_cancel.is_set():raise PermissionError('native preparation cancelled')
+        return True
+
     def arm(self,epoch):
         if self.closed or type(epoch) is not int or epoch!=self.epoch or not epoch or self.partial is not None:raise PermissionError('native consent unavailable')
         if self.armed:return # Duplicate consent cannot restart IO or the budget.
         if self.inner is not None:raise PermissionError('native cleanup pending')
         try:
-            self.inner=self.builder()
+            if self._startup is not None:
+                if not self.prepared():raise NativeStartupPending('native startup pending')
+                self.inner=self._take_startup()
+            else:self.inner=self.builder()
             self.inner.begin(epoch)
             self.inner.adapter.arm_for_approved_test(epoch)
             self.armed=True
@@ -283,7 +384,13 @@ class DeferredNativeBridge:
             except BaseException:pass # Exact owner stays retained for gateway cleanup.
             raise
     def _release(self):
-        self.armed=False
+        self.cancel_prepare()
+        if self._startup is not None:
+            if not self._startup.done():raise NativeStartupPending('native startup pending')
+            try:owner=self._take_startup()
+            except ProviderCleanupError:owner=None # exact partial retained below
+            except BaseException:owner=None # failed builder owns no unreported resource
+            if owner is not None:self.inner=owner
         if self.partial is not None:
             self.partial.close();self.partial=None
         if self.inner is not None:
@@ -328,7 +435,7 @@ class DeferredNativeBridge:
             raise
 
 
-def _build_native_bridge():
+def _build_native_bridge(cancelled=None):
     """Native library, codec allocation and CoreAudio startup happen at Listen."""
     config.require_native()
     _backend_route()  # reject unknown trusted selections before library/codec access
@@ -342,9 +449,11 @@ def _build_native_bridge():
             components.append(create())
         bridge=NativeVoiceBridge(adapter,*components)
         if NATIVE_AUDIO_BACKEND == 'directional_hal_v2':
-            adapter.open_directional_for_approved_test()
+            if cancelled is None:adapter.open_directional_for_approved_test()
+            else:adapter.open_directional_for_approved_test(cancelled=cancelled)
         else:
-            adapter.open_for_approved_test()
+            if cancelled is None:adapter.open_for_approved_test()
+            else:adapter.open_for_approved_test(cancelled=cancelled)
         return bridge
     except BaseException:
         owner=bridge if bridge is not None else _PartialCloseGroup([adapter,*components])
@@ -358,7 +467,7 @@ def _build_native_bridge():
 def make_provider(route):
     """Connect creates only an inert physical-consent-bound lifecycle owner."""
     if not isinstance(route,(NativeRoute,HostAudioDeviceRoute)):raise PermissionError('confirmed audio route required')
-    bridge=DeferredNativeBridge(_build_native_bridge)
+    bridge=DeferredNativeBridge(_build_native_bridge,prepare_builder=lambda cancelled:_build_native_bridge(cancelled=cancelled))
     if isinstance(route,HostAudioDeviceRoute):
         return QualifiedProvider(bridge,bridge.arm,bridge.close,
                                  'host-audio-device-route',route_verified=True,kind='host_audio_devices')

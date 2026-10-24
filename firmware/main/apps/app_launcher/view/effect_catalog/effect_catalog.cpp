@@ -763,8 +763,8 @@ void drawCubenetic() {
     
     // DNA connections to nearby individuals
     for (int j = i + 1; j < 16; j++) {
-      int dx = abs(population[i][0] - population[j][0]);
-      int dy = abs(population[i][1] - population[j][1]);
+      int dx = std::abs(population[i][0] - population[j][0]);
+      int dy = std::abs(population[i][1] - population[j][1]);
       int distance = dx + dy;
       
       if (distance < 50) {
@@ -1399,7 +1399,7 @@ void drawDnalogo() {
       gfx->fillCircle(x2, screenY, 3, helixColor2);
       
       // Connect base pairs when strands are close
-      if (abs(x1 - x2) < helixRadius) {
+      if (std::abs(x1 - x2) < helixRadius) {
         gfx->drawLine(x1, screenY, x2, screenY, 
                       gfx->color565(200, 200, 100));
         
@@ -2274,14 +2274,14 @@ void drawEuler2d() {
       float pressure = sin(x * 0.05 + fluidTime * 2) * cos(y * 0.05 + fluidTime);
       
       // Color based on fluid properties
-      int r = (int)(abs(vx) * 255);
-      int g = (int)(abs(vy) * 255);
+      int r = (int)(std::abs(vx) * 255);
+      int g = (int)(std::abs(vy) * 255);
       int b = (int)((pressure + 1) * 127);
       
       gfx->fillRect(x, y, 6, 6, gfx->color565(r, g, b));
       
       // Velocity vectors
-      if (abs(vx) > 0.3 || abs(vy) > 0.3) {
+      if (std::abs(vx) > 0.3 || std::abs(vy) > 0.3) {
         int endX = x + vx * 10;
         int endY = y + vy * 10;
         gfx->drawLine(x + 3, y + 3, endX, endY, WHITE);
@@ -2419,8 +2419,8 @@ void drawEsper() {
     
     for (int x = 0; x < gfx->width(); x += 4) {
       float waveValue = sin(x * 0.05 + wavePhase) * sin(wavePhase + wave);
-      if (abs(waveValue) > 0.5) {
-        int alpha = abs(waveValue) * 255;
+      if (std::abs(waveValue) > 0.5) {
+        int alpha = std::abs(waveValue) * 255;
         gfx->fillRect(x, waveY - 1, 2, 3, gfx->color565(alpha, alpha/3, alpha));
       }
     }
@@ -2674,7 +2674,7 @@ void drawExtrusionHelix2() {
       
       // Color based on depth and helix
       int r = helix == 0 ? 255 : 100;
-      int g = 100 + abs(z) * 3;
+      int g = 100 + std::abs(z) * 3;
       int b = helix == 1 ? 255 : 100;
       
       // Size based on depth
@@ -2815,7 +2815,7 @@ void drawExtrusionHelix4() {
           int otherX = centerX + cos(otherAngle) * otherRadius;
           
           // Only draw connection if helixes are close
-          if (abs(otherX - x) < 15) {
+          if (std::abs(otherX - x) < 15) {
             gfx->drawLine(x, y, otherX, y, gfx->color565(60, 60, 60));
           }
         }
@@ -3102,7 +3102,7 @@ void drawExtrusionTwistoid() {
         int prevScreenX = centerX + prevX * 0.8;
         int prevScreenY = centerY + prevY * 0.6 + prevZ * 0.3;
         
-        if (abs(screenX - prevScreenX) < 20 && abs(screenY - prevScreenY) < 20) {
+        if (std::abs(screenX - prevScreenX) < 20 && std::abs(screenY - prevScreenY) < 20) {
           gfx->drawLine(screenX, screenY, prevScreenX, prevScreenY, gfx->color565(r/4, g/4, b/4));
         }
       }
@@ -3823,7 +3823,7 @@ void drawFlipscreen3d() {
     // Only draw if screen is facing forward
     if (cosAngle > 0) {
       // Screen dimensions affected by rotation
-      int screenWidth = abs(cosAngle * 120);
+      int screenWidth = std::abs(cosAngle * 120);
       int screenHeight = 80;
       
       // Screen position
@@ -3898,8 +3898,8 @@ void drawFlipscreen3d() {
   // Motion blur effect
   for (int blur = 0; blur < 3; blur++) {
     float blurAngle = flipAngle + blur * 0.2;
-    if (abs(sin(blurAngle)) > 0.8) {
-      int blurWidth = abs(cos(blurAngle) * 40);
+    if (std::abs(sin(blurAngle)) > 0.8) {
+      int blurWidth = std::abs(cos(blurAngle) * 40);
       gfx->drawRect(centerX - blurWidth/2, centerY - 30, blurWidth, 60, 
                    gfx->color565(50, 50, 50));
     }
@@ -3951,7 +3951,7 @@ void drawFliptext() {
     if ((phase == 0 && flipProgress < 0.5) || (phase == 1 && flipProgress >= 0.5)) {
       
       // Calculate text flip transformation
-      float scaleY = abs(cos(textPhase * PI));
+      float scaleY = std::abs(cos(textPhase * PI));
       float skew = sin(textPhase * PI) * 0.3;
       
       // Text color changes during flip
@@ -3973,13 +3973,13 @@ void drawFliptext() {
         float charFlip = textPhase - charDelay;
         
         if (charFlip > 0) {
-          float charScale = abs(cos(charFlip * PI * 2));
+          float charScale = std::abs(cos(charFlip * PI * 2));
           int adjustedY = charY + (1.0 - charScale) * 10;
           
           // Character flip colors
           int r = intensity;
-          int g = intensity - abs(sin(charFlip * PI)) * 100;
-          int b = intensity + abs(sin(charFlip * PI)) * 50;
+          int g = intensity - std::abs(sin(charFlip * PI)) * 100;
+          int b = intensity + std::abs(sin(charFlip * PI)) * 50;
           
           gfx->setTextColor(gfx->color565(r, g, b));
           gfx->setTextSize(2);
@@ -6040,7 +6040,7 @@ void drawGlmatrix() {
     
     for (int row = 0; row < 20; row++) {
       // Calculate intensity based on distance from drop
-      int distance = abs(row - dropPos);
+      int distance = std::abs(row - dropPos);
       float intensity = 0;
       
       if (distance < 8) {
@@ -7054,7 +7054,7 @@ void drawHopalong() {
   b = 0.4 + cos(paramTime * 1.3) * 0.2;
   
   for (int i = 0; i < 500; i++) {
-    float newX = y - (x < 0 ? -1 : 1) * sqrt(abs(b * x - c));
+    float newX = y - (x < 0 ? -1 : 1) * sqrt(std::abs(b * x - c));
     float newY = a - x;
     
     x = newX;
@@ -7878,7 +7878,7 @@ void drawJuggle() {
     // Parabolic trajectory
     float t = fmod(ballTime, PI);
     float ballX = jugX + sin(ballTime * 2) * 40;
-    float ballY = jugY - 40 - abs(sin(t) * 50);
+    float ballY = jugY - 40 - std::abs(sin(t) * 50);
     
     uint16_t ballColor = (ball == 0) ? RED : (ball == 1) ? GREEN : BLUE;
     gfx->fillCircle(ballX, ballY, 3, ballColor);
@@ -7888,7 +7888,7 @@ void drawJuggle() {
       float prevT = t - i * 0.1;
       if (prevT > 0) {
         float prevX = jugX + sin((ballTime - i * 0.1) * 2) * 40;
-        float prevY = jugY - 40 - abs(sin(prevT) * 50);
+        float prevY = jugY - 40 - std::abs(sin(prevT) * 50);
         gfx->drawPixel(prevX, prevY, gfx->color565(
           (ballColor >> 11) << 3,
           ((ballColor >> 5) & 0x3F) << 2,
@@ -8418,7 +8418,7 @@ void drawSonar() {
     int objY = centerY + sin(objAngle) * objDistance;
     
     // Pulse when sweep passes over
-    float angleDiff = abs(sweepAngle - objAngle);
+    float angleDiff = std::abs(sweepAngle - objAngle);
     if (angleDiff > PI) angleDiff = 2*PI - angleDiff;
     
     if (angleDiff < 0.3) {
@@ -8652,7 +8652,7 @@ void drawSpheremonics() {
         gfx->drawPixel(sx, sy, color);
         
         // Add some thickness
-        if (abs(harmonic) > 0.3) {
+        if (std::abs(harmonic) > 0.3) {
           gfx->drawPixel(sx + 1, sy, color);
           gfx->drawPixel(sx, sy + 1, color);
         }
@@ -8804,7 +8804,7 @@ void drawSproingies() {
     float bouncePhase = sproingTime * 2 + sproing * PI / 2.5;
     
     int baseX = 30 + sproing * 50;
-    int bounceHeight = abs(sin(bouncePhase)) * 80;
+    int bounceHeight = std::abs(sin(bouncePhase)) * 80;
     int sproingY = gfx->height() - 30 - bounceHeight;
     
     // Spring body
@@ -8814,7 +8814,7 @@ void drawSproingies() {
       int segY = sproingY + segmentRatio * bounceHeight * 0.3;
       
       // Compression effect - spring gets squished when bouncing
-      float compression = (1.0 - abs(sin(bouncePhase))) * 0.5 + 0.5;
+      float compression = (1.0 - std::abs(sin(bouncePhase))) * 0.5 + 0.5;
       int segX = baseX + sin(segmentRatio * PI * 4 + sproingTime) * 8 * compression;
       
       uint16_t springColor = gfx->color565(100, 200, 100);
@@ -9202,10 +9202,10 @@ void drawPong() {
   
   // Ball collision with paddles
   if (ballX <= 15 && ballY >= paddle1Y && ballY <= paddle1Y + 40) {
-    ballVX = abs(ballVX);
+    ballVX = std::abs(ballVX);
   }
   if (ballX >= gfx->width() - 15 && ballY >= paddle2Y && ballY <= paddle2Y + 40) {
-    ballVX = -abs(ballVX);
+    ballVX = -std::abs(ballVX);
   }
   
   // Reset ball if out of bounds
@@ -9379,7 +9379,7 @@ void drawMarching() {
       if (field > 0) {
         gfx->fillRect(x, y, 16, 16, gfx->color565(255, (int)(field * 255), 0));
       } else {
-        gfx->drawRect(x, y, 16, 16, gfx->color565(0, 0, abs((int)(field * 255))));
+        gfx->drawRect(x, y, 16, 16, gfx->color565(0, 0, std::abs((int)(field * 255))));
       }
     }
   }
@@ -9683,36 +9683,7 @@ void drawMoire2() {
   gfx->printf("MOIRE2");
 }
 }
-namespace e225 {
-float moireTime = 0;
-void reset(){moireTime=0;}
-void drawMoire() {
-  
-  moireTime += 0.03;
-  
-  gfx->fillScreen(BLACK);
-  
-  // Classic moiré interference pattern
-  for (int y = 0; y < gfx->height(); y += 1) {
-    for (int x = 0; x < gfx->width(); x += 1) {
-      float pattern1 = sin((x + moireTime * 20) * 0.1);
-      float pattern2 = sin((x + moireTime * 15) * 0.11) * sin((y + moireTime * 10) * 0.1);
-      
-      float interference = pattern1 * pattern2;
-      
-      if (interference > 0.5) {
-        gfx->drawPixel(x, y, WHITE);
-      } else if (interference < -0.5) {
-        gfx->drawPixel(x, y, gfx->color565(100, 100, 255));
-      }
-    }
-  }
-  
-  gfx->setCursor(10, 10);
-  gfx->setTextColor(YELLOW);
-  gfx->printf("MOIRE");
-}
-}
+// Stable slide 226: removed by screensaver policy.
 namespace e226 {
 float morphTime = 0;
 void reset(){morphTime=0;}
@@ -9894,7 +9865,7 @@ void drawNormals() {
       int ex = px + nx * 15;
       int ey = py + ny * 15;
       
-      uint16_t color = gfx->color565((nz + 1) * 127, abs(nx) * 255, abs(ny) * 255);
+      uint16_t color = gfx->color565((nz + 1) * 127, std::abs(nx) * 255, std::abs(ny) * 255);
       gfx->drawLine(px, py, ex, ey, color);
     }
   }
@@ -10056,7 +10027,7 @@ void drawPacman() {
   gfx->fillCircle(pacmanX, pacmanY, 15, YELLOW);
   
   // Mouth animation
-  float mouthOpen = abs(sin(mouthAngle)) * 10 + 5;
+  float mouthOpen = std::abs(sin(mouthAngle)) * 10 + 5;
   int mouthX1 = pacmanX + cos(PI/6) * mouthOpen;
   int mouthY1 = pacmanY - sin(PI/6) * mouthOpen;
   int mouthX2 = pacmanX + cos(-PI/6) * mouthOpen;
@@ -10431,7 +10402,7 @@ void drawPyro() {
   for (int i = 0; i < 15; i++) {
     int x = (sin(animationTime + i) * 100) + gfx->width() / 2;
     int y = (cos(animationTime * 1.5 + i) * 80) + gfx->height() / 2;
-    int size = abs(sin(animationTime * 2 + i)) * 15;
+    int size = std::abs(sin(animationTime * 2 + i)) * 15;
     gfx->fillCircle(x, y, size, gfx->color565(255, 200 - i * 10, 0));
   }
   gfx->setCursor(10, 10);
@@ -11317,8 +11288,8 @@ void drawSuperquadrics() {
         return (val >= 0) ? pow(val, exp) : -pow(-val, exp);
       };
       
-      float x = signPow(abs(cosU), 2.0/n1) * ((cosU >= 0) ? 1 : -1);
-      float y = signPow(abs(sinU), 2.0/n2) * ((sinU >= 0) ? 1 : -1);
+      float x = signPow(std::abs(cosU), 2.0/n1) * ((cosU >= 0) ? 1 : -1);
+      float y = signPow(std::abs(sinU), 2.0/n2) * ((sinU >= 0) ? 1 : -1);
       
       // 3D rotation projection
       float rotX = shapeTime * 0.5;
@@ -13617,9 +13588,9 @@ void drawBlitspin() {
     int endY = centerY + sin(lineAngle) * endRadius;
     
     uint16_t lineColor = gfx->color565(
-      255 * abs(sin(spinTime + line)),
-      255 * abs(cos(spinTime + line * 1.3)),
-      255 * abs(sin(spinTime * 1.7 + line))
+      255 * std::abs(sin(spinTime + line)),
+      255 * std::abs(cos(spinTime + line * 1.3)),
+      255 * std::abs(sin(spinTime * 1.7 + line))
     );
     
     gfx->drawLine(startX, startY, endX, endY, lineColor);
@@ -13820,17 +13791,17 @@ void drawBouboule() {
 }
 // Stable slide 341: removed by screensaver policy.
 using Fn=void(*)();
-const Fn draws[]={e0::drawBoxed,e1::drawBoxfit,e2::drawBraid,nullptr,nullptr,nullptr,e6::drawBuildlwo,e7::drawBumps,e8::drawCage,e9::drawCarousel,e10::drawCCurve,e11::drawCeltic,nullptr,nullptr,e14::drawCircuit,e15::drawCityFlow,nullptr,nullptr,nullptr,e19::drawColors,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,e33::drawCrackberg,nullptr,nullptr,nullptr,e37::drawCube21,e38::drawCubenetic,nullptr,nullptr,e41::drawCubeTwist,nullptr,e43::drawCuboctaversion,nullptr,nullptr,e46::drawDangerball,nullptr,nullptr,e49::drawDeepStars,nullptr,nullptr,nullptr,nullptr,e54::drawDemon,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,e61::drawDnalogo,nullptr,e63::drawDoubletime,nullptr,e65::drawDpmsProtocol,e66::drawDrift,nullptr,e68::drawDroste,e69::drawDymaxionmapCoords,e70::drawEasing,e71::drawEndgame,e72::drawEnergystream,e73::drawEngine,e74::drawEpicycle,nullptr,e76::drawEuler2d,e77::drawFadeplot,e78::drawEsper,e79::drawEtruscanvenus,nullptr,e81::drawExtIdleNotify,e82::drawExtrusion,e83::drawExtrusionHelix2,e84::drawExtrusionHelix3,e85::drawExtrusionHelix4,e86::drawExtrusionJoinoffset,e87::drawExtrusionScrew,e88::drawExtrusionTaper,e89::drawExtrusionTwistoid,e90::drawExts,e91::drawExtSessionLock,e92::drawFade,e93::drawFfmpegOut,nullptr,e95::drawFilmleader,nullptr,e97::drawFlag,e98::drawFlame,e99::drawFlipflop,e100::drawFlipscreen3d,e101::drawFliptext,e102::drawFlow,e103::drawFluidballs,e104::drawFlurry,e105::drawFlurrySmoke,nullptr,e107::drawFlurryStar,e108::drawFlurryTexture,e109::drawFlyingtoasters,e110::drawFontglide,nullptr,nullptr,e113::drawFps,e114::drawFpsGl,e115::drawFuzzyflakes,e116::drawGalaxy,e117::drawGallant12x22Bsd,e118::drawGears,e119::drawGeodesic,e120::drawGeodesicgears,nullptr,e122::drawGlmatrix,nullptr,nullptr,nullptr,nullptr,e127::drawGlslUtils,e128::drawGlsnake,nullptr,e130::drawGoop,e131::drawGltrackball,e132::drawGlutStroke,e133::drawGlutSwidth,nullptr,e135::drawGrabXimage,e136::drawGrav,e137::drawGravitywell,nullptr,e139::drawHalftone,e140::drawHalo,e141::drawHandsy,e142::drawHandsyModel,nullptr,e144::drawHeadroomModel,nullptr,nullptr,nullptr,e148::drawHextrail,nullptr,nullptr,e151::drawHilbert,e152::drawHopalong,e153::drawHopfanimations,e154::drawHopffibration,nullptr,e156::drawHydrostat,e157::drawHyperball,e158::drawHypercube,e159::drawHypertorus,e160::drawHypnowheel,e161::drawIdleProtocol,e162::drawIfs,e163::drawImsmap,e164::drawInteraggregate,e165::drawInterference,e166::drawIntermomentary,e167::drawInvolute,e168::drawJigglypuff,e169::drawJigsaw,e170::drawJuggle,e171::drawJuggler3d,e172::drawRotor,e173::drawRotzoomer,nullptr,e175::drawRubik,e176::drawSballs,e177::drawScooter,nullptr,e179::drawShadebobs,nullptr,e181::drawSlidescreen,e182::drawSlip,e183::drawSonar,e184::drawSpeedmine,e185::drawSphere,e186::drawSpheremonics,e187::drawSpiral,e188::drawSpotlight,e189::drawSproingies,e190::drawStairs,nullptr,e192::drawPetri,e193::drawPhosphor,nullptr,e195::drawPiecewise,nullptr,e197::drawPipeobjs,nullptr,e199::drawPlatonicfolding,nullptr,e201::drawPolyhedraGl,nullptr,nullptr,e204::drawPong,nullptr,e206::drawPow2,nullptr,nullptr,nullptr,e210::drawProvidence,e211::drawM6502,nullptr,nullptr,e214::drawMarching,e215::drawMaze3d,nullptr,e217::drawMemscroller,e218::drawMenger,e219::drawMetaballs,nullptr,e221::drawMirrorblob,e222::drawMoebius,e223::drawMoebiusgears,e224::drawMoire2,e225::drawMoire,e226::drawMorph3d,e227::drawMunch,nullptr,e229::drawNerverot,nullptr,e231::drawNormals,nullptr,e233::drawOverlay,e234::drawPacmanAI,e235::drawPacman,e236::drawPacmanLevel,nullptr,nullptr,e239::drawPasswdKerberos,nullptr,e241::drawPasswdPwent,nullptr,nullptr,e244::drawPenetrate,nullptr,e246::drawPulsar,e247::drawPyro,e248::drawQix,nullptr,nullptr,e251::drawQuickhull,e252::drawRaverhoop,e253::drawRazzledazzle,e254::drawRdbomb,nullptr,e256::drawRemote,e257::drawResources,e258::drawRipples,e259::drawRobot,e260::drawRobotWireframe,e261::drawRocks,e262::drawRomanboy,e263::drawRorschach,e264::drawRotator,e265::drawShips,e266::drawSierpinski3d,e267::drawSierpinski,e268::drawSkullModel,e269::drawSkulloop,nullptr,e271::drawSphereversionAnalytic,e272::drawSphereversion,e273::drawSphereversionCorrugations,e274::drawSplitflap,e275::drawSplodesic,e276::drawSquiral,e277::drawSquirtorus,e278::drawStarwars,nullptr,e280::drawStrange,e281::drawSubstrate,e282::drawSuperquadrics,e283::drawSurfaces,nullptr,e285::drawSwirl,e286::drawT3d,nullptr,e288::drawTeapot,nullptr,e290::drawThornbird,e291::drawTimetunnel,nullptr,nullptr,e294::drawTopblock,e295::drawTrackball,e296::drawTriangle,e297::drawTronbit,e298::drawTruchet,e299::drawTube,e300::drawTwang,nullptr,nullptr,nullptr,e304::drawVfeedback,nullptr,e306::drawVines,nullptr,nullptr,nullptr,e310::drawWhirlwindwarp,nullptr,nullptr,nullptr,e314::drawWormhole,nullptr,nullptr,nullptr,nullptr,e319::drawXmatrix,e320::drawXrayswarm,e321::drawXspirograph,nullptr,e323::drawZoom,e324::drawAbstractile,nullptr,nullptr,nullptr,e328::drawApollonian,nullptr,nullptr,e331::drawAttraction,e332::drawAtunnel,nullptr,e334::drawBinaryhorizon,e335::drawBinaryring,e336::drawBlaster,e337::drawBlitspin,e338::drawBlocktube,e339::drawBouboule,nullptr};
-const Fn resets[]={e0::reset,e1::reset,e2::reset,nullptr,nullptr,nullptr,e6::reset,e7::reset,e8::reset,e9::reset,e10::reset,e11::reset,nullptr,nullptr,e14::reset,e15::reset,nullptr,nullptr,nullptr,e19::reset,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,e33::reset,nullptr,nullptr,nullptr,e37::reset,e38::reset,nullptr,nullptr,e41::reset,nullptr,e43::reset,nullptr,nullptr,e46::reset,nullptr,nullptr,e49::reset,nullptr,nullptr,nullptr,nullptr,e54::reset,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,e61::reset,nullptr,e63::reset,nullptr,e65::reset,e66::reset,nullptr,e68::reset,e69::reset,e70::reset,e71::reset,e72::reset,e73::reset,e74::reset,nullptr,e76::reset,e77::reset,e78::reset,e79::reset,nullptr,e81::reset,e82::reset,e83::reset,e84::reset,e85::reset,e86::reset,e87::reset,e88::reset,e89::reset,e90::reset,e91::reset,e92::reset,e93::reset,nullptr,e95::reset,nullptr,e97::reset,e98::reset,e99::reset,e100::reset,e101::reset,e102::reset,e103::reset,e104::reset,e105::reset,nullptr,e107::reset,e108::reset,e109::reset,e110::reset,nullptr,nullptr,e113::reset,e114::reset,e115::reset,e116::reset,e117::reset,e118::reset,e119::reset,e120::reset,nullptr,e122::reset,nullptr,nullptr,nullptr,nullptr,e127::reset,e128::reset,nullptr,e130::reset,e131::reset,e132::reset,e133::reset,nullptr,e135::reset,e136::reset,e137::reset,nullptr,e139::reset,e140::reset,e141::reset,e142::reset,nullptr,e144::reset,nullptr,nullptr,nullptr,e148::reset,nullptr,nullptr,e151::reset,e152::reset,e153::reset,e154::reset,nullptr,e156::reset,e157::reset,e158::reset,e159::reset,e160::reset,e161::reset,e162::reset,e163::reset,e164::reset,e165::reset,e166::reset,e167::reset,e168::reset,e169::reset,e170::reset,e171::reset,e172::reset,e173::reset,nullptr,e175::reset,e176::reset,e177::reset,nullptr,e179::reset,nullptr,e181::reset,e182::reset,e183::reset,e184::reset,e185::reset,e186::reset,e187::reset,e188::reset,e189::reset,e190::reset,nullptr,e192::reset,e193::reset,nullptr,e195::reset,nullptr,e197::reset,nullptr,e199::reset,nullptr,e201::reset,nullptr,nullptr,e204::reset,nullptr,e206::reset,nullptr,nullptr,nullptr,e210::reset,e211::reset,nullptr,nullptr,e214::reset,e215::reset,nullptr,e217::reset,e218::reset,e219::reset,nullptr,e221::reset,e222::reset,e223::reset,e224::reset,e225::reset,e226::reset,e227::reset,nullptr,e229::reset,nullptr,e231::reset,nullptr,e233::reset,e234::reset,e235::reset,e236::reset,nullptr,nullptr,e239::reset,nullptr,e241::reset,nullptr,nullptr,e244::reset,nullptr,e246::reset,e247::reset,e248::reset,nullptr,nullptr,e251::reset,e252::reset,e253::reset,e254::reset,nullptr,e256::reset,e257::reset,e258::reset,e259::reset,e260::reset,e261::reset,e262::reset,e263::reset,e264::reset,e265::reset,e266::reset,e267::reset,e268::reset,e269::reset,nullptr,e271::reset,e272::reset,e273::reset,e274::reset,e275::reset,e276::reset,e277::reset,e278::reset,nullptr,e280::reset,e281::reset,e282::reset,e283::reset,nullptr,e285::reset,e286::reset,nullptr,e288::reset,nullptr,e290::reset,e291::reset,nullptr,nullptr,e294::reset,e295::reset,e296::reset,e297::reset,e298::reset,e299::reset,e300::reset,nullptr,nullptr,nullptr,e304::reset,nullptr,e306::reset,nullptr,nullptr,nullptr,e310::reset,nullptr,nullptr,nullptr,e314::reset,nullptr,nullptr,nullptr,nullptr,e319::reset,e320::reset,e321::reset,nullptr,e323::reset,e324::reset,nullptr,nullptr,nullptr,e328::reset,nullptr,nullptr,e331::reset,e332::reset,nullptr,e334::reset,e335::reset,e336::reset,e337::reset,e338::reset,e339::reset,nullptr};
-const char* names[]={"Boxed","Boxfit","Braid","Unavailable","Unavailable","Unavailable","Buildlwo","Bumps","Cage","Carousel","CCurve","Celtic","Unavailable","Unavailable","Circuit","CityFlow","Unavailable","Unavailable","Unavailable","Colors","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Crackberg","Unavailable","Unavailable","Unavailable","Cube21","Cubenetic","Unavailable","Unavailable","CubeTwist","Unavailable","Cuboctaversion","Unavailable","Unavailable","Dangerball","Unavailable","Unavailable","DeepStars","Unavailable","Unavailable","Unavailable","Unavailable","Demon","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Dnalogo","Unavailable","Doubletime","Unavailable","DpmsProtocol","Drift","Unavailable","Droste","DymaxionmapCoords","Easing","Endgame","Energystream","Engine","Epicycle","Unavailable","Euler2d","Fadeplot","Esper","Etruscanvenus","Unavailable","ExtIdleNotify","Extrusion","ExtrusionHelix2","ExtrusionHelix3","ExtrusionHelix4","ExtrusionJoinoffset","ExtrusionScrew","ExtrusionTaper","ExtrusionTwistoid","Exts","ExtSessionLock","Fade","FfmpegOut","Unavailable","Filmleader","Unavailable","Flag","Flame","Flipflop","Flipscreen3d","Fliptext","Flow","Fluidballs","Flurry","FlurrySmoke","Unavailable","FlurryStar","FlurryTexture","Flyingtoasters","Fontglide","Unavailable","Unavailable","Fps","FpsGl","Fuzzyflakes","Galaxy","Gallant12x22Bsd","Gears","Geodesic","Geodesicgears","Unavailable","Glmatrix","Unavailable","Unavailable","Unavailable","Unavailable","GlslUtils","Glsnake","Unavailable","Goop","Gltrackball","GlutStroke","GlutSwidth","Unavailable","GrabXimage","Grav","Gravitywell","Unavailable","Halftone","Halo","Handsy","HandsyModel","Unavailable","HeadroomModel","Unavailable","Unavailable","Unavailable","Hextrail","Unavailable","Unavailable","Hilbert","Hopalong","Hopfanimations","Hopffibration","Unavailable","Hydrostat","Hyperball","Hypercube","Hypertorus","Hypnowheel","IdleProtocol","Ifs","Imsmap","Interaggregate","Interference","Intermomentary","Involute","Jigglypuff","Jigsaw","Juggle","Juggler3d","Rotor","Rotzoomer","Unavailable","Rubik","Sballs","Scooter","Unavailable","Shadebobs","Unavailable","Slidescreen","Slip","Sonar","Speedmine","Sphere","Spheremonics","Spiral","Spotlight","Sproingies","Stairs","Unavailable","Petri","Phosphor","Unavailable","Piecewise","Unavailable","Pipeobjs","Unavailable","Platonicfolding","Unavailable","PolyhedraGl","Unavailable","Unavailable","Pong","Unavailable","Pow2","Unavailable","Unavailable","Unavailable","Providence","M6502","Unavailable","Unavailable","Marching","Maze3d","Unavailable","Memscroller","Menger","Metaballs","Unavailable","Mirrorblob","Moebius","Moebiusgears","Moire2","Moire","Morph3d","Munch","Unavailable","Nerverot","Unavailable","Normals","Unavailable","Overlay","PacmanAI","Pacman","PacmanLevel","Unavailable","Unavailable","PasswdKerberos","Unavailable","PasswdPwent","Unavailable","Unavailable","Penetrate","Unavailable","Pulsar","Pyro","Qix","Unavailable","Unavailable","Quickhull","Raverhoop","Razzledazzle","Rdbomb","Unavailable","Remote","Resources","Ripples","Robot","RobotWireframe","Rocks","Romanboy","Rorschach","Rotator","Ships","Sierpinski3d","Sierpinski","SkullModel","Skulloop","Unavailable","SphereversionAnalytic","Sphereversion","SphereversionCorrugations","Splitflap","Splodesic","Squiral","Squirtorus","Starwars","Unavailable","Strange","Substrate","Superquadrics","Surfaces","Unavailable","Swirl","T3d","Unavailable","Teapot","Unavailable","Thornbird","Timetunnel","Unavailable","Unavailable","Topblock","Trackball","Triangle","Tronbit","Truchet","Tube","Twang","Unavailable","Unavailable","Unavailable","Vfeedback","Unavailable","Vines","Unavailable","Unavailable","Unavailable","Whirlwindwarp","Unavailable","Unavailable","Unavailable","Wormhole","Unavailable","Unavailable","Unavailable","Unavailable","Xmatrix","Xrayswarm","Xspirograph","Unavailable","Zoom","Abstractile","Unavailable","Unavailable","Unavailable","Apollonian","Unavailable","Unavailable","Attraction","Atunnel","Unavailable","Binaryhorizon","Binaryring","Blaster","Blitspin","Blocktube","Bouboule","Unavailable"};
+const Fn draws[]={e0::drawBoxed,e1::drawBoxfit,e2::drawBraid,nullptr,nullptr,nullptr,e6::drawBuildlwo,e7::drawBumps,e8::drawCage,e9::drawCarousel,e10::drawCCurve,e11::drawCeltic,nullptr,nullptr,e14::drawCircuit,e15::drawCityFlow,nullptr,nullptr,nullptr,e19::drawColors,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,e33::drawCrackberg,nullptr,nullptr,nullptr,e37::drawCube21,e38::drawCubenetic,nullptr,nullptr,e41::drawCubeTwist,nullptr,e43::drawCuboctaversion,nullptr,nullptr,e46::drawDangerball,nullptr,nullptr,e49::drawDeepStars,nullptr,nullptr,nullptr,nullptr,e54::drawDemon,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,e61::drawDnalogo,nullptr,e63::drawDoubletime,nullptr,e65::drawDpmsProtocol,e66::drawDrift,nullptr,e68::drawDroste,e69::drawDymaxionmapCoords,e70::drawEasing,e71::drawEndgame,e72::drawEnergystream,e73::drawEngine,e74::drawEpicycle,nullptr,e76::drawEuler2d,e77::drawFadeplot,e78::drawEsper,e79::drawEtruscanvenus,nullptr,e81::drawExtIdleNotify,e82::drawExtrusion,e83::drawExtrusionHelix2,e84::drawExtrusionHelix3,e85::drawExtrusionHelix4,e86::drawExtrusionJoinoffset,e87::drawExtrusionScrew,e88::drawExtrusionTaper,e89::drawExtrusionTwistoid,e90::drawExts,e91::drawExtSessionLock,e92::drawFade,e93::drawFfmpegOut,nullptr,e95::drawFilmleader,nullptr,e97::drawFlag,e98::drawFlame,e99::drawFlipflop,e100::drawFlipscreen3d,e101::drawFliptext,e102::drawFlow,e103::drawFluidballs,e104::drawFlurry,e105::drawFlurrySmoke,nullptr,e107::drawFlurryStar,e108::drawFlurryTexture,e109::drawFlyingtoasters,e110::drawFontglide,nullptr,nullptr,e113::drawFps,e114::drawFpsGl,e115::drawFuzzyflakes,e116::drawGalaxy,e117::drawGallant12x22Bsd,e118::drawGears,e119::drawGeodesic,e120::drawGeodesicgears,nullptr,e122::drawGlmatrix,nullptr,nullptr,nullptr,nullptr,e127::drawGlslUtils,e128::drawGlsnake,nullptr,e130::drawGoop,e131::drawGltrackball,e132::drawGlutStroke,e133::drawGlutSwidth,nullptr,e135::drawGrabXimage,e136::drawGrav,e137::drawGravitywell,nullptr,e139::drawHalftone,e140::drawHalo,e141::drawHandsy,e142::drawHandsyModel,nullptr,e144::drawHeadroomModel,nullptr,nullptr,nullptr,e148::drawHextrail,nullptr,nullptr,e151::drawHilbert,e152::drawHopalong,e153::drawHopfanimations,e154::drawHopffibration,nullptr,e156::drawHydrostat,e157::drawHyperball,e158::drawHypercube,e159::drawHypertorus,e160::drawHypnowheel,e161::drawIdleProtocol,e162::drawIfs,e163::drawImsmap,e164::drawInteraggregate,e165::drawInterference,e166::drawIntermomentary,e167::drawInvolute,e168::drawJigglypuff,e169::drawJigsaw,e170::drawJuggle,e171::drawJuggler3d,e172::drawRotor,e173::drawRotzoomer,nullptr,e175::drawRubik,e176::drawSballs,e177::drawScooter,nullptr,e179::drawShadebobs,nullptr,e181::drawSlidescreen,e182::drawSlip,e183::drawSonar,e184::drawSpeedmine,e185::drawSphere,e186::drawSpheremonics,e187::drawSpiral,e188::drawSpotlight,e189::drawSproingies,e190::drawStairs,nullptr,e192::drawPetri,e193::drawPhosphor,nullptr,e195::drawPiecewise,nullptr,e197::drawPipeobjs,nullptr,e199::drawPlatonicfolding,nullptr,e201::drawPolyhedraGl,nullptr,nullptr,e204::drawPong,nullptr,e206::drawPow2,nullptr,nullptr,nullptr,e210::drawProvidence,e211::drawM6502,nullptr,nullptr,e214::drawMarching,e215::drawMaze3d,nullptr,e217::drawMemscroller,e218::drawMenger,e219::drawMetaballs,nullptr,e221::drawMirrorblob,e222::drawMoebius,e223::drawMoebiusgears,e224::drawMoire2,nullptr,e226::drawMorph3d,e227::drawMunch,nullptr,e229::drawNerverot,nullptr,e231::drawNormals,nullptr,e233::drawOverlay,e234::drawPacmanAI,e235::drawPacman,e236::drawPacmanLevel,nullptr,nullptr,e239::drawPasswdKerberos,nullptr,e241::drawPasswdPwent,nullptr,nullptr,e244::drawPenetrate,nullptr,e246::drawPulsar,e247::drawPyro,e248::drawQix,nullptr,nullptr,e251::drawQuickhull,e252::drawRaverhoop,e253::drawRazzledazzle,e254::drawRdbomb,nullptr,e256::drawRemote,e257::drawResources,e258::drawRipples,e259::drawRobot,e260::drawRobotWireframe,e261::drawRocks,e262::drawRomanboy,e263::drawRorschach,e264::drawRotator,e265::drawShips,e266::drawSierpinski3d,e267::drawSierpinski,e268::drawSkullModel,e269::drawSkulloop,nullptr,e271::drawSphereversionAnalytic,e272::drawSphereversion,e273::drawSphereversionCorrugations,e274::drawSplitflap,e275::drawSplodesic,e276::drawSquiral,e277::drawSquirtorus,e278::drawStarwars,nullptr,e280::drawStrange,e281::drawSubstrate,e282::drawSuperquadrics,e283::drawSurfaces,nullptr,e285::drawSwirl,e286::drawT3d,nullptr,e288::drawTeapot,nullptr,e290::drawThornbird,e291::drawTimetunnel,nullptr,nullptr,e294::drawTopblock,e295::drawTrackball,e296::drawTriangle,e297::drawTronbit,e298::drawTruchet,e299::drawTube,e300::drawTwang,nullptr,nullptr,nullptr,e304::drawVfeedback,nullptr,e306::drawVines,nullptr,nullptr,nullptr,e310::drawWhirlwindwarp,nullptr,nullptr,nullptr,e314::drawWormhole,nullptr,nullptr,nullptr,nullptr,e319::drawXmatrix,e320::drawXrayswarm,e321::drawXspirograph,nullptr,e323::drawZoom,e324::drawAbstractile,nullptr,nullptr,nullptr,e328::drawApollonian,nullptr,nullptr,e331::drawAttraction,e332::drawAtunnel,nullptr,e334::drawBinaryhorizon,e335::drawBinaryring,e336::drawBlaster,e337::drawBlitspin,e338::drawBlocktube,e339::drawBouboule,nullptr};
+const Fn resets[]={e0::reset,e1::reset,e2::reset,nullptr,nullptr,nullptr,e6::reset,e7::reset,e8::reset,e9::reset,e10::reset,e11::reset,nullptr,nullptr,e14::reset,e15::reset,nullptr,nullptr,nullptr,e19::reset,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,e33::reset,nullptr,nullptr,nullptr,e37::reset,e38::reset,nullptr,nullptr,e41::reset,nullptr,e43::reset,nullptr,nullptr,e46::reset,nullptr,nullptr,e49::reset,nullptr,nullptr,nullptr,nullptr,e54::reset,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,e61::reset,nullptr,e63::reset,nullptr,e65::reset,e66::reset,nullptr,e68::reset,e69::reset,e70::reset,e71::reset,e72::reset,e73::reset,e74::reset,nullptr,e76::reset,e77::reset,e78::reset,e79::reset,nullptr,e81::reset,e82::reset,e83::reset,e84::reset,e85::reset,e86::reset,e87::reset,e88::reset,e89::reset,e90::reset,e91::reset,e92::reset,e93::reset,nullptr,e95::reset,nullptr,e97::reset,e98::reset,e99::reset,e100::reset,e101::reset,e102::reset,e103::reset,e104::reset,e105::reset,nullptr,e107::reset,e108::reset,e109::reset,e110::reset,nullptr,nullptr,e113::reset,e114::reset,e115::reset,e116::reset,e117::reset,e118::reset,e119::reset,e120::reset,nullptr,e122::reset,nullptr,nullptr,nullptr,nullptr,e127::reset,e128::reset,nullptr,e130::reset,e131::reset,e132::reset,e133::reset,nullptr,e135::reset,e136::reset,e137::reset,nullptr,e139::reset,e140::reset,e141::reset,e142::reset,nullptr,e144::reset,nullptr,nullptr,nullptr,e148::reset,nullptr,nullptr,e151::reset,e152::reset,e153::reset,e154::reset,nullptr,e156::reset,e157::reset,e158::reset,e159::reset,e160::reset,e161::reset,e162::reset,e163::reset,e164::reset,e165::reset,e166::reset,e167::reset,e168::reset,e169::reset,e170::reset,e171::reset,e172::reset,e173::reset,nullptr,e175::reset,e176::reset,e177::reset,nullptr,e179::reset,nullptr,e181::reset,e182::reset,e183::reset,e184::reset,e185::reset,e186::reset,e187::reset,e188::reset,e189::reset,e190::reset,nullptr,e192::reset,e193::reset,nullptr,e195::reset,nullptr,e197::reset,nullptr,e199::reset,nullptr,e201::reset,nullptr,nullptr,e204::reset,nullptr,e206::reset,nullptr,nullptr,nullptr,e210::reset,e211::reset,nullptr,nullptr,e214::reset,e215::reset,nullptr,e217::reset,e218::reset,e219::reset,nullptr,e221::reset,e222::reset,e223::reset,e224::reset,nullptr,e226::reset,e227::reset,nullptr,e229::reset,nullptr,e231::reset,nullptr,e233::reset,e234::reset,e235::reset,e236::reset,nullptr,nullptr,e239::reset,nullptr,e241::reset,nullptr,nullptr,e244::reset,nullptr,e246::reset,e247::reset,e248::reset,nullptr,nullptr,e251::reset,e252::reset,e253::reset,e254::reset,nullptr,e256::reset,e257::reset,e258::reset,e259::reset,e260::reset,e261::reset,e262::reset,e263::reset,e264::reset,e265::reset,e266::reset,e267::reset,e268::reset,e269::reset,nullptr,e271::reset,e272::reset,e273::reset,e274::reset,e275::reset,e276::reset,e277::reset,e278::reset,nullptr,e280::reset,e281::reset,e282::reset,e283::reset,nullptr,e285::reset,e286::reset,nullptr,e288::reset,nullptr,e290::reset,e291::reset,nullptr,nullptr,e294::reset,e295::reset,e296::reset,e297::reset,e298::reset,e299::reset,e300::reset,nullptr,nullptr,nullptr,e304::reset,nullptr,e306::reset,nullptr,nullptr,nullptr,e310::reset,nullptr,nullptr,nullptr,e314::reset,nullptr,nullptr,nullptr,nullptr,e319::reset,e320::reset,e321::reset,nullptr,e323::reset,e324::reset,nullptr,nullptr,nullptr,e328::reset,nullptr,nullptr,e331::reset,e332::reset,nullptr,e334::reset,e335::reset,e336::reset,e337::reset,e338::reset,e339::reset,nullptr};
+const char* names[]={"Boxed","Boxfit","Braid","Unavailable","Unavailable","Unavailable","Buildlwo","Bumps","Cage","Carousel","CCurve","Celtic","Unavailable","Unavailable","Circuit","CityFlow","Unavailable","Unavailable","Unavailable","Colors","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Crackberg","Unavailable","Unavailable","Unavailable","Cube21","Cubenetic","Unavailable","Unavailable","CubeTwist","Unavailable","Cuboctaversion","Unavailable","Unavailable","Dangerball","Unavailable","Unavailable","DeepStars","Unavailable","Unavailable","Unavailable","Unavailable","Demon","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Unavailable","Dnalogo","Unavailable","Doubletime","Unavailable","DpmsProtocol","Drift","Unavailable","Droste","DymaxionmapCoords","Easing","Endgame","Energystream","Engine","Epicycle","Unavailable","Euler2d","Fadeplot","Esper","Etruscanvenus","Unavailable","ExtIdleNotify","Extrusion","ExtrusionHelix2","ExtrusionHelix3","ExtrusionHelix4","ExtrusionJoinoffset","ExtrusionScrew","ExtrusionTaper","ExtrusionTwistoid","Exts","ExtSessionLock","Fade","FfmpegOut","Unavailable","Filmleader","Unavailable","Flag","Flame","Flipflop","Flipscreen3d","Fliptext","Flow","Fluidballs","Flurry","FlurrySmoke","Unavailable","FlurryStar","FlurryTexture","Flyingtoasters","Fontglide","Unavailable","Unavailable","Fps","FpsGl","Fuzzyflakes","Galaxy","Gallant12x22Bsd","Gears","Geodesic","Geodesicgears","Unavailable","Glmatrix","Unavailable","Unavailable","Unavailable","Unavailable","GlslUtils","Glsnake","Unavailable","Goop","Gltrackball","GlutStroke","GlutSwidth","Unavailable","GrabXimage","Grav","Gravitywell","Unavailable","Halftone","Halo","Handsy","HandsyModel","Unavailable","HeadroomModel","Unavailable","Unavailable","Unavailable","Hextrail","Unavailable","Unavailable","Hilbert","Hopalong","Hopfanimations","Hopffibration","Unavailable","Hydrostat","Hyperball","Hypercube","Hypertorus","Hypnowheel","IdleProtocol","Ifs","Imsmap","Interaggregate","Interference","Intermomentary","Involute","Jigglypuff","Jigsaw","Juggle","Juggler3d","Rotor","Rotzoomer","Unavailable","Rubik","Sballs","Scooter","Unavailable","Shadebobs","Unavailable","Slidescreen","Slip","Sonar","Speedmine","Sphere","Spheremonics","Spiral","Spotlight","Sproingies","Stairs","Unavailable","Petri","Phosphor","Unavailable","Piecewise","Unavailable","Pipeobjs","Unavailable","Platonicfolding","Unavailable","PolyhedraGl","Unavailable","Unavailable","Pong","Unavailable","Pow2","Unavailable","Unavailable","Unavailable","Providence","M6502","Unavailable","Unavailable","Marching","Maze3d","Unavailable","Memscroller","Menger","Metaballs","Unavailable","Mirrorblob","Moebius","Moebiusgears","Moire2","Unavailable","Morph3d","Munch","Unavailable","Nerverot","Unavailable","Normals","Unavailable","Overlay","PacmanAI","Pacman","PacmanLevel","Unavailable","Unavailable","PasswdKerberos","Unavailable","PasswdPwent","Unavailable","Unavailable","Penetrate","Unavailable","Pulsar","Pyro","Qix","Unavailable","Unavailable","Quickhull","Raverhoop","Razzledazzle","Rdbomb","Unavailable","Remote","Resources","Ripples","Robot","RobotWireframe","Rocks","Romanboy","Rorschach","Rotator","Ships","Sierpinski3d","Sierpinski","SkullModel","Skulloop","Unavailable","SphereversionAnalytic","Sphereversion","SphereversionCorrugations","Splitflap","Splodesic","Squiral","Squirtorus","Starwars","Unavailable","Strange","Substrate","Superquadrics","Surfaces","Unavailable","Swirl","T3d","Unavailable","Teapot","Unavailable","Thornbird","Timetunnel","Unavailable","Unavailable","Topblock","Trackball","Triangle","Tronbit","Truchet","Tube","Twang","Unavailable","Unavailable","Unavailable","Vfeedback","Unavailable","Vines","Unavailable","Unavailable","Unavailable","Whirlwindwarp","Unavailable","Unavailable","Unavailable","Wormhole","Unavailable","Unavailable","Unavailable","Unavailable","Xmatrix","Xrayswarm","Xspirograph","Unavailable","Zoom","Abstractile","Unavailable","Unavailable","Unavailable","Apollonian","Unavailable","Unavailable","Attraction","Atunnel","Unavailable","Binaryhorizon","Binaryring","Blaster","Blitspin","Blocktube","Bouboule","Unavailable"};
 }
 uint16_t Count(){return sizeof(draws)/sizeof(draws[0]);}
 const char* Name(uint16_t i){return i<Count()?names[i]:"Unknown";}
 bool Usable(uint16_t i){return i<Count()&&view::saver::Allowed(unsigned(i)+1)&&draws[i]&&resets[i];}
 void Reset(uint16_t i){if(Usable(i)){resetRandom(0x71352u+i);resets[i]();pendingClear=true;}}
-bool Render(uint16_t i,uint32_t ms,uint16_t* p,uint16_t w,uint16_t h){
+bool Render(uint16_t i,uint32_t ms,uint16_t* p,uint16_t w,uint16_t h,uint64_t (*clock)(),uint32_t work_budget){
  if(!Usable(i)||!p||w!=320||h!=240)return false;
- raster.bind(p,w,h); if(pendingClear){raster.fillScreen(BLACK);pendingClear=false;} animationTime=(ms%3600000)/1000.0f;
- draws[i](); raster.unbind();return true;
+ raster.bind(p,w,h); raster.beginFrame(work_budget,clock); if(pendingClear){raster.fillScreen(BLACK);pendingClear=false;} animationTime=(ms%3600000)/1000.0f;
+ draws[i](); const bool complete=!raster.exhausted(); raster.unbind();return complete;
 }
 }

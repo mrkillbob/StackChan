@@ -1,3 +1,4 @@
+#include <companion/station_authority.hpp>
 #include "stock_app_center.h"
 #include <assets/assets.h>
 #include <apps/common/common.h>
@@ -26,6 +27,7 @@ std::atomic<int> requested_app{-1};
 std::atomic<bool> fetch_inflight{false};
 struct CatalogEntry { std::string name, description, firmware_url, icon_url; };
 struct FetchState {
+    companion::network::StationBorrow network_use;
     std::atomic<bool> cancelled{false}, done{false};
     std::vector<CatalogEntry> entries;
     std::string message;
@@ -165,6 +167,7 @@ void FetchCatalog(void* context)
     auto state = *static_cast<std::shared_ptr<FetchState>*>(context);
     delete static_cast<std::shared_ptr<FetchState>*>(context);
     RunFetch(state);
+    state->network_use.Reset(); // HTTP client is closed; permit checked station stop
     state->done.store(true, std::memory_order_release);
     // Release C++ ownership before FreeRTOS deletes the task stack.
     state.reset();
@@ -286,6 +289,8 @@ class Center final : public mooncake::AppAbility {
             screen_ = Screen::OnlineList; Render(); return;
         }
         fetch_ = std::make_shared<FetchState>();
+        fetch_->network_use=companion::network::Authority().BorrowSaved();
+        if(!fetch_->network_use){fetch_.reset();fetch_inflight=false;catalog_message_="Wi-Fi is stopping. Try again after Home.";screen_=Screen::OnlineList;Render();return;}
         auto context = new std::shared_ptr<FetchState>(fetch_);
         if (xTaskCreate(FetchCatalog, "app_catalog", 8192, context, 3, nullptr) != pdPASS) {
             delete context;

@@ -1,8 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 MODE="${1:-run}"
-TASK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT_ROOT="${STACKCHAN_ROOT:-$(cd "$TASK_ROOT/../../.." && pwd)}"
+TASK_ROOT="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null && pwd -P)"
+PROJECT_ROOT="${STACKCHAN_ROOT:-$(CDPATH= cd -- "$TASK_ROOT/../../.." >/dev/null && pwd -P)}"
+PROJECT_ROOT="$(cd -- "$PROJECT_ROOT" >/dev/null && pwd -P)"
 BUILD_ROOT="${STACKCHAN_UI_BUILD_ROOT:-$PROJECT_ROOT/.tools/numeric-ui}"
 if [[ "$MODE" == "--compile-only" && -z "${STACKCHAN_UI_BUILD_ROOT:-}" ]]; then
   BUILD_ROOT="$PROJECT_ROOT/.tools/numeric-ui/source-only"
@@ -16,7 +17,8 @@ case "$MODE" in
   run|--compile-only|--build-only|--verify|--debug|--logs|--telemetry) ;;
   *) echo "usage: $0 [run|--compile-only|--build-only|--verify|--debug|--logs|--telemetry]" >&2; exit 2 ;;
 esac
-mkdir -p "$BUNDLE/Contents/MacOS" "$BUILD_ROOT/module-cache"
+mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources" "$BUILD_ROOT/module-cache"
+/bin/bash "$TASK_ROOT/script/package_resources.sh" "$TASK_ROOT" "$BUNDLE"
 WEB_ROOT="$PROJECT_ROOT/companion/webcam"
 for unit in CompanionSinkBridge WebcamGate; do
   /usr/bin/nice -n 20 /usr/bin/xcrun clang -fobjc-arc -fmodules -fmodules-cache-path="$BUILD_ROOT/module-cache" -mmacosx-version-min=14.0 -c "$WEB_ROOT/$unit.m" -o "$BUILD_ROOT/$unit.o"
@@ -33,6 +35,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<'PLIST'
 <key>NSMicrophoneUsageDescription</key><string>StackChan Companion reads your selected virtual audio output to play it on StackChan after physical Listen.</string>
 </dict></plist>
 PLIST
+/usr/bin/plutil -insert StackChanRoot -string "$PROJECT_ROOT" "$BUNDLE/Contents/Info.plist"
 if [[ "$MODE" == "--compile-only" ]]; then
   /usr/bin/plutil -lint "$BUNDLE/Contents/Info.plist"
   echo "Unsigned source build complete; not launched: $BUNDLE"

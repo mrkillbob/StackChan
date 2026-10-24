@@ -276,6 +276,8 @@ public:
     void requestWarmReboot(int appIndex);
     int getWarmRebootTarget();
     void clearWarmRebootRequest();
+    [[noreturn]] void requestAppSetup();
+    bool consumeAppSetupRequest();
 
     /* --------------------------------- Network -------------------------------- */
     void startNetwork(std::function<void(std::string_view)> onLog);
@@ -305,6 +307,9 @@ public:
     void getMicWaveformFrame(std::vector<int16_t>& data);
     void clearupMicTest();
 
+    void forgetNativeNetwork();
+    bool stopBleServer();
+    bool stopEspNow();
     bool prepareStockFeatureHardware(bool motion, bool camera);
 
 private:

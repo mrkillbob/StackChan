@@ -7,6 +7,28 @@ those source capabilities are not evidence of a configured or active session.
 The existing saved device pairing is separate from this source qualification.
 
 USB and verified Wi-Fi TLS carry pairing; there is no Bluetooth transport.
+Click Pair StackChan, then physically tap Pair on the robot.
+Compare the six digits and confirm on both devices. Cancel/Retry closes the attempt.
+On installed a67e6c2, an audio-scoped matching confirmation is explicitly labeled
+"Pair & authorize mic/speaker" and gives physical consent for that one local session.
+Companion has no microphone-only mute: leave physical Listen off when audio is not
+authorized, or stop the whole audio session. A stop reports release only after a clean
+worker exit; a call in the user's call app may continue. The robot physical stop also ends
+the session.
+Audio is blocked by default. A separately approved local audio check requires both
+`--approved-test` and `--approved-audio`, a matching fresh one-use authorization,
+a valid `expected_boot_nonce` in that fresh authorization, and both matching-number
+confirmations before any audio admission. A mismatched Ready aborts before key
+loading, listener creation, protocol write or grant; its nonce/reset evidence survives.
+The pairing backend suppresses application DTR/RTS updates and clears/verifies HUPCL
+while retaining one bounded SCNP write. OS USB behavior still requires physical
+boot continuity qualification; these controls cannot prove reset-free hardware.
+
+Default app launch is an inert preview. Live mode requires a separately approved
+exact firmware image and test, `--approved-test`, and removal of the project pause
+marker by the approved test operator. Keep the marker until that approval.
+The window has no token field, clipboard operation, or credential log.
+
 The comparison code is a human session check within approved TLS trust, not a
 password or a generic cryptographic SAS protocol. Both confirmations remain
 required for enrollment. Camera and wake providers remain unavailable until
@@ -28,7 +50,7 @@ signature data; no explicit codesign, installed-app replacement or activation is
 performed by compile-only mode. It does not certify an artifact as never signed.
 
 `STACKCHAN_OFFLINE_BUILD_ROOT` selects the fixture output/module-cache directory.
-`--compile-only` on the offline helper compiles all six fixtures and runs none.
+`--compile-only` on the offline helper compiles all eight fixtures and runs none.
 The default offline mode executes the fixtures without resource supervision.
 For bounded process-fixture qualification, `script/run_process_fixtures.py` uses
 the separate audited no-fork policy documented in `script/FOUNDATION-FIXTURES.md`.
@@ -47,9 +69,27 @@ authorization. The installed, idle app is not modified by these source checks.
 Live operation requires separately approved bindings/configuration and existing
 operator/device consent gates. `STACKCHAN_BINDING_CONFIG` selects an explicit
 owner-only binding file; `HOME_LAB_ROOT` supplies the existing local host source.
+The build helper embeds the canonical checkout root as `StackChanRoot` in the
+bundle before signing, so normal LaunchServices launch can resolve it without
+inheriting `STACKCHAN_ROOT`. Rebuild when moving the checkout.
+Set `STACKCHAN_PYTHON` to the absolute executable in the approved Python virtual
+environment (paths containing spaces are supported). An invalid explicit value
+fails setup without falling back. With no override, the worker uses this
+checkout's `.venv/bin/python3` or `.venv/bin/python`, then `python3` in an absolute
+directory of the inherited `PATH`. Empty/relative PATH entries are ignored. No
+interpreter or dependencies are provisioned by the build, and resolution does
+not launch a probe. Finder's PATH may be limited, so an explicit value is preferred.
 Neither value is populated by the public source build. No real credential, private
 key, current certificate validity or physical card content is inferred here.
 The window has no token field, clipboard operation or credential log.
+
+Opus/FFmpeg libraries use platform discovery, with `/opt/homebrew/lib` and
+`/usr/local/lib` fallbacks on macOS and normal `.so` loader search on Linux.
+Custom installations can set `STACKCHAN_OPUS_LIBRARY`,
+`STACKCHAN_SWRESAMPLE_LIBRARY`, and `STACKCHAN_AVUTIL_LIBRARY` to absolute library
+paths. An empty, relative or unloadable override fails without fallback. Select
+libraries compatible with the Python process architecture and the existing codec
+API; this does not install libraries or enable audio.
 
 The worker anchors its finite deadline at robot Ready, including its startup and
 control-loop margin. This does not prove boot continuity, physical audio timing,

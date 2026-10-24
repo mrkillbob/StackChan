@@ -2,6 +2,13 @@
 #include "local_consent.hpp"
 #include "local_wake_controller.hpp"
 #include "boot.h"
+#include "station_authority.hpp"
+#include "checked_station_stop.hpp"
+#include "station_event_barrier.hpp"
+#include <esp_wifi_default.h>
+#include <esp_sntp.h>
+#include <memory>
+#include <new>
 #include "remembered_service.hpp"
 #include "remembered_intent_route.hpp"
 #include <apps/led_expression/led_service_api.h>
@@ -75,6 +82,19 @@ std::atomic<bool> confirm_requested{false},reject_requested{false},diagnostic_re
 std::atomic<bool> public_status_requested{false},public_status_close{false},public_status_next{false};
 std::mutex wifi_start_mutex;
 SavedWifiOwner saved_wifi_owner;
+esp_netif_t* saved_station_netif=nullptr;
+esp_event_handler_instance_t saved_wifi_handler=nullptr,saved_ip_handler=nullptr;
+struct SavedWifiCallback {uint64_t generation;};
+std::unique_ptr<SavedWifiCallback> saved_callback;
+std::atomic<int> saved_stop_job{0}; // 0 retry/idle, 1 retained worker
+bool AcquireSavedStation(){
+    auto& authority=network::Authority();
+    if(authority.Current()==network::Owner::None){
+        wifi_mode_t mode{};const auto error=esp_wifi_get_mode(&mode);
+        if(error!=ESP_ERR_WIFI_NOT_INIT&&(error!=ESP_OK||mode!=WIFI_MODE_NULL))return false;
+    }
+    return authority.Acquire(network::Owner::Saved);
+}
 std::atomic<bool> pair_requested{false}, connect_requested{false}, listen_requested{false}, mute_requested{false}, connected{false};
 // ESP-IDF requires interrupt install/uninstall on the same core. The shell
 // task is pinned to CPU0; the helper also enforces that contract at runtime.
@@ -164,9 +184,17 @@ public:
 };
 std::atomic<bool> wifi_survey_busy{false};
 std::atomic<bool> survey_done{false};std::atomic<bool> survey_success{false};
-void wifi_event(void*, esp_event_base_t base, int32_t id, void* data) {
-    if(base==WIFI_EVENT && id==WIFI_EVENT_SCAN_DONE){const auto* done=static_cast<wifi_event_sta_scan_done_t*>(data);survey_success=done&&done->status==0;survey_done=true;}
-    if(base==IP_EVENT && id==IP_EVENT_STA_GOT_IP) {connected=true;saved_wifi_owner.GotIp();}
+void wifi_event(void* arg, esp_event_base_t base, int32_t id, void* data) {
+    const auto* callback=static_cast<SavedWifiCallback*>(arg);
+    if(!callback||network::Authority().Current()!=network::Owner::Saved||callback->generation!=network::Authority().Generation())return;
+    // The owned scan must still receive its completion while cancellation is pending.
+    if(base==WIFI_EVENT&&id==WIFI_EVENT_SCAN_DONE){const auto* done=static_cast<wifi_event_sta_scan_done_t*>(data);survey_success=done&&done->status==0;survey_done=true;return;}
+    if(!network::Authority().Accepts(network::Owner::Saved,callback->generation))return;
+    if(base==IP_EVENT && id==IP_EVENT_STA_GOT_IP) {
+        const auto* event=static_cast<ip_event_got_ip_t*>(data);wifi_ap_record_t ap{};
+        if(!event||event->esp_netif!=saved_station_netif||esp_wifi_sta_get_ap_info(&ap)!=ESP_OK)return;
+        connected=true;saved_wifi_owner.GotIp();
+    }
     if(base==WIFI_EVENT && id==WIFI_EVENT_STA_DISCONNECTED) {
         auto& trace=enrollment_observation::State();
         if(trace.Recording()||trace.Get().pair==enrollment_observation::PairStage::WifiWait)trace.Pair(enrollment_observation::PairStage::WifiDisconnected);
@@ -176,22 +204,39 @@ void wifi_event(void*, esp_event_base_t base, int32_t id, void* data) {
     }
 }
 bool InitializeOwnedStation(wifi_config_t* wifi){
-    saved_wifi_owner.Touched(); // esp_netif_init can fail after creating shared SDK state.
-    if(esp_netif_init()!=ESP_OK)return false;
-    auto loop=esp_event_loop_create_default();if(loop!=ESP_OK && loop!=ESP_ERR_INVALID_STATE)return false;
-    if(!esp_netif_create_default_wifi_sta())return false;
-    wifi_init_config_t config=WIFI_INIT_CONFIG_DEFAULT();config.nvs_enable=false;
-    if(esp_wifi_init(&config)!=ESP_OK)return false;
-    if(esp_event_handler_register(WIFI_EVENT,ESP_EVENT_ANY_ID,wifi_event,nullptr)!=ESP_OK || esp_event_handler_register(IP_EVENT,IP_EVENT_STA_GOT_IP,wifi_event,nullptr)!=ESP_OK)return false;
-    if(esp_wifi_set_storage(WIFI_STORAGE_RAM)!=ESP_OK || esp_wifi_set_mode(WIFI_MODE_STA)!=ESP_OK || (wifi&&esp_wifi_set_config(WIFI_IF_STA,wifi)!=ESP_OK) || esp_wifi_start()!=ESP_OK)return false;
+    saved_wifi_owner.Touched();
+    auto error=esp_netif_init();if(error!=ESP_OK&&error!=ESP_ERR_INVALID_STATE)return false;
+    error=esp_event_loop_create_default();if(error!=ESP_OK&&error!=ESP_ERR_INVALID_STATE)return false;
+    wifi_mode_t mode{};error=esp_wifi_get_mode(&mode);
+    if(error==ESP_ERR_WIFI_NOT_INIT){wifi_init_config_t config=WIFI_INIT_CONFIG_DEFAULT();config.nvs_enable=false;if(esp_wifi_init(&config)!=ESP_OK)return false;}
+    else if(error!=ESP_OK||mode!=WIFI_MODE_NULL)return false;
+    saved_station_netif=esp_netif_create_default_wifi_sta();if(!saved_station_netif)return false;
+    saved_callback.reset(new(std::nothrow) SavedWifiCallback{network::Authority().Generation()});if(!saved_callback)return false;
+    if(esp_event_handler_instance_register(WIFI_EVENT,ESP_EVENT_ANY_ID,wifi_event,saved_callback.get(),&saved_wifi_handler)!=ESP_OK)return false;
+    if(esp_event_handler_instance_register(IP_EVENT,IP_EVENT_STA_GOT_IP,wifi_event,saved_callback.get(),&saved_ip_handler)!=ESP_OK)return false;
+    if(esp_wifi_set_storage(WIFI_STORAGE_RAM)!=ESP_OK||esp_wifi_set_mode(WIFI_MODE_STA)!=ESP_OK||(wifi&&esp_wifi_set_config(WIFI_IF_STA,wifi)!=ESP_OK)||esp_wifi_start()!=ESP_OK)return false;
     return true;
 }
+struct SavedStationStopDriver {
+    bool UnregisterWifi(){if(!saved_wifi_handler)return true;if(esp_event_handler_instance_unregister(WIFI_EVENT,ESP_EVENT_ANY_ID,saved_wifi_handler)!=ESP_OK)return false;saved_wifi_handler=nullptr;return true;}
+    bool UnregisterIp(){if(!saved_ip_handler)return true;if(esp_event_handler_instance_unregister(IP_EVENT,IP_EVENT_STA_GOT_IP,saved_ip_handler)!=ESP_OK)return false;saved_ip_handler=nullptr;return true;}
+    bool StopDriver(){
+        auto error=esp_wifi_stop();if(error==ESP_ERR_WIFI_NOT_INIT)return true;
+        if(error!=ESP_OK&&error!=ESP_ERR_WIFI_NOT_STARTED)return false;
+        return esp_wifi_set_mode(WIFI_MODE_NULL)==ESP_OK;
+    }
+    bool DrainEvents(){return network::DrainStationEvents();}
+    bool DestroyNetif(){if(saved_station_netif){esp_netif_destroy_default_wifi(saved_station_netif);saved_station_netif=nullptr;}saved_callback.reset();return true;}
+    bool VerifyIdle(){wifi_mode_t mode{};const auto error=esp_wifi_get_mode(&mode);return error==ESP_ERR_WIFI_NOT_INIT||(error==ESP_OK&&mode==WIFI_MODE_NULL);}
+};
+
 bool StartSavedWifi() {
     std::lock_guard<std::mutex> lock(wifi_start_mutex);
     if(wifi_survey_busy.load())return false;
     const auto& saved=SsidManager::GetInstance().GetSsidList();
     const bool valid=!saved.empty()&&network_setup::Valid({saved.front().ssid,saved.front().password});
-    const auto action=saved_wifi_owner.Begin(valid,network_setup::NetworkWasStarted()||WifiManager::GetInstance().IsInitialized());
+    if(!AcquireSavedStation())return false;
+    const auto action=saved_wifi_owner.Begin(valid);
     if(action==SavedWifiAction::AlreadyConnected||action==SavedWifiAction::Waiting)return true;
     if(action==SavedWifiAction::Refused)return false;
 
@@ -208,7 +253,8 @@ bool StartSavedWifi() {
 class SurveyDriver {
 public:
  survey::Phase Start(){
-  auto action=saved_wifi_owner.BeginSurvey(network_setup::NetworkWasStarted()||WifiManager::GetInstance().IsInitialized());
+  if(!AcquireSavedStation())return survey::Phase::NotReady;
+  auto action=saved_wifi_owner.BeginSurvey(false);
   if(action==SavedWifiAction::Refused)return survey::Phase::NotReady;
   if(action==SavedWifiAction::Waiting)return survey::Phase::Busy;
   if(action==SavedWifiAction::Initialize){if(!InitializeOwnedStation(nullptr)){saved_wifi_owner.InitializationFailed();return survey::Phase::NotReady;}saved_wifi_owner.SurveyReady();}
@@ -381,12 +427,35 @@ bool EnsureSavedNetwork() {
     state.wifi_started=StartSavedWifi();
     return state.wifi_started;
 }
-bool IsWifiConnected(){return connected.load();}
+bool PollSavedNetworkStopped(){
+    auto& authority=network::Authority();
+    const auto owner=authority.Current();
+    if(owner==network::Owner::None)return true;
+    if(owner!=network::Owner::Saved)return false;
+    authority.RequestStop(network::Owner::Saved);saved_wifi_owner.StopRequested();
+    if(saved_stop_job.load()==1||!FeatureAudioIdle()||authority.Borrowers())return false;
+    std::unique_lock<std::mutex> lock(wifi_start_mutex,std::try_to_lock);if(!lock)return false;
+    wifi_survey.Poll(esp_timer_get_time()/1000);
+    if(wifi_survey.OwnsScan()){wifi_survey.Cancel();wifi_survey.Poll(esp_timer_get_time()/1000);wifi_survey_busy=wifi_survey.OwnsScan();if(wifi_survey_busy)return false;}
+    saved_stop_job=1;
+    if(xTaskCreate([](void*){
+        {std::lock_guard<std::mutex> hold(wifi_start_mutex);
+         SavedStationStopDriver driver;
+         if(network::StopStationChecked(driver)){
+            if(esp_sntp_enabled())esp_sntp_stop();
+            connected=false;runtime().wifi_started=false;saved_wifi_owner.Stopped(true);
+            network::Authority().FinishStop(network::Owner::Saved,true);
+         }}
+        saved_stop_job=0;vTaskDelete(nullptr);
+    },"saved_wifi_stop",4096,nullptr,3,nullptr)!=pdPASS)saved_stop_job=0;
+    return false;
+}
+bool IsWifiConnected(){return connected.load()&&network::Authority().CanAcquire(network::Owner::Saved);}
 bool NetworkWasStarted(){return saved_wifi_owner.WasStarted();}
 SavedWifiPhase SavedNetworkPhase(){return saved_wifi_owner.Phase();}
 uint16_t SavedNetworkDisconnectReason(){return saved_wifi_owner.DisconnectReason();}
 bool RememberedStartAllowed(){
- if(CompanionClosingPending())return false;
+ if(CompanionClosingPending()||!network::Authority().CanAcquire(network::Owner::Saved))return false;
  auto& s=runtime();std::lock_guard<std::mutex> lock(grant_mutex);
  return !s.feature_authority&&!s.grant_connected&&!s.numeric_until&&!s.forget_pending&&!s.public_status_root&&!wifi_survey_busy.load()&&!pending_grant&&s.provisioner.Stopped()&&s.tasks.IsStopped()&&CurrentAudioOwner()==AudioOwner::None;
 }

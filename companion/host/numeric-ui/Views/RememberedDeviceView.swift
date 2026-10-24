@@ -40,7 +40,7 @@ struct RememberedDeviceView: View {
                     Button("Forget on Mac", action: controller.forgetRemembered).disabled(!controller.canForgetRemembered)
                 }
                 if controller.persistentMode && controller.activity != nil {
-                    Text("Listener stays ready for reconnection. Audio remains muted until you press Listen on StackChan; Cancel closes the listener.").font(.caption).fixedSize(horizontal: false, vertical: true)
+                    Text("Listener stays ready for reconnection. Disconnect closes the listener.").font(.caption).fixedSize(horizontal: false, vertical: true)
                 }
                 if controller.persistentMode {
                     Button(controller.activity == nil ? "Cancel" : "Disconnect", action: controller.cancel)

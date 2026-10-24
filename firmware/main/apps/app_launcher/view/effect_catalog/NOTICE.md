@@ -10,4 +10,6 @@ Local modifications: portable RGB565 clipped raster drawing; Arduino drawing/ran
 
 Private source candidate only. The upstream notice refers to original XScreensaver components with MIT/GPL licenses. A component-by-component license/provenance mapping remains required before redistribution; this file does not certify that mapping.
 
-Current selection policy removes125 entire implementations (light/flashing effects and red/blue full backgrounds, including ChessModels). Their stable IDs remain unavailable tombstones;216 catalog routines plus DVD remain. Intentional neutral dark gray is retained. The immutable upstream reference snapshot is provenance only and is not compiled. The generator reads the same exclusion policy and cannot regenerate removed implementations.
+Current selection policy removes 126 entire implementations: the prior 125 light/flashing effects and red/blue full backgrounds (including ChessModels), plus Moire (saved slide ID 226 / catalog index 225) after a reported device freeze. Their stable IDs remain unavailable tombstones; 215 catalog routines plus DVD remain. Moire2 (saved slide ID 225) is a distinct effect and remains available. Intentional neutral dark gray is retained. The immutable upstream reference snapshot is provenance only and is not compiled. The generator reads the same exclusion policy and cannot regenerate removed implementations.
+
+The validation.json file records the original integration benchmark; it does not describe the current filtered catalog or certify device timing.

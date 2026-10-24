@@ -24,6 +24,7 @@ void wipe_config_text(std::string& value) {
 }
 }
 
+static std::atomic<bool> config_server_started{false};
 static const std::string_view _tag              = "HAL-BLE";
 static const uint8_t _ble_fragment_magic0       = 0xAA;
 static const uint8_t _ble_fragment_magic1       = 0x55;
@@ -364,55 +365,81 @@ bool Hal::isBleConnected()
 /*                              App config server                             */
 /* -------------------------------------------------------------------------- */
 #include "utils/wifi_connect/wifi_station.h"
+#include "utils/network_diagnostics/network_diagnostics.h"
 #include <string_view>
 #include <queue>
 #include <mutex>
 #include <atomic>
 
+class WifiConfigServer;
+static std::shared_ptr<WifiConfigServer> retained_config_server;
 class WifiConfigServer {
 public:
+    bool StopChecked() {
+        if (_wifi_station && !_wifi_station->StopChecked()) return false;
+        if (_provisioning_started) { network_diagnostics::finishWifiProvisioning(); _provisioning_started = false; }
+        return true;
+    }
     ~WifiConfigServer() {
-        if (_config_signal_id >= 0) GetHAL().onBleConfigData.disconnect(_config_signal_id);
+        configASSERT(StopChecked());
+        if (_config_connection >= 0) GetHAL().onBleConfigData.disconnect(_config_connection);
         std::lock_guard<std::mutex> lock(_mutex);
         while (!_msg_queue.empty()) { wipe_config_text(_msg_queue.front()); _msg_queue.pop(); }
+        while (!_results.empty()) { wipe_config_text(_results.front().ssid); _results.pop(); }
+        wipe_config_text(_last_result.ssid);
     }
+
     void init()
     {
         if (!network_setup::CredentialPersistenceAllowed()) return;
-        _config_signal_id = GetHAL().onBleConfigData.connect([this](const char* data) { on_config_data(data); });
-        _was_connected = stackchan_ble_is_connected();
+        _config_connection = GetHAL().onBleConfigData.connect([this](const char* data) { on_config_data(data); });
+        _was_connected     = stackchan_ble_is_connected();
 
         // Setup WifiStation callbacks
+        network_diagnostics::prepareWifiProvisioning();
+        _provisioning_started = true;
         _wifi_station = std::make_unique<StackChanWifiStation>();
-        _wifi_station->OnConnect([this](const std::string& ssid) {
-            (void)ssid;
-            mclog::tagInfo(_tag, "wifi Connecting");
-            _is_wifi_connecting = true;
-            notify_state(0, "wifiConnecting");
-        });
+        _wifi_station->OnConnect([](const std::string&) { mclog::tagInfo(_tag, "wifi Connecting"); });
         _wifi_station->OnConnected([this](const std::string& ssid) {
-            (void)ssid;
-            mclog::tagInfo(_tag, "wifi Connected and saved");
-            _is_wifi_connecting = false;
-            notify_state(1, "wifiConnected");
-            GetHAL().onAppConfigEvent.emit(AppConfigEvent::WifiConnected);
-
-            // Wi-Fi setup does not change account/binding state.
+            std::lock_guard<std::mutex> lock(_mutex);
+            _results.push({true, ssid, {}});
         });
-        _wifi_station->OnConnectFailed([this](const std::string& ssid) {
-            (void)ssid;
-            mclog::tagInfo(_tag, "wifi configuration failed");
-            _is_wifi_connecting = false;
-            notify_state(2, "wifiConnectFailed");
-            GetHAL().onAppConfigEvent.emit(AppConfigEvent::WifiConnectFailed);
+        _wifi_station->OnConnectFailed([this](const std::string& ssid, const WifiConnectionFailure& failure) {
+            std::lock_guard<std::mutex> lock(_mutex);
+            _results.push({false, ssid, failure});
         });
 
-        _wifi_station->Start();
+        if (!_wifi_station->Start()) GetHAL().onAppConfigEvent.emit(AppConfigEvent::WifiConnectFailed);
     }
 
     void update()
     {
         if (!_wifi_station || !network_setup::CredentialPersistenceAllowed()) return;
+        _wifi_station->Poll();
+        // ESP Wi-Fi callbacks only queue results; BLE sends and UI signals stay
+        // on this worker rather than blocking the ESP event loop.
+        std::queue<ConnectionResult> results;
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            results.swap(_results);
+        }
+        while (!results.empty()) {
+            const auto& result  = results.front();
+            _is_wifi_connecting = false;
+            wipe_config_text(_last_result.ssid);
+            _last_result        = result;
+            _has_last_result    = true;
+            if (result.success) {
+                notify_state(1, "wifiConnected");
+                // Wi-Fi setup does not change account/binding state.
+                GetHAL().onAppConfigEvent.emit(AppConfigEvent::WifiConnected);
+            } else {
+                notify_failure(result.ssid, result.failure);
+                GetHAL().onAppConfigEvent.emit(AppConfigEvent::WifiConnectFailed);
+            }
+            wipe_config_text(results.front().ssid);
+            results.pop();
+        }
         bool is_connected = stackchan_ble_is_connected();
         if (is_connected != _was_connected) {
             _was_connected = is_connected;
@@ -444,13 +471,22 @@ public:
 
 private:
     static constexpr std::string_view _tag = "WifiConfigServer";
+    struct ConnectionResult {
+        bool success;
+        std::string ssid;
+        WifiConnectionFailure failure;
+    };
+    std::queue<ConnectionResult> _results;
+    ConnectionResult _last_result{};
+    bool _has_last_result  = false;
+    int _config_connection = -1;
+    bool _provisioning_started = false;
+    static constexpr size_t max_queued_messages = 4;
     std::queue<std::string> _msg_queue;
     std::mutex _mutex;
     bool _was_connected = false;
     std::atomic<bool> _is_wifi_connecting{false};
     std::unique_ptr<StackChanWifiStation> _wifi_station;
-    int _config_signal_id = -1;
-    static constexpr size_t max_queued_messages = 4;
 
     void on_config_data(const char* json_data)
     {
@@ -489,6 +525,8 @@ private:
             notify_state(1, "wifiConnected");
         } else if (_is_wifi_connecting) {
             notify_state(0, "wifiConnecting");
+        } else if (_has_last_result && !_last_result.success) {
+            notify_failure(_last_result.ssid, _last_result.failure);
         } else {
             notify_state(3, "wifiDisconnected");
         }
@@ -497,30 +535,47 @@ private:
     void handle_set_wifi(ArduinoJson::JsonObject data)
     {
         if (!_wifi_station || !network_setup::CredentialPersistenceAllowed() || _is_wifi_connecting) {
-            notify_state(2, "wifiConnectFailed: Busy or setup closed");
+            mclog::tagWarn(_tag, "busy connecting, ignoring setWifi");
+            notify_failure(
+                "", {"busy", "The device is already connecting to Wi-Fi. Wait for the current attempt to finish."});
             return;
         }
-        if (data.isNull() || !data["ssid"].is<const char*>() ||
-            (!data["password"].isNull() && !data["password"].is<const char*>())) {
-            notify_state(2, "wifiConnectFailed: Invalid credentials");
+
+        if (data.isNull() || !data["ssid"].is<const char*>() || !data["password"].is<const char*>()) {
+            notify_failure(
+                "", {"invalid_configuration",
+                     "Wi-Fi configuration must contain an SSID and a password string (empty for an open network)."});
             return;
         }
-        network_setup::Credential credential{data["ssid"].as<std::string>(),
-            data["password"].isNull() ? std::string{} : data["password"].as<std::string>()};
+        network_setup::Credential credential{data["ssid"].as<std::string>(), data["password"].as<std::string>()};
         if (!network_setup::Valid(credential)) {
-            wipe_config_text(credential.password);
-            wipe_config_text(credential.ssid);
-            notify_state(2, "wifiConnectFailed: Invalid credentials");
+            wipe_config_text(credential.password); wipe_config_text(credential.ssid);
+            notify_failure("", {"invalid_configuration", "Invalid Wi-Fi credentials."});
             return;
         }
+
+        // Optional App hints used to tell a 5 GHz network apart from a missing
+        // one once the connection fails. Older Apps simply do not send them.
+        WifiBandInfo band;
+        // Ignore missing/malformed optional hints rather than inferring a band
+        // from the phone's current-network flag or coercing a JSON string.
+        const auto frequency = data["frequency"];
+        band.reported_5ghz   = frequency.is<int>() && frequency.as<int>() >= 4900;
+        band.current_network = data["currentNetwork"].as<bool>();
+
+        mclog::tagInfo(_tag, "Wi-Fi configuration received");
+
+        // Notify state: connecting
+        _is_wifi_connecting = true;
+        _has_last_result    = false;
+        notify_state(0, "wifiConnecting");
         GetHAL().onAppConfigEvent.emit(AppConfigEvent::TryWifiConnect);
-        bool accepted = _wifi_station->AddAuth(credential.ssid, credential.password);
-        wipe_config_text(credential.password);
-        wipe_config_text(credential.ssid);
+
+        bool accepted = _wifi_station->AddAuth(credential.ssid, credential.password, band);
+        wipe_config_text(credential.password); wipe_config_text(credential.ssid);
         if (!accepted) {
-            _is_wifi_connecting = false;
-            notify_state(2, "wifiConnectFailed");
-            GetHAL().onAppConfigEvent.emit(AppConfigEvent::WifiConnectFailed);
+            std::lock_guard<std::mutex> lock(_mutex);
+            if (_results.empty()) _results.push({false, "", {"wifi_unavailable", "Wi-Fi setup could not accept the request."}});
         }
     }
 
@@ -530,12 +585,25 @@ private:
         notify_state(4, token.c_str());
     }
 
-    void notify_state(int type, const char* state)
+    void notify_failure(const std::string& ssid, const WifiConnectionFailure& failure)
+    {
+        notify_state(2, "wifiConnectFailed", &failure, ssid);
+    }
+
+    void notify_state(int type, const char* state, const WifiConnectionFailure* failure = nullptr,
+                      const std::string& ssid = {})
     {
         ArduinoJson::JsonDocument doc;
         doc["cmd"]           = "notifyState";
         doc["data"]["type"]  = type;
         doc["data"]["state"] = state;
+        if (failure) {
+            doc["data"]["errorCode"]    = failure->code;
+            doc["data"]["errorMessage"] = failure->message;
+            doc["data"]["reason"]       = failure->reason;
+            doc["data"]["sdkError"]     = failure->sdk_error;
+            doc["data"]["ssid"]         = ssid;
+        }
 
         std::string json_str;
         ArduinoJson::serializeJson(doc, json_str);
@@ -556,7 +624,8 @@ class AppConfigServerWorker : public mooncake::BasicAbility {
 public:
     void onCreate() override
     {
-        _server = std::make_unique<WifiConfigServer>();
+        _server = std::make_shared<WifiConfigServer>();
+        retained_config_server=_server;
         _server->init();
     }
 
@@ -575,7 +644,7 @@ public:
     }
 
 private:
-    std::unique_ptr<WifiConfigServer> _server;
+    std::shared_ptr<WifiConfigServer> _server;
     uint32_t _last_tick = 0;
 };
 
@@ -584,8 +653,7 @@ void Hal::startAppConfigServer()
     if (!network_setup::CredentialPersistenceAllowed()) return;
     // Original onboarding may reenter after BLE disconnect. A session has one
     // server/driver; leaving an active session resets into the stopped shell.
-    static std::atomic<bool> started{false};
-    if (started.exchange(true)) return;
+    if (config_server_started.exchange(true)) return;
     mclog::tagInfo(_tag, "start app config server");
 
     ble_init(true);
@@ -603,4 +671,10 @@ void Hal::resetAppConfiged()
 {
     Settings settings("app_config", true);
     settings.SetBool("is_configed", false);
+}
+
+bool Hal::stopBleServer(){
+    if(!ble_prph_stop_checked())return false;
+    if(retained_config_server&&!retained_config_server->StopChecked())return false;
+    retained_config_server.reset();config_server_started=false;return true;
 }

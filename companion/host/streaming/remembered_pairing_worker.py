@@ -15,6 +15,7 @@ import sys
 import time
 from remembered_pairing import RememberedRegistry,RememberedPairing,RememberedGateway,DEVICE,URI
 from numeric_pairing import strict_json
+from connection_recording import ConnectionRecording,record_event
 
 ROOT=config.ROOT
 PROFILE=config.PROFILE
@@ -49,6 +50,7 @@ def load_trust_profile(profile_path=PROFILE):
     decoded=ssl._ssl._test_decode_cert(str(cert))
     ca_decoded=ssl._ssl._test_decode_cert(str(ca))
     expiry=int(ssl.cert_time_to_seconds(decoded['notAfter']))
+    config.require_server_certificate(cert.read_bytes(),int(ssl.cert_time_to_seconds(decoded['notBefore'])),expiry)
     if type(profile['remember_until_unix']) is not int or profile['remember_until_unix']!=expiry or int(ssl.cert_time_to_seconds(ca_decoded['notAfter']))!=expiry or int(ssl.cert_time_to_seconds(decoded['notBefore']))!=profile['begin'] or not ssl.cert_time_to_seconds(decoded['notBefore'])<=time.time()<expiry:raise ValueError('certificate expired or changed')
     if ('IP Address',config.HOST) not in decoded.get('subjectAltName',()):raise ValueError('wrong endpoint certificate')
     if key.stat().st_mode & 0o077 or base.stat().st_mode & 0o077:raise ValueError('private profile required')
@@ -66,7 +68,8 @@ class RememberedRuntime:
         async with serve(gateway.handle,config.HOST,config.PORT,ssl=self.context,process_request=gateway.process_request,max_size=4112,max_queue=2,compression=None,ping_interval=None,open_timeout=2,close_timeout=.25,server_header=None,logger=logger):yield
 
 class RememberedWorker:
-    def __init__(self,runtime_loader,*,emit):
+    def __init__(self,runtime_loader,*,emit,diagnostic_sink=None):
+        self.diagnostic_sink=diagnostic_sink
         self.runtime_loader=runtime_loader;self.emit=emit;self.runtime=None;self.pairing=None;self.gateway=None;self.task=None;self.cleanup_blocked=False;self.revocation_pending=False;self._activity=None;self._camera_status=None
     def status(self,state,**extra):self.emit(dict(state=state,**extra))
     def load(self):
@@ -137,14 +140,16 @@ class RememberedWorker:
             runtime=self.load()
             if runtime.registry.status()!='active':raise ValueError('enrollment required')
             from home_lab.sessions import ConversationSessions
-            self.gateway=host_audio_device_gateway(runtime.registry,ConversationSessions(),route);self.pairing=None
+            self.gateway=host_audio_device_gateway(runtime.registry,ConversationSessions(),route);self.gateway.diagnostic_sink=self.diagnostic_sink;self.pairing=None
             self.task=asyncio.create_task(self.listen(None));return
         runtime=self.load();self.pairing=RememberedPairing(runtime.registry,emit=self.emit);self.pairing.enroll()
         self.gateway=RememberedGateway(self.pairing);self.task=asyncio.create_task(self.listen(120))
     async def listen(self,budget):
         async def serve_for_budget():
             async with self.runtime.listener(self.gateway):
-                if self.pairing is None:self._activity=None;self.publish_activity()
+                if self.pairing is None:
+                    record_event(self.diagnostic_sink,'listener','ready')
+                    self._activity=None;self.publish_activity()
                 while True:
                     if self.pairing:
                         self.pairing.tick()
@@ -162,8 +167,11 @@ class RememberedWorker:
             else:
                 async with asyncio.timeout(budget):await serve_for_budget()
         except asyncio.CancelledError:raise
-        except Exception:self.status('failed',message='setup_or_transport_failed')
+        except Exception:
+            record_event(self.diagnostic_sink,'listener','setup_failed')
+            self.status('failed',message='setup_or_transport_failed')
         finally:
+            if self.pairing is None:record_event(self.diagnostic_sink,'listener','closed')
             gateway_owner=self.gateway
             try:await self.gateway.close()
             except BaseException:
@@ -232,7 +240,7 @@ async def shutdown_owned(worker,*,sleep=asyncio.sleep):
             worker.status('closed',message='remembered_cleanup_verified');return
 
 async def run():
-    worker=RememberedWorker(RememberedRuntime,emit=output)
+    worker=RememberedWorker(RememberedRuntime,emit=output,diagnostic_sink=ConnectionRecording(ROOT/'.tools/numeric-ui/connection-diagnostics.json'))
     worker.status('idle')
     reader=asyncio.StreamReader(limit=2048);protocol=asyncio.StreamReaderProtocol(reader)
     loop=asyncio.get_running_loop();pipe,_=await loop.connect_read_pipe(lambda:protocol,sys.stdin)

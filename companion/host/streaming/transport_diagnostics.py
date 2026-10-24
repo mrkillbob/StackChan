@@ -1,12 +1,12 @@
 """Fixed-schema diagnostics; no exception text, source, locals or audio retention."""
 import os
 import time
-TYPES={'TimeoutError','PermissionError','ValueError','BufferError','AudioBackpressure','SustainedAudioBackpressure','OSError','ConnectionError','OverflowError','RuntimeError','CancelledError','UnicodeDecodeError','KeyError','TransportComplete','ConnectionClosed','ConnectionClosedError','ConnectionClosedOK','OtherError'}
-PHASES={'authorization','startup','admission','session_create','authority','duration','receive','control','control_send','audio_receive','playback_state','playback_send','audio_pull','audio_send','session_cleanup','receive_cleanup','socket_cleanup','statistics','complete'}
+TYPES={'NativeStartupPending','TimeoutError','PermissionError','ValueError','BufferError','AudioBackpressure','SustainedAudioBackpressure','OSError','ConnectionError','OverflowError','RuntimeError','CancelledError','UnicodeDecodeError','KeyError','TransportComplete','ConnectionClosed','ConnectionClosedError','ConnectionClosedOK','OtherError'}
+PHASES={'native_startup','provider_create','authorization','startup','admission','session_create','authority','duration','receive','control','control_send','audio_receive','playback_state','playback_send','audio_pull','audio_send','session_cleanup','receive_cleanup','socket_cleanup','statistics','complete'}
 CONTROLS={'none','unknown','begin','ack','consent','heartbeat','interrupt'}
 FILES={'gateway_connection.py','transport_test.py','streaming_session.py','codec.py','gateway_admission.py','connection.py','protocol.py','frames.py','native_adapter.py','native_conversation.py'}
-FUNCTIONS={'__init__','_cue_valid','run_connection','handle','_authorized','control','parse_control','receive','playing','outgoing','outgoing_opus','receive_opus','decode','encode','authenticate','statistics','send','recv','close','ensure_open','begin','_active','interrupt','robot_pcm','poll_voice','pull_pcm'}
-COUNTS={'heartbeat_count':0x7fffffff,'sent_speaker_packets':0x7fffffff,'cleanup_fault_count':3,'connection_elapsed_ms':900000,'consent_elapsed_ms':900000,'heartbeat_remaining_ms':2000}
+FUNCTIONS={'poll_control','start_control','prepare','prepared','arm','open_for_approved_test','_take_startup','_build_native_bridge','__init__','_cue_valid','run_connection','handle','_authorized','control','parse_control','receive','playing','outgoing','outgoing_opus','receive_opus','decode','encode','authenticate','statistics','send','recv','close','ensure_open','begin','_active','interrupt','robot_pcm','poll_voice','pull_pcm'}
+COUNTS={'backpressure_mic_packets':0x7fffffff,'backpressure_mic_streak':0x7fffffff,'heartbeat_count':0x7fffffff,'sent_speaker_packets':0x7fffffff,'cleanup_fault_count':3,'connection_elapsed_ms':900000,'consent_elapsed_ms':900000,'heartbeat_remaining_ms':2000}
 
 NATIVE_COUNTS=('input_callbacks','output_callbacks','input_frames','output_frames',
                'output_consumed_frames','input_queue_frames','output_queue_frames',
@@ -41,6 +41,8 @@ def project_diagnostics(value):
                 projected=[_fault_projection(cause) for cause in causes[:2]]
                 if any(projected):fault['causes']=[cause for cause in projected if cause is not None]
             result[key]=fault
+    native=project_native_audio(value.get('native_audio'))
+    if native:result['native_audio']=native
     for key,limit in COUNTS.items():
         number=value.get(key)
         if type(number) is int and 0<=number<=limit:result[key]=number
@@ -75,6 +77,15 @@ class TransportDiagnostics:
     def phase(self):return self.value['phase']
     def set_phase(self,value):self.value['phase']=value if type(value) is str and value in PHASES else 'startup'
     def observe(self,session):
+        # Read only the bridge's already-projected counters, never native IO or PCM.
+        # Observe again on failure before cleanup can discard the exact owner.
+        try:
+            native=project_native_audio(getattr(getattr(session,'bridge',None),'native_audio',None))
+            if native:self.value['native_audio']=native
+            for key in ('backpressure_mic_packets','backpressure_mic_streak'):
+                number=getattr(session,key,None)
+                if type(number) is int and 0<=number<=COUNTS[key]:self.value[key]=number
+        except Exception:pass # Evidence collection cannot change transport authority.
         if getattr(session,'acknowledged',False) is True:self.value['ack_received']=True
         if getattr(session,'armed',False) is True:
             self.value['consent_received']=True

@@ -2,6 +2,8 @@
 #include <apps/common/tool_visual.hpp>
 // Stock Mooncake shell, original native Tools and game implementations.
 #include "stock_apps.h"
+#include <apps/runtime_lifecycle/session.h>
+#include <apps/runtime_lifecycle/cleanup.h>
 #include "sd_status_app.h"
 #include "feature_apps.h"
 #include <apps/local_tools/local_tools_app.h>
@@ -761,11 +763,14 @@ public:
 };
 void DestroyShellForTransfer(mooncake::Mooncake& shell)
 {
-    TearDownShell<LvglLockGuard>(shell,[]{
+    while(!TearDownShell<LvglLockGuard>(shell,[]{
         view::destroy_home_indicator();
         view::destroy_status_bar();
         view::reset_toast_runtime();
-    },[]{mooncake::DestroyMooncake();});
+    },[]{mooncake::DestroyMooncake();})){
+        // TearDownShell released the UI lock; actor/codec owners can make progress.
+        GetHAL().feedTheDog();GetHAL().delay(20);
+    }
 }
 [[noreturn]] void Run()
 {
@@ -773,6 +778,7 @@ void DestroyShellForTransfer(mooncake::Mooncake& shell)
         while (true) GetHAL().delay(1000);
     smooth_ui_toolkit::ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
     smooth_ui_toolkit::ui_hal::on_get_tick([]() { return GetHAL().millis(); });
+    while(true){
     auto& shell = mooncake::GetMooncake();
     auto launcher_owned = std::make_unique<AppLauncher>();
     auto* launcher = launcher_owned.get();
@@ -785,7 +791,7 @@ void DestroyShellForTransfer(mooncake::Mooncake& shell)
     auto setup_owned=std::make_unique<AppSetup>();auto* setup=setup_owned.get();
     int setup_id=shell.installApp(std::move(setup_owned));
     shell.installApp(stock_tools::MakeJointCompanionApp());
-    shell.installApp(direct_usb_pcm::MakeApp());
+    // USB Mira is part of Mira, not a separate launcher entry.
     shell.installApp(stock_tools::MakeLedExpressionApp());
     shell.installApp(std::make_unique<ToolsApp>());
     shell.installApp(std::make_unique<GamesApp>());
@@ -817,17 +823,25 @@ void DestroyShellForTransfer(mooncake::Mooncake& shell)
         }
     }
     if(!stopped_preview&&setup_return){stopped_preview=true;launcher->openApp(setup_id);}
-    if(!stopped_preview&&!GetHAL().isAppConfiged()&&esp_reset_reason()!=ESP_RST_SW){
-        stopped_preview=true;setup->openInitialWorker([]{return stock_services::MakeWorker(Feature::Onboarding);});launcher->openApp(setup_id);
-    }
+    // Setup is an explicit Settings action, including after a watchdog/panic.
+    // A reset must never be mistaken for consent to the Welcome motor test.
     if (!stopped_preview && stock_agent::AutoStartRequested()) {
         stock_agent::AuthorizeAutoStart();
         DestroyShellForTransfer(shell);
-        stock_agent::RunStockAgent();
+        stock_agent::RunStockAgent();continue;
     }
     while (true) {
         GetHAL().feedTheDog();
-        shell.update();
+        if(!runtime_lifecycle::HomeRequested())shell.update();
+        if(runtime_lifecycle::HomeRequested()){
+            auto& session=runtime_lifecycle::Session();
+            if(session.Poll(uint64_t(esp_timer_get_time()/1000),[]{runtime_lifecycle::QuietHardware();},
+                [&]{return runtime_lifecycle::PollSourcesStopped(&shell);},
+                []{return companion::CurrentAudioOwner()==companion::AudioOwner::None;},
+                [&]{runtime_lifecycle::FinalizeNativeUi(true);DestroyShellForTransfer(shell);runtime_lifecycle::FinalizeNativeUi(false);SetSetupContext(false);companion::SetSettingsScope(companion::SettingsScope::None);return true;}))break;
+            GetHAL().delay(20);continue;
+        }
+        if(ConsumeSettingsRequest())launcher->openApp(setup_id);
         led_expression::Tick(static_cast<uint64_t>(esp_timer_get_time()/1000));
         if(auto feature=stock_services::ConsumeRequest()) {
             DestroyShellForTransfer(shell);
@@ -836,12 +850,15 @@ void DestroyShellForTransfer(mooncake::Mooncake& shell)
                 (*feature==Feature::Avatar || *feature==Feature::EzData || *feature==Feature::AppCenter || *feature==Feature::FirmwareCheck) ? companion::SettingsScope::RemoteService : companion::SettingsScope::None);
             SetSetupContext(IsSetupFeature(*feature));
             stock_services::RunFeature(*feature);
+            break; // reconstruct Home with a fresh Mooncake generation
         }
         if (stock_agent::ConsumeStartRequest()) {
             DestroyShellForTransfer(shell);
             stock_agent::RunStockAgent();
+            break; // old shell/launcher/setup pointers are no longer valid
         }
         GetHAL().delay(20);
+    }
     }
 }
 }  // namespace stock_shell
