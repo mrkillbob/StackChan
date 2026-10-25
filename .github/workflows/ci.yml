@@ -3,7 +3,7 @@ name: StackChan CI
 on:
   pull_request:
   push:
-    branches: [main, mira-desk-integration, claude/todo20-companion-lifecycle, codex/w1-consent-revocation, codex/combined-navigation-p2]
+    branches: [main]
   workflow_dispatch:
 
 # PR-controlled code runs only on disposable GitHub-hosted runners.
