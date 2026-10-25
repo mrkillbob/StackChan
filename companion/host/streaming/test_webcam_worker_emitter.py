@@ -7,7 +7,7 @@ from types import SimpleNamespace as NS
 
 from webcam_transport import (
     FRAME_BYTES, HEADER, MAX_U64, MappedCapture, VideoFrame, WebcamAssembler,
-    WebcamPurpose,
+    WebcamPurpose, encode_fragments,
 )
 from webcam_worker_emitter import BoundedWebcamWorkerEmitter
 
@@ -29,12 +29,15 @@ class Tests(unittest.TestCase):
 
     def frame(self, sequence=1, **overrides):
         args = dict(purpose=self.p, sequence=sequence, host_captured=9.99,
-                    bgra=bytes(range(256)) * 1200)
+                    bgra=bytes(range(256)) * 1200, producer_capture_ns=123456789)
         args.update(overrides)
         return VideoFrame(**args)
 
     def offer(self, frame=None, **kwargs):
-        self.e.offer(frame or self.frame(), producer_capture_ns=kwargs.get('ns', 123456789))
+        if 'ns' in kwargs:
+            self.e.offer(frame or self.frame(), producer_capture_ns=kwargs['ns'])
+        else:
+            self.e.offer(frame or self.frame())
 
     def pull(self, **kwargs):
         return self.e.next_event(controls_drained=kwargs.get('control', True),
@@ -191,10 +194,59 @@ class Tests(unittest.TestCase):
     def test_maximum_identifiers_and_uint64_preserve_exact_wire_values(self):
         self.p = WebcamPurpose('d'*64, 'c'*128, 't'*128, MAX_U64, MAX_U64)
         self.e = self.make()
-        self.offer(self.frame(MAX_U64), ns=MAX_U64)
+        self.offer(self.frame(MAX_U64, producer_capture_ns=MAX_U64), ns=MAX_U64)
         h = HEADER.unpack_from(self.decode(self.pull()))
         self.assertEqual(h[5:9], (MAX_U64, MAX_U64, MAX_U64, MAX_U64))
         self.assertEqual(h[11:14], (64,128,128))
+
+    def test_assembler_preserves_original_capture_timestamp_for_emitter(self):
+        captured = MAX_U64 - 7
+        consumer = self.consumer()
+        original = self.frame(producer_capture_ns=captured)
+        for fragment in encode_fragments(self.p, 1, captured, original.bgra):
+            consumer.push(fragment)
+        frame = consumer.take_latest()
+        self.assertEqual(frame.producer_capture_ns, captured)
+        observed = []
+        def mapping(purpose, ns):
+            observed.append(ns)
+            return self.mapped
+        self.e = self.make(map_capture_clock=mapping)
+        self.offer(frame)
+        while (event := self.pull()) is not None:
+            self.assertEqual(HEADER.unpack_from(self.decode(event))[8], captured)
+        self.assertGreater(len(observed), 70)
+        self.assertEqual(set(observed), {captured})
+
+    def test_missing_frame_timestamp_cannot_be_filled_by_legacy_argument(self):
+        legacy = VideoFrame(self.p, 1, 9.99, b'X'*FRAME_BYTES)
+        self.assertIsNone(legacy.producer_capture_ns)
+        for explicit in (False, True):
+            self.e = self.make()
+            with self.assertRaises(ValueError):
+                if explicit:
+                    self.offer(legacy, ns=123456789)
+                else:
+                    self.offer(legacy)
+            self.assertIsNone(self.pull())
+
+    def test_frame_timestamp_mismatch_and_invalid_metadata_reject_before_mapping(self):
+        def forbidden(*args):
+            raise AssertionError('invalid timestamp reached capture mapper')
+        for captured in (0, True, -1, MAX_U64+1, None):
+            self.e = self.make(map_capture_clock=forbidden)
+            with self.assertRaises(ValueError):
+                self.offer(self.frame(producer_capture_ns=captured))
+        self.e = self.make(map_capture_clock=forbidden)
+        with self.assertRaises(ValueError):
+            self.offer(ns=123456788)
+        self.assertIsNone(self.pull())
+
+    def test_original_timestamp_host_mapping_mismatch_rejects(self):
+        self.mapped = MappedCapture(9.98, .001)
+        with self.assertRaises(PermissionError):
+            self.offer(self.frame(producer_capture_ns=MAX_U64))
+        self.assertIsNone(self.pull())
 
     def test_injected_contracts_required_no_default_owner(self):
         with self.assertRaises(TypeError):
