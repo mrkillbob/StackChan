@@ -154,4 +154,45 @@ do { // Concrete adapter forwards gates, start and revoke to the exact pipeline.
     check(adapter.explicitWebcamOn() && pipeline.starts == 1 && adapter.hasActiveBinding)
     check(!adapter.revoke() && adapter.hasPendingStop && !adapter.hasActiveBinding)
 }
+for action in ["read", "eof", "ownerLost"] {
+    // A delayed callback belongs to old binding 1, never replacement 2.
+    let pipeline = CompanionWebcamPipeline(); pipeline.binding = 1
+    var current = true; var pending = 0
+    let adapter = WebcamOwnedPipeAdapter(pipeline: pipeline, current: { current }, cleanupPending: { pending += 1 })
+    pipeline.binding = 2; current = false
+    if action == "read" { check(!adapter.acceptOwnedRead(bytes("stale\n"))) }
+    else if action == "eof" { check(!adapter.ownedEOF()) }
+    else { adapter.ownerLost() }
+    check(pipeline.binding == 2 && !pipeline.stopPending)
+    check(pipeline.revocations == 0 && pipeline.received.isEmpty && pending == 0)
+}
+do { // Even a current process callback cannot deliver to a different purpose.
+    let pipeline = CompanionWebcamPipeline(); pipeline.binding = 1
+    let adapter = WebcamOwnedPipeAdapter(pipeline: pipeline, current: { true }, cleanupPending: {})
+    pipeline.binding = 2
+    check(!adapter.acceptOwnedRead(bytes("foreign-purpose\n")))
+    check(pipeline.binding == 2 && pipeline.revocations == 0 && pipeline.received.isEmpty)
+}
+do { // Construction without an active binding cannot attach itself later.
+    let pipeline = CompanionWebcamPipeline()
+    let adapter = WebcamOwnedPipeAdapter(pipeline: pipeline, current: { true }, cleanupPending: {})
+    pipeline.binding = 2
+    check(!adapter.acceptOwnedRead(bytes("late-binding\n")))
+    check(pipeline.binding == 2 && pipeline.revocations == 0 && pipeline.received.isEmpty)
+}
+do { // Owner validation can synchronously install a replacement before return.
+    let pipeline = CompanionWebcamPipeline(); pipeline.binding = 1
+    let adapter = WebcamOwnedPipeAdapter(pipeline: pipeline, current: {
+        pipeline.binding = 2; return true
+    }, cleanupPending: {})
+    check(!adapter.acceptOwnedRead(bytes("reentrant-replacement\n")))
+    check(pipeline.binding == 2 && pipeline.revocations == 0 && pipeline.received.isEmpty)
+}
+do { // Lost authority still stops the original active owner exactly once.
+    let pipeline = CompanionWebcamPipeline(); pipeline.binding = 1; var pending = 0
+    let adapter = WebcamOwnedPipeAdapter(pipeline: pipeline, current: { false }, cleanupPending: { pending += 1 })
+    check(!adapter.acceptOwnedRead(bytes("retired\n")))
+    adapter.ownerLost(); check(!adapter.ownedEOF())
+    check(pipeline.binding == nil && pipeline.stopPending && pipeline.revocations == 1 && pending == 1)
+}
 print("\(checks) decoder/adapter checks passed; no device/CMIO activation")

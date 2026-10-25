@@ -42,6 +42,12 @@ camera purpose and attaches no extension. Neither new file is instantiated by
 the running application. Both live beside the existing service sources, so the
 normal service source glob includes them in a future reviewed app build.
 
+Construct the pipe adapter after its intended purpose binding is active. It
+snapshots that full binding and cannot adopt a replacement purpose. Delayed
+reads, EOF or owner-loss callbacks retire only that decoder when the shared
+pipeline has moved to a different binding. The existing W1 CI fixture exercises
+these paths through the real pipeline with explicitly synthetic stop evidence.
+
 `WebcamOpenIntentLifecycle.swift` adds a volatile one-shot view-open coordinator
 and `CompanionWebcamOpenIntentAdapter` that forwards to the existing pipeline's
 `ready`, `binding`, `stopPending`, `explicitWebcamOn()` and `revoke()` contract.
