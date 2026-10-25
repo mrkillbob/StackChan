@@ -145,6 +145,7 @@ class JoinedWebcamDelivery:
             self.emitter.revoke()
             if self._task is not None:
                 self._task.cancel()
+            self._begin_cleanup()
             raise
         self.wake()
 
@@ -170,6 +171,12 @@ class JoinedWebcamDelivery:
             self._accepting = False
             self._retired = True
             self.emitter.revoke()
+            # Join after this task returns; _join_owned waits for this task.
+            self._begin_cleanup()
+
+    def _begin_cleanup(self):
+        if self._loop is not None and self._cleanup is None:
+            self._cleanup = self._loop.create_task(self._join_owned())
 
     async def close_join(self):
         if self._loop is None:

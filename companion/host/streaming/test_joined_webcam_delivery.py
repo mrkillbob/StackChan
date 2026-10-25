@@ -106,6 +106,8 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await self.ticks()
         self.assertEqual(len(self.sink.lines), 1)
         self.assertIsInstance(self.owner.failure, PermissionError)
+        await self.owner._cleanup
+        self.assertTrue(self.sink.closed)
         with self.assertRaises(PermissionError):
             self.owner.offer(self.frame(2))
 
@@ -141,6 +143,8 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await self.ticks()
         self.assertEqual(self.sink.lines, [])
         self.assertIsInstance(self.owner.failure, PermissionError)
+        await self.owner._cleanup
+        self.assertTrue(self.sink.closed)
 
     async def test_frame_replacement_during_backpressure_retires_old_event(self):
         self.sink.block = asyncio.Event()
@@ -152,6 +156,8 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await self.ticks()
         self.assertEqual(self.sink.lines, [])
         self.assertIsInstance(self.owner.failure, PermissionError)
+        await self.owner._cleanup
+        self.assertTrue(self.sink.closed)
 
     async def test_failed_join_retains_custody_then_retries_same_owner(self):
         self.producer.fail = True
