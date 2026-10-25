@@ -19,6 +19,15 @@ target_compile_features(motion_math_test PRIVATE cxx_std_17)
 
 add_test(NAME motion_math_test COMMAND $<TARGET_FILE:motion_math_test>)
 
+add_executable(motion_input_test
+    motion_input_test.cpp
+    ../main/stackchan/motion/motion.cpp
+    ../main/stackchan/motion/motion_math.cpp
+)
+target_include_directories(motion_input_test PRIVATE motion-fixtures ../main)
+target_compile_features(motion_input_test PRIVATE cxx_std_17)
+add_test(NAME motion_input_test COMMAND $<TARGET_FILE:motion_input_test>)
+
 add_executable(category_test navigation/category_test.cpp)
 add_executable(raster_test navigation/raster_test.cpp)
 add_executable(catalog_bounded_test navigation/catalog_bounded_test.cpp
