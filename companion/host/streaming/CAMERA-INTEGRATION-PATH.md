@@ -42,6 +42,15 @@ camera purpose and attaches no extension. Neither new file is instantiated by
 the running application. Both live beside the existing service sources, so the
 normal service source glob includes them in a future reviewed app build.
 
+`WebcamOpenIntentLifecycle.swift` adds a volatile one-shot view-open coordinator
+and `CompanionWebcamOpenIntentAdapter` that forwards to the existing pipeline's
+`ready`, `binding`, `stopPending`, `explicitWebcamOn()` and `revoke()` contract.
+Open waits for those existing gates and clear stop custody, consumes the start
+intent before calling the owner, and invalidates its token synchronously on
+close. The coordinator and adapter are not yet instantiated by the running
+application; permission callbacks, producer pump/reader ownership, and admitted
+clock/stop authority remain unintegrated.
+
 The decoder fixtures use Foundation only and a mocked pipeline boundary. They
 exercise fragmented/coalesced lines, exact limits, partial EOF, stale ownership,
 consumer failure, callback reentrancy and stop custody. They are framing and
@@ -51,10 +60,10 @@ adapter tests, not CMIO consumption or camera proof.
 
 An explicitly admitted owner must run the producer pump around the existing
 bound camera methods, retain current identity/timing/permission checks and join
-it on close. A dedicated pipe reader must then bind each read/EOF callback to
-the exact generation and stop/join the same reader before replacing it. The new
+it on close. A dedicated pipe reader must bind each read/EOF callback to the
+exact generation and stop/join the same reader before replacement. The pipe
 adapter revokes only the matching pipeline; it cannot be reused for another
-session. Finally, bridge qualified authority/clock/stop observations into the
-existing `AuthenticatedWebcamOwner` without treating peer fields as evidence.
-Only after those contracts and joins are tested should deliberate open consume
-one volatile capture intent. No extra Stop control is required.
+session. Qualified authority/clock/stop observations still need to bridge into
+the existing `AuthenticatedWebcamOwner` without treating peer fields as
+evidence. Then the application must connect existing view and permission-state
+callbacks to the tested coordinator. No extra Stop control is required.

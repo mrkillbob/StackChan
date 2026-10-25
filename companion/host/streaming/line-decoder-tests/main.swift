@@ -8,11 +8,24 @@ func check(_ predicate: @autoclosure () -> Bool) {
 func bytes(_ text: String) -> Data { Data(text.utf8) }
 
 // Deliberately mocked boundary: these tests do not run a CMIO pipeline.
-final class CompanionWebcamPipeline {
+final class CompanionWebcamPipeline: WebcamOpenIntentPipeline {
     var received = [Data]()
     var revocations = 0
+    var ready = false
+    var binding: Int? = nil
+    var stopPending = false
+    var readyToStart: Bool { ready }
+    var hasActiveBinding: Bool { binding != nil }
+    var hasPendingStop: Bool { stopPending }
+    var starts = 0
     func handleExistingWorkerEvent(_ line: Data) -> Bool { received.append(line); return true }
-    func revoke() -> Bool { revocations += 1; return false }
+    func revoke() -> Bool {
+        revocations += 1
+        guard binding != nil else { return !stopPending }
+        binding = nil; stopPending = true
+        return false
+    }
+    func explicitWebcamOn() -> Bool { starts += 1; binding = starts; return true }
 }
 
 do { // Fragmentation and coalescing; callbacks retain separate complete events.
@@ -86,12 +99,59 @@ do { // Reentrant reader callbacks cannot reorder or share partial state.
     check(stops == 1)
 }
 do {
-    let pipeline = CompanionWebcamPipeline(); var pending = 0
+    let pipeline = CompanionWebcamPipeline(); pipeline.binding = 1; var pending = 0
     let adapter = WebcamOwnedPipeAdapter(pipeline: pipeline, current: { true }, cleanupPending: { pending += 1 })
     check(adapter.acceptOwnedRead(bytes("{\"type\":\"webcam_off\"}\n")))
     check(pipeline.received.count == 1)
     check(adapter.ownedEOF())
     adapter.ownerLost()
     check(pipeline.revocations == 1 && pending == 1)
+}
+do { // Explicit open waits for existing permission/clock/extension gates once.
+    let pipeline = CompanionWebcamPipeline()
+    let lifecycle = WebcamOpenIntentLifecycle(pipeline: pipeline)
+    let first = lifecycle.openView()!
+    check(pipeline.starts == 0)
+    check(!lifecycle.ownerStateChanged(for: first))
+    pipeline.ready = true
+    check(lifecycle.ownerStateChanged(for: first))
+    check(pipeline.starts == 1)
+    check(!lifecycle.ownerStateChanged(for: first))
+    check(lifecycle.closeView(first) == false) // fake pipeline retains cleanup
+    check(pipeline.revocations == 1 && pipeline.stopPending)
+}
+do { // Close cancels pending intent; old owner callbacks cannot restart it.
+    let pipeline = CompanionWebcamPipeline()
+    pipeline.ready = true
+    let lifecycle = WebcamOpenIntentLifecycle(pipeline: pipeline)
+    let old = lifecycle.openView()!
+    check(pipeline.starts == 1)
+    check(!lifecycle.closeView(old) && pipeline.stopPending)
+    check(!lifecycle.ownerStateChanged(for: old))
+    let replacement = lifecycle.openView()!
+    check(pipeline.starts == 1 && !lifecycle.ownerStateChanged(for: replacement))
+    pipeline.stopPending = false // Simulate the joined owner releasing custody.
+    check(lifecycle.ownerStateChanged(for: replacement))
+    check(!lifecycle.ownerStateChanged(for: replacement))
+    check(pipeline.starts == 2)
+}
+do { // Failed start is consumed; same view notifications cannot duplicate it.
+    final class FailingPipeline: WebcamOpenIntentPipeline {
+        var readyToStart = true; var hasActiveBinding = false; var hasPendingStop = false; var starts = 0
+        func explicitWebcamOn() -> Bool { starts += 1; return false }
+        func revoke() -> Bool { true }
+    }
+    let pipeline = FailingPipeline(); let lifecycle = WebcamOpenIntentLifecycle(pipeline: pipeline)
+    let token = lifecycle.openView()!
+    check(pipeline.starts == 1)
+    check(!lifecycle.ownerStateChanged(for: token))
+    check(pipeline.starts == 1)
+}
+do { // Concrete adapter forwards gates, start and revoke to the exact pipeline.
+    let pipeline = CompanionWebcamPipeline(); pipeline.ready = true
+    let adapter = CompanionWebcamOpenIntentAdapter(pipeline: pipeline)
+    check(adapter.readyToStart && !adapter.hasActiveBinding && !adapter.hasPendingStop)
+    check(adapter.explicitWebcamOn() && pipeline.starts == 1 && adapter.hasActiveBinding)
+    check(!adapter.revoke() && adapter.hasPendingStop && !adapter.hasActiveBinding)
 }
 print("\(checks) decoder/adapter checks passed; no device/CMIO activation")
