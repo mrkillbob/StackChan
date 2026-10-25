@@ -39,6 +39,9 @@ class VideoFrame:
     sequence: int
     host_captured: float
     bgra: bytes=field(repr=False)
+    # Original WCV1 producer time, never reconstructed from host/arrival time.
+    # Missing only for backward-compatible synthetic construction; not emittable.
+    producer_capture_ns: int | None = None
 
 class WebcamAssembler:
     """One incomplete frame and latest1. Caller serializes on existing session.
@@ -105,7 +108,7 @@ class WebcamAssembler:
             self._authorized(self._now()) # cancellation during mapping/allocation
             count=len(wire)-end;self.assembly[offset:offset+count]=memoryview(wire)[end:];self.next_offset+=count
             if self.next_offset==FRAME_BYTES:
-                self.latest=VideoFrame(p,sequence,mapped.host_time,bytes(self.assembly));self.assembly=None;self.meta=None;self.next_offset=0;self.last_sequence=sequence;self.deadline=now+2
+                self.latest=VideoFrame(p,sequence,mapped.host_time,bytes(self.assembly),captured_ns);self.assembly=None;self.meta=None;self.next_offset=0;self.last_sequence=sequence;self.deadline=now+2
                 return True
             return False
         except BaseException:

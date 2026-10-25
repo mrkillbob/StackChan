@@ -70,8 +70,55 @@ func sqlite(_ db: OpaquePointer?, _ sql: String) {
 
 @main struct W1LifecycleChecks {
     static func main() {
-        workerPython(); trustMapping(); sqliteReader(); configuredReader(); coldLaunchRoute(); presenceAndManualRoute(); closeReasons(); reconnect(); micStrip(); projection(); consentRevocation(); stopAudioSession()
+        workerPython(); trustMapping(); sqliteReader(); configuredReader(); coldLaunchRoute(); presenceAndManualRoute(); closeReasons(); reconnect(); micStrip(); projection(); consentRevocation(); stopAudioSession(); webcamPipeOwnership()
         print("PASS W1 lifecycle: registry trust, robot-vs-call presence, bounded reconnect, microphone strip, confirmed audio-worker stop; inert fixtures only")
+    }
+
+    static func webcamPipeOwnership() {
+        // Real pipeline/stop-consumer code with explicitly synthetic owner and
+        // attestation fixtures. No native bridge, camera, audio or device IO.
+        final class Owner: AuthenticatedWebcamOwner {
+            var current = WebcamPurposeBinding(device:"fixture",conversation:"conversation",turn:"old",generation:1,epoch:1)
+            var stops = 0
+            var transportClockAndStopQualified: Bool { true }
+            func issueFromExplicitUIIntent() throws -> WebcamPurposeBinding { current }
+            func isCurrent(_ b: WebcamPurposeBinding) -> Bool { b == current }
+            func mapProducerCapture(_ ns: UInt64, binding: WebcamPurposeBinding) throws -> WebcamMappedCapture {
+                WebcamMappedCapture(hostTime:0,uncertainty:0)
+            }
+            func requestCheckedStop(_ b: WebcamPurposeBinding) -> WebcamStopReceipt? { stops += 1; return nil }
+        }
+        for action in ["read", "eof", "ownerLost"] {
+            let owner=Owner(), session=NSObject()
+            let evidence=CameraStopEvidenceConsumer(current:{_ in true},driverOrigin:{_,_ in true},
+                physicalQualification:{ challenge,report in
+                    PhysicalCameraStopAttestation(challenge:challenge,reportSerial:report.reportSerial,
+                        qualificationReference:"synthetic.fixture.only",sensorCeased:true,dmaQuiescent:true,
+                        noNewFrames:true,startBarrierHeld:true)
+                },noNewerStream:{_ in true},clock:{0})
+            var sinkStops=0, pending=0
+            let pipeline=CompanionWebcamPipeline(owner:owner,extensionApproved:true,clock:{0},
+                sinkRevoke:{sinkStops += 1},stopEvidence:evidence)
+            check(pipeline.explicitWebcamOn(), "synthetic old binding opens")
+            let old=owner.current
+            let adapter=WebcamOwnedPipeAdapter(pipeline:pipeline,current:{owner.isCurrent(old)},cleanupPending:{pending += 1})
+            check(!pipeline.revoke(), "old purpose retains pending stop")
+            let context=CameraStopContext(session:session,binding:old,boot:"fixture",authorityID:1,scopeExpires:10)
+            let challenge=evidence.begin(context)!
+            let report=CameraDriverStopReport(binding:old,boot:"fixture",authorityID:1,challenge:challenge.nonce,
+                stopSequence:challenge.sequence,reportSerial:1,outcome:"DriverClosed",required:15,completed:15,
+                revoked:true,joined:true,wiped:true,custodyReleased:true,closeUncertain:false,everStarted:true)
+            let proof=evidence.observe(session:session,report:report)!
+            check(pipeline.confirmCheckedStop(WebcamStopReceipt(binding:old,hardwareClosed:true,qualifiedPhysical:proof)),
+                "only synthetic qualified receipt releases fixture custody")
+            owner.current=WebcamPurposeBinding(device:"fixture",conversation:"conversation",turn:"replacement",generation:2,epoch:1)
+            check(pipeline.explicitWebcamOn(), "replacement binding opens")
+            if action == "read" { check(!adapter.acceptOwnedRead(Data("stale\n".utf8)), "late read rejected") }
+            else if action == "eof" { check(!adapter.ownedEOF(), "late EOF rejected") }
+            else { adapter.ownerLost() }
+            check(pipeline.binding == owner.current && !pipeline.stopPending, "replacement binding survives stale callback")
+            check(owner.stops == 1 && sinkStops == 1 && pending == 0, "stale adapter cannot stop replacement sink or owner")
+        }
     }
 
     static func workerPython() {

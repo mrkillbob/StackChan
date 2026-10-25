@@ -35,15 +35,14 @@ class BoundedWebcamWorkerEmitter:
         self._last_sequence = 0
         self._pending = None
         self._fragments = None
-        self._capture_ns = None
         self._revoked = False
 
     def revoke(self):
         """Discard video only. Does not acknowledge physical camera shutdown."""
         self._revoked = True
-        self._pending = self._fragments = self._capture_ns = None
+        self._pending = self._fragments = None
 
-    def _checked(self, frame, captured_ns):
+    def _checked(self, frame):
         if self._revoked:
             raise PermissionError('emitter revoked')
         now = self._clock()
@@ -53,7 +52,7 @@ class BoundedWebcamWorkerEmitter:
         self._last_clock = now
         if self._current(self._purpose) is not True:
             raise PermissionError('current exact webcam purpose required')
-        mapped = self._map_capture(self._purpose, captured_ns)
+        mapped = self._map_capture(self._purpose, frame.producer_capture_ns)
         if (type(mapped) is not MappedCapture
                 or type(mapped.host_time) not in (int, float)
                 or type(mapped.uncertainty) not in (int, float)
@@ -68,12 +67,13 @@ class BoundedWebcamWorkerEmitter:
         if self._revoked or self._current(self._purpose) is not True:
             raise PermissionError('camera purpose lost during validation')
 
-    def offer(self, frame, *, producer_capture_ns):
-        """Accept a current typed assembler frame plus its original producer time.
+    def offer(self, frame, *, producer_capture_ns=None):
+        """Accept a typed frame retaining its original authenticated producer time.
 
-        The caller must retain original capture metadata; arrival time is not a
-        substitute. A later frame replaces even a partially drained older one.
-        Any rejection revokes this adapter; a new purpose requires a new adapter.
+        Optional legacy keyword is only an equality assertion, never a fallback
+        for missing frame metadata. Arrival time is never substituted. A later
+        frame replaces even a partially drained older one. Any rejection revokes
+        this adapter; a new purpose requires a new adapter.
         """
         try:
             if (type(frame) is not VideoFrame or frame.purpose != self._purpose
@@ -82,18 +82,33 @@ class BoundedWebcamWorkerEmitter:
                     or type(frame.bgra) is not bytes or len(frame.bgra) != FRAME_BYTES
                     or type(frame.host_captured) not in (int, float)
                     or not math.isfinite(frame.host_captured)
-                    or type(producer_capture_ns) is not int
-                    or not 1 <= producer_capture_ns <= MAX_U64):
+                    or type(frame.producer_capture_ns) is not int
+                    or not 1 <= frame.producer_capture_ns <= MAX_U64
+                    or (producer_capture_ns is not None and
+                        (type(producer_capture_ns) is not int
+                         or producer_capture_ns != frame.producer_capture_ns))):
                 raise ValueError('bounded current typed frame required')
-            self._checked(frame, producer_capture_ns)
+            self._checked(frame)
             self._last_sequence = frame.sequence
             self._pending = frame
-            self._capture_ns = producer_capture_ns
             self._fragments = encode_fragments(
-                self._purpose, frame.sequence, producer_capture_ns, frame.bgra)
+                self._purpose, frame.sequence, frame.producer_capture_ns, frame.bgra)
         except BaseException:
             self.revoke()
             raise
+
+    def delivery_guard(self):
+        """Capture exact latest-frame validation for an asynchronous sink.
+
+        Sink must call before every write, including after waiting for capacity.
+        Replaced or revoked events cannot continue on a later worker wakeup.
+        """
+        frame = self._pending
+        def validate():
+            if frame is None or self._pending is not frame:
+                raise PermissionError('delivery frame replaced or retired')
+            self._checked(frame)
+        return validate
 
     def next_event(self, *, controls_drained, audio_drained):
         """Return one compact JSON payload (no newline) or None. Never writes it.
@@ -106,7 +121,7 @@ class BoundedWebcamWorkerEmitter:
             return None
         try:
             # Revalidate even while backpressured so authority cannot linger.
-            self._checked(self._pending, self._capture_ns)
+            self._checked(self._pending)
             if controls_drained is not True or audio_drained is not True:
                 return None
             wire = next(self._fragments)
@@ -119,7 +134,7 @@ class BoundedWebcamWorkerEmitter:
                 raise ValueError('worker line bound exceeded')
             return event
         except StopIteration:
-            self._pending = self._fragments = self._capture_ns = None
+            self._pending = self._fragments = None
             return None
         except BaseException:
             self.revoke()
