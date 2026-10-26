@@ -17,6 +17,7 @@ with tempfile.TemporaryDirectory(prefix='stackchan-synthetic-ci-') as temporary:
     pins.chmod(0o600)
     env = dict(os.environ, STACKCHAN_BINDING_CONFIG=str(pins), PYTHONDONTWRITEBYTECODE='1',
                PYTHONPATH=str(host))
-    result = subprocess.run([sys.executable, '-m', 'unittest', 'test_numeric_pairing_worker', '-v'],
+    result = subprocess.run([sys.executable, '-m', 'unittest', 'test_numeric_pairing_worker',
+                            'test_capture_timing_contract', 'test_joined_webcam_delivery', 'test_webcam_worker_emitter', '-v'],
                             cwd=host / 'streaming', env=env, timeout=120)
     raise SystemExit(result.returncode)
