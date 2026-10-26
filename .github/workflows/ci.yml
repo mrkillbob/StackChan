@@ -99,6 +99,7 @@ jobs:
           "$STACKCHAN_OFFLINE_BUILD_ROOT/RememberedDeviceChecks"
           "$STACKCHAN_OFFLINE_BUILD_ROOT/MiraLifecycleChecks"
           "$STACKCHAN_OFFLINE_BUILD_ROOT/W1LifecycleChecks"
+          "$STACKCHAN_OFFLINE_BUILD_ROOT/WebcamDecoderChecks"
 
   firmware-esp:
     name: Firmware ESP32-S3 build
