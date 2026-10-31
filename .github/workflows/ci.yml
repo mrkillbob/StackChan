@@ -59,6 +59,12 @@ jobs:
         run: |
           echo "Full streaming integration requires private HomeLab source; see scripts/ci/DEPENDENCIES.md."
           "$RUNNER_TEMP/fixture-venv/bin/python" scripts/ci/test_public_python.py
+      - name: Install hash-pinned companion route fixture dependencies
+        run: '"$RUNNER_TEMP/fixture-venv/bin/python" -m pip install --require-hashes --only-binary=:all: -r scripts/ci/requirements-companion-routes.txt'
+      - name: Fail-closed companion route and outbound source fixtures
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: '"$RUNNER_TEMP/fixture-venv/bin/python" scripts/ci/test_companion_routes.py'
       - name: Public gateway startup and cleanup regressions
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -122,7 +128,9 @@ jobs:
           . /opt/esp/idf/export.sh
           cd firmware
           python3 fetch_repos.py
-          idf.py build
+          # Source-only RAM profile; no runtime or real binding is activated.
+          idf.py -DSTACKCHAN_BUILD_PROFILE=custom -DSTACKCHAN_FEATURE_MANIFEST="$PWD/profiles/muse-ram.json" -DSTACKCHAN_MUSE_RAM_ONLY=ON -DSTACKCHAN_ENABLE_LOCAL_PORTRAITS=OFF build
+          grep -Fx "CONFIG_MBEDTLS_HKDF_C=y" sdkconfig
           sha256sum repos.json main/idf_component.yml dependencies.lock build/stack-chan.bin
 
   companion-app:
@@ -168,11 +176,23 @@ jobs:
           fi
           git log --all --full-history --remerge-diff --max-count=1 --format= >/dev/null
           scan_log="$RUNNER_TEMP/gitleaks-history.log"
-          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --no-color --log-opts='--all --full-history --remerge-diff' . 2>&1 | tee "$scan_log"
+          report="$RUNNER_TEMP/gitleaks-redacted.json"
+          scan_status=0
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --no-color --report-format=json --report-path="$report" --log-opts='--all --full-history --remerge-diff' . 2>&1 | tee "$scan_log" || scan_status=$?
+          # Print only finding locations/fingerprints; never Match or Secret.
+          python3 - "$report" <<'REPORT'
+          import json, pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          if path.exists():
+              for item in json.loads(path.read_text()):
+                  print(json.dumps({key: item.get(key) for key in
+                        ('RuleID', 'File', 'StartLine', 'Commit', 'Fingerprint')}, sort_keys=True))
+          REPORT
           if grep -Eq '(^|[[:space:]])(ERR|FTL)([[:space:]]|$)' "$scan_log"; then
             echo "Secret scanner emitted errors; partial history is not a passing scan." >&2
             exit 1
           fi
+          exit "$scan_status"
 
   required:
     name: All required checks pass

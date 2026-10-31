@@ -87,7 +87,7 @@ public:
     StockAgentApp() {
         AppAiAgent stock;
         setAppInfo() = stock.getAppInfo();
-        setAppInfo().name = "Stackchan";
+        setAppInfo().name = "StackChan";
     }
     void onOpen() override {
         waiting_network_=false;action_ = GetHAL().isAppConfiged() ? 2 : 0;

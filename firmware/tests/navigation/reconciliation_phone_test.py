@@ -39,7 +39,9 @@ inline int xEventGroupClearBits(int* p,int bits){return *p&=~bits;}
 inline int xEventGroupSetBits(int* p,int bits){return *p|=bits;}
 inline int xEventGroupGetBits(int* p){return *p;}
 inline int xEventGroupWaitBits(int* p,int,int,int,int){return *p;}
-struct wifi_config_t {struct {unsigned char ssid[32],password[64];}sta;};
+enum wifi_scan_method_t{WIFI_FAST_SCAN=0,WIFI_ALL_CHANNEL_SCAN=1};
+enum wifi_sort_method_t{WIFI_CONNECT_AP_BY_SIGNAL=0,WIFI_CONNECT_AP_BY_SECURITY=1};
+struct wifi_config_t {struct {unsigned char ssid[32],password[64];wifi_scan_method_t scan_method;wifi_sort_method_t sort_method;}sta;};
 struct wifi_ap_record_t{unsigned char ssid[33]{};int8_t rssi=0;uint8_t primary=1;};
 struct wifi_event_sta_connected_t{unsigned char ssid[32];uint8_t ssid_len;};
 struct wifi_event_sta_disconnected_t{uint16_t reason;};
@@ -51,7 +53,7 @@ struct wifi_init_config_t{bool nvs_enable=true;};
 inline int mode=0,fail_stop=0,config_error=0,connect_error=0,netifs=0,config_calls=0,connect_calls=0;
 inline bool initialized=false,ap_live=false,permission=true,save_ok=true,saved=false;
 inline int64_t now=0;inline int saves=0;
-inline wifi_ap_record_t ap{};inline wifi_config_t configured{};
+inline wifi_ap_record_t ap{};inline wifi_config_t configured{};inline wifi_config_t* observed_config=nullptr;inline int policy_checks=0;
 inline std::mutex gate_mutex;inline std::condition_variable gate_cv;
 inline bool racing=false,timeout_waiting=false,commit_waiting=false,allow_timeout=false,allow_commit=false;
 inline thread_local bool timeout_thread=false;
@@ -73,8 +75,12 @@ inline int esp_event_handler_instance_register(int,int,void(*)(void*,int,int,voi
 inline int esp_event_handler_instance_unregister(int,int,void*){return 0;}
 inline int esp_wifi_sta_get_ap_info(wifi_ap_record_t* value){*value=ap;return ap_live?0:ESP_FAIL;}
 inline int esp_wifi_disconnect(){ap_live=false;return 0;}
-inline int esp_wifi_connect(){++connect_calls;return connect_error;}
-inline int esp_wifi_set_config(int,wifi_config_t* config){++config_calls;configured=*config;return config_error;}
+inline int esp_wifi_connect(){
+ if(observed_config){auto* bytes=reinterpret_cast<unsigned char*>(observed_config);for(size_t i=0;i<sizeof(*observed_config);++i)assert(bytes[i]==0);observed_config=nullptr;}
+ ++connect_calls;return connect_error;}
+inline int esp_wifi_set_config(int,wifi_config_t* config){
+ if(config->sta.ssid[0]){assert(config->sta.scan_method==WIFI_ALL_CHANNEL_SCAN);assert(config->sta.sort_method==WIFI_CONNECT_AP_BY_SIGNAL);++policy_checks;observed_config=config;}else observed_config=nullptr;
+ ++config_calls;configured=*config;return config_error;}
 inline int esp_wifi_set_ps(int){return 0;}
 namespace network_setup {
 inline bool CredentialPersistenceAllowed(){return permission;}
@@ -190,4 +196,4 @@ with tempfile.TemporaryDirectory(prefix='stackchan-phone-reconciliation-') as te
     subprocess.run([shutil.which('clang++') or 'c++', '-std=c++17', '-fsanitize=address,undefined',
                     '-I' + str(directory), '-I' + str(firmware / 'main'), str(cpp), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
-print('Full production phone station: diagnostics, credentials, exact link, persistence, epoch and checked stop passed')
+print('All-channel/signal policy and complete config wipe before connect; full production phone station: diagnostics, credentials, exact link, persistence, epoch and checked stop passed')

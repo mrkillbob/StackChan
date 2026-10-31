@@ -3,15 +3,15 @@
 using namespace view::saver;
 int main(){
  static_assert(SlideDurationMs==30000);
- static_assert(AllowedCount==216); // Stable Moire ID226 remains a tombstone.
+ static_assert(AllowedCount==140); // Stable Moire ID226 remains a tombstone.
  assert(!Allowed(226)&&Allowed(225)); // Moire2 stays selectable.
  Selection legacy;legacy.bits.fill(255);legacy.order=Order::Random;
  auto migrated=Selection::fromPayload(legacy.payload());assert(migrated.count()==AllowedCount&&migrated.order==Order::Random);
  for(auto id:ExcludedSlides){assert(!migrated.selected(id));migrated.set(id,true);assert(!migrated.selected(id));assert(Allowed(AdjacentAllowed(id,true))&&Allowed(AdjacentAllowed(id,false)));}
  Selection only_removed;for(auto id:ExcludedSlides)only_removed.bits[id/8]|=1u<<(id%8);
  auto fallback=Selection::fromPayload(only_removed.payload());assert(fallback.count()==1&&fallback.selected(0));
- assert(Allowed(34)&&Allowed(167)&&Allowed(300)&&Allowed(311)); // Crackberg's intentional dark-gray surface stays.
- assert(AdjacentAllowed(12,true)==15&&AdjacentAllowed(14,false)==12);
+ assert(!Allowed(34)&&Allowed(167)&&Allowed(300)&&!Allowed(311)); // Explicit hidden Crackberg/Vines removed; unrequested effects stay.
+ assert(AdjacentAllowed(12,true)==20&&AdjacentAllowed(14,false)==10);
 
  auto all=Selection::defaults();assert(all.count()==AllowedCount&&all.selected(0)&&all.selected(340));
  assert(Selection::decode(all.encode(),0).encode()==all.encode());

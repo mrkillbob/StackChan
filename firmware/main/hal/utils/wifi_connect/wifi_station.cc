@@ -74,6 +74,9 @@ bool StackChanWifiStation::ApplyPending() {
         std::memcpy(config.sta.ssid, ssid_.data(), ssid_.size());
         std::memcpy(config.sta.password, pending_password_.data(), pending_password_.size());
     }
+    // Inspect all matching APs before choosing the strongest signal.
+    config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     auto result = esp_wifi_set_config(WIFI_IF_STA, &config);
     WipeConfig(config);
     if (result != ESP_OK) {

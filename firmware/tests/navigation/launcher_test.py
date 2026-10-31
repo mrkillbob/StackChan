@@ -22,8 +22,8 @@ struct LvglLockGuard {};
 namespace mclog {template<class... T>void tagInfo(T...) {}}
 struct lv_obj_t{};lv_obj_t screen;lv_obj_t* lv_screen_active(){return &screen;}
 namespace mooncake {struct AppProps_t {struct Info{std::string name;}info;int appID;};}
-struct View {std::vector<mooncake::AppProps_t> shown;std::function<void(int)> onAppClicked;int next=-1;
- void init(std::vector<mooncake::AppProps_t> p){shown=std::move(p);}void update(){if(next!=-1){auto id=next;next=-1;onAppClicked(id);}}};
+struct View {std::vector<mooncake::AppProps_t> shown;std::function<void(int)> onAppClicked;int next=-1;std::optional<int> focus;
+ void init(std::vector<mooncake::AppProps_t> p,std::optional<int> preferred=std::nullopt){shown=std::move(p);focus=preferred;}void update(){if(next!=-1){auto id=next;next=-1;onAppClicked(id);}}};
 namespace view {using LauncherView=View;}
 struct Startup{void update(){}bool isDone(){return true;}};
 namespace setup_workers{using StartupWorker=Startup;}
@@ -33,23 +33,36 @@ struct AppLauncher {
  std::optional<launcher_categories::Group> _category;lv_obj_t* _launcher_screen=nullptr;
  int _pending_navigation=-1;unsigned _screensaver_timecount=0;bool _startup_checked=false;
  int opened=-1;
- std::vector<mooncake::AppProps_t> installed={{{"Mira"},1},{{"Stackchan"},2},{{"USB CONTROLS"},3},{{"Settings"},4},{{"AVATAR"},5},{{"GAMES"},6}};
+ std::vector<mooncake::AppProps_t> installed={{{"Mira"},1},{{"Stackchan"},2},{{"USB CONTROLS"},3},{{"Settings"},4},{{"AVATAR"},5},{{"GAMES"},6},{{"Hermes"},7},{{"Muse"},8},{{"Claude"},9},{{"Codex"},10},{{"MUSIC & AUDIO"},11},{{"TOOLS"},12},{{"NETWORK TOOLS"},13}};
  auto getAppProps(){return installed;}auto getAppInfo(){return installed.front().info;}
  void openApp(int id){opened=id;}void screensaver_update(){}
- void onLauncherOpen();void onLauncherRunning();void onLauncherClose();void create_launcher_view();void handle_category_navigation();
+ void onLauncherOpen();void onLauncherRunning();void onLauncherClose();void create_launcher_view(int preferredAppID=launcher_categories::Token(launcher_categories::Group::Companions));void handle_category_navigation();
 };
 '''
 checks=r'''
 int main(){AppLauncher l;for(int round=0;round<10;++round){
- l.onLauncherOpen();assert(!l._category);assert(l._view->shown.front().info.name=="Companions");
+ l.onLauncherOpen();assert(!l._category);assert(l._view->shown.front().info.name=="Companions");assert(l._view->focus==launcher_categories::Token(launcher_categories::Group::Companions));
  l._view->next=launcher_categories::Token(launcher_categories::Group::Companions);l.onLauncherRunning();
- assert(l._category==launcher_categories::Group::Companions);assert(l._view->shown.size()==3);
+ assert(l._category==launcher_categories::Group::Companions);assert(l._view->shown.size()==7);assert(l._view->focus==1);
  assert(l._view->shown[0].info.name=="Mira"&&l._view->shown[1].info.name=="Stackchan");
  l.onLauncherRunning();assert(l._category==launcher_categories::Group::Companions);
- l._view->next=round%2?1:2;l.onLauncherRunning();assert(l.opened==(round%2?1:2));
+ const int routes[]={1,2,7,8,9,10};l._view->next=routes[round%6];l.onLauncherRunning();assert(l.opened==routes[round%6]);
  l.onLauncherClose();assert(!l._view);l.onLauncherOpen();assert(!l._category);
  assert(l._view->shown.front().info.name=="Companions");l.onLauncherClose();
- }std::puts("10 real launcher method cycles passed");}
+ }
+ for(int index=0;index<7;++index){
+  const auto group=static_cast<launcher_categories::Group>(index);
+  l.onLauncherOpen();l._view->next=launcher_categories::Token(group);l.onLauncherRunning();
+  if(l._category){
+   assert(l._view->focus==l._view->shown.front().appID);
+   l._view->next=launcher_categories::Back;l.onLauncherRunning();
+   assert(!l._category&&l._view->focus==launcher_categories::Token(group));
+  }
+  l.onLauncherClose();l.onLauncherOpen();
+  assert(!l._category&&l._view->focus==launcher_categories::Token(launcher_categories::Group::Companions));
+  l.onLauncherClose();
+ }
+ std::puts("10 real launcher cycles and 7 category Home/Back routes passed");}
 '''
 with tempfile.TemporaryDirectory(prefix='stackchan-launcher-test-') as tmp:
  p=Path(tmp);(p/'test.cpp').write_text(fixture+'\n'+'\n'.join(methods)+'\n'+checks)

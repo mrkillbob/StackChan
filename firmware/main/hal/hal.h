@@ -318,7 +318,7 @@ private:
     void xiaozhi_board_init();
     void lvgl_init();
     void xiaozhi_mcp_init();
-    void ble_init(bool useAltUuid);
+    bool ble_init(bool useAltUuid);
     void servo_init();
     void head_touch_init();
     void io_expander_init();

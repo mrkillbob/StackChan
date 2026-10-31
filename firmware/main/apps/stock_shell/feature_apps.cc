@@ -74,12 +74,15 @@ class JointApp final:public mooncake::AppAbility {
   if((id==15||id==16)&&link.MiraReference().empty())lv_obj_add_state(b,LV_STATE_DISABLED);
   lv_obj_add_event_cb(b,Click,LV_EVENT_CLICKED,c.get());storage.push_back(std::move(c));
  }
- void RenderNativeControls(){LvglLockGuard lock;lv_obj_clean(native_controls_);lv_obj_clean(native_actions_);native_callbacks_.clear();auto& link=State().link;rendered_epoch_=companion::FeatureAudioEpoch(link);
-  Button(native_controls_,"Controls",0,0,70,20,native_callbacks_);Button(native_controls_,"Back",74,0,58,1,native_callbacks_);
-  Button(native_actions_,"USB Mira",0,0,96,24,native_callbacks_);
-  if(companion::FeatureAudioStaged(link)){Button(native_actions_,"Connect",100,0,98,22,native_callbacks_);Button(native_actions_,"Listen",202,0,102,23,native_callbacks_);}
+ void RenderNativeControls(){LvglLockGuard lock;lv_obj_clean(native_controls_);lv_obj_clean(native_actions_);native_callbacks_.clear();if(lv_obj_get_width(native_root_)<320||lv_obj_get_height(native_root_)<240)return;auto& link=State().link;rendered_epoch_=companion::FeatureAudioEpoch(link);
+  Button(native_controls_,"More",0,0,70,25,native_callbacks_);Button(native_controls_,"Back",74,0,58,1,native_callbacks_);
+  Button(native_actions_,"Mira",8,196,304,21,native_callbacks_);
+  Button(native_actions_,"USB Mira",8,52,304,24,native_callbacks_);
+  Button(native_actions_,"Feature controls",8,100,304,20,native_callbacks_);
+  if(companion::FeatureAudioStaged(link)){Button(native_actions_,"Connect",8,148,148,22,native_callbacks_);Button(native_actions_,"Listen",164,148,148,23,native_callbacks_);}
  }
- void ShowControls(bool visible){controls_visible_=visible;LvglLockGuard lock;if(visible){lv_obj_add_flag(native_root_,LV_OBJ_FLAG_HIDDEN);lv_obj_add_flag(native_controls_,LV_OBJ_FLAG_HIDDEN);lv_obj_add_flag(native_actions_,LV_OBJ_FLAG_HIDDEN);lv_obj_remove_flag(root_,LV_OBJ_FLAG_HIDDEN);}else{lv_obj_add_flag(root_,LV_OBJ_FLAG_HIDDEN);lv_obj_remove_flag(native_root_,LV_OBJ_FLAG_HIDDEN);lv_obj_remove_flag(native_controls_,LV_OBJ_FLAG_HIDDEN);lv_obj_remove_flag(native_actions_,LV_OBJ_FLAG_HIDDEN);}}
+ void ShowControls(bool visible){controls_visible_=visible;LvglLockGuard lock;if(visible){lv_obj_add_flag(native_root_,LV_OBJ_FLAG_HIDDEN);lv_obj_add_flag(native_controls_,LV_OBJ_FLAG_HIDDEN);lv_obj_add_flag(native_actions_,LV_OBJ_FLAG_HIDDEN);lv_obj_remove_flag(root_,LV_OBJ_FLAG_HIDDEN);}else{lv_obj_add_flag(root_,LV_OBJ_FLAG_HIDDEN);lv_obj_remove_flag(native_root_,LV_OBJ_FLAG_HIDDEN);if(companion::CompanionCharacterVisible())lv_obj_add_flag(native_controls_,LV_OBJ_FLAG_HIDDEN);else lv_obj_remove_flag(native_controls_,LV_OBJ_FLAG_HIDDEN);lv_obj_add_flag(native_actions_,LV_OBJ_FLAG_HIDDEN);}}
+ void ShowRoutes(){ShowControls(false);LvglLockGuard lock;lv_obj_add_flag(native_root_,LV_OBJ_FLAG_HIDDEN);lv_obj_remove_flag(native_actions_,LV_OBJ_FLAG_HIDDEN);}
  void Render(){
   {LvglLockGuard lock;rendered_text_.clear();lv_obj_clean(root_);callbacks_.clear();picker_=nullptr;auto& s=State();shown_code_=s.link.Code();shown_request_=s.link.PairRequest();shown_session_=s.link.SessionId();shown_mira_=s.link.MiraReference()+std::to_string(s.link.MiraEpoch());
    Button(root_,"Back",4,4,60,1,callbacks_);Button(root_,"Mira",248,4,68,21,callbacks_);auto title=lv_label_create(root_);lv_label_set_text(title,Titles[group_]);lv_obj_set_pos(title,72,10);
@@ -125,13 +128,14 @@ auto a=cJSON_GetObjectItemCaseSensitive(p,"scenes");if(cJSON_IsArray(a)&&cJSON_G
  bool PublicStatusIdle(){if(usb_pending_.load()||usb_active_.load())return false;std::lock_guard<std::mutex> lock(action_mutex_);auto& s=State();return !closing_&&!action_&&!s.usb.OwnsDriver()&&!s.pending_wifi&&s.link.Stopped();}
  void Handle(const companion::FeatureUiAction& a,uint64_t now){auto& s=State();auto& link=s.link;
   if(a.id==1){closing_=true;return;
+}if(a.id==25){ShowRoutes();return;
 }if(a.id==20){ShowControls(true);Render();return;
-}if(a.id==21){ShowControls(false);RenderNativeControls();return;
+}if(a.id==21){companion::ShowMiraCharacter();ShowControls(false);RenderNativeControls();return;
 }
   if(a.id==24){usb_pending_=true;return;}
-  if(a.id==22){if(!a.request.empty()&&a.request==link.PairRequest())companion::ConnectFeatureAudio(link,a.request);return;
+  if(a.id==22){if(!a.request.empty()&&a.request==link.PairRequest())companion::ConnectFeatureAudio(link,a.request);ShowControls(false);return;
 }
-  if(a.id==23){if(a.AudioMatches(link.PairRequest(),companion::FeatureAudioEpoch(link)))companion::ListenFeatureAudio(link,a.request,a.epoch);return;
+  if(a.id==23){if(a.AudioMatches(link.PairRequest(),companion::FeatureAudioEpoch(link)))companion::ListenFeatureAudio(link,a.request,a.epoch);ShowControls(false);return;
 }
   bool selectable=companion::FeatureAudioIdle()&&!s.usb.Active()&&!s.pending_wifi&&!link.Pairing(now)&&!link.Ready(now);
   if(a.id==2&&selectable){group_=(group_+1)%Groups.size();scenes_.clear();ready_ui_=false;Render();return;
@@ -168,11 +172,11 @@ public:
   usb_pending_=false;usb_active_=false;usb_return_=false;
   closing_=controls_visible_=ready_ui_=false;rendered_epoch_=UINT32_MAX;{std::lock_guard<std::mutex> lock(action_mutex_);action_.reset();}
   local_notice_=State().CloseFeatures()?"":"USB cleanup pending.";scenes_.clear();scenes_result_.clear();
-  {LvglLockGuard lock;frame_=lv_obj_create(lv_screen_active());lv_obj_add_flag(frame_,LV_OBJ_FLAG_HIDDEN);lv_obj_set_pos(frame_,0,0);lv_obj_set_size(frame_,320,240);lv_obj_set_style_pad_all(frame_,0,0);lv_obj_remove_flag(frame_,LV_OBJ_FLAG_SCROLLABLE);
-   native_root_=lv_obj_create(frame_);lv_obj_set_pos(native_root_,0,0);lv_obj_set_size(native_root_,320,240);lv_obj_set_style_pad_all(native_root_,0,0);
+  {LvglLockGuard lock;frame_=lv_obj_create(lv_screen_active());lv_obj_add_flag(frame_,LV_OBJ_FLAG_HIDDEN);lv_obj_set_pos(frame_,0,0);lv_obj_set_size(frame_,lv_obj_get_width(lv_screen_active()),lv_obj_get_height(lv_screen_active()));lv_obj_set_style_pad_all(frame_,0,0);lv_obj_set_style_border_width(frame_,0,0);lv_obj_remove_flag(frame_,LV_OBJ_FLAG_SCROLLABLE);
+   native_root_=lv_obj_create(frame_);lv_obj_set_pos(native_root_,0,0);lv_obj_set_size(native_root_,lv_obj_get_width(frame_),lv_obj_get_height(frame_));lv_obj_set_style_pad_all(native_root_,0,0);lv_obj_set_style_border_width(native_root_,0,0);lv_obj_remove_flag(native_root_,LV_OBJ_FLAG_SCROLLABLE);
    root_=lv_obj_create(frame_);lv_obj_set_pos(root_,0,0);stock_ui::Page(root_);lv_obj_set_style_pad_all(root_,0,0);lv_obj_remove_flag(root_,LV_OBJ_FLAG_SCROLLABLE);lv_obj_set_style_text_font(root_,&lv_font_montserrat_16,0);
+   native_actions_=lv_obj_create(frame_);lv_obj_set_pos(native_actions_,0,0);lv_obj_set_size(native_actions_,320,240);lv_obj_set_style_pad_all(native_actions_,0,0);lv_obj_set_style_bg_opa(native_actions_,LV_OPA_TRANSP,0);lv_obj_set_style_border_width(native_actions_,0,0);lv_obj_remove_flag(native_actions_,LV_OBJ_FLAG_SCROLLABLE);
    native_controls_=lv_obj_create(frame_);lv_obj_set_pos(native_controls_,188,2);lv_obj_set_size(native_controls_,132,40);lv_obj_set_style_pad_all(native_controls_,0,0);lv_obj_set_style_bg_opa(native_controls_,LV_OPA_TRANSP,0);lv_obj_set_style_border_width(native_controls_,0,0);lv_obj_remove_flag(native_controls_,LV_OBJ_FLAG_SCROLLABLE);
-   native_actions_=lv_obj_create(frame_);lv_obj_set_pos(native_actions_,4,198);lv_obj_set_size(native_actions_,312,40);lv_obj_set_style_pad_all(native_actions_,0,0);lv_obj_set_style_bg_opa(native_actions_,LV_OPA_TRANSP,0);lv_obj_set_style_border_width(native_actions_,0,0);lv_obj_remove_flag(native_actions_,LV_OBJ_FLAG_SCROLLABLE);
   }
   companion::OpenView(native_root_);companion::PublicStatusOwner().Set(this,[](void* owner){return static_cast<JointApp*>(owner)->PublicStatusIdle();});Render();RenderNativeControls();ShowControls(false);
   // Child builders release the LVGL lock independently. Publish only the final
@@ -217,6 +221,7 @@ public:
   if(s.pending_wifi){if(now>=s.expires)s.CloseFeatures();else if(companion::IsWifiConnected()){s.pending_wifi=false;auto network=Board::GetInstance().GetNetwork();if(network){s.network_use=companion::network::Authority().BorrowSaved();if(s.network_use)s.link.StartPair(*network,s.request.request,s.request.boot_nonce,s.scopes,now,s.audio_selected);}}}
   if(s.link.Ready(now)&&s.link.AudioSelected()&&!s.audio_stage_attempted){s.audio_stage_attempted=true;if(!companion::StageFeatureAudioGrant(s.link,now))local_notice_="Audio grant could not be staged; no retry.";RenderNativeControls();}
   companion::TickView(); // Native route supervision and cleanup continue underneath overlay.
+  {LvglLockGuard lock;if(!controls_visible_){if(companion::CompanionCharacterVisible())lv_obj_add_flag(native_controls_,LV_OBJ_FLAG_HIDDEN);else lv_obj_remove_flag(native_controls_,LV_OBJ_FLAG_HIDDEN);}}
   bool ready=s.link.Ready(now);if(ready!=ready_ui_||shown_code_!=s.link.Code()||shown_request_!=s.link.PairRequest()||shown_session_!=s.link.SessionId()||shown_mira_!=s.link.MiraReference()+std::to_string(s.link.MiraEpoch())){ready_ui_=ready;Render();}
   if(rendered_epoch_!=companion::FeatureAudioEpoch(s.link))RenderNativeControls();
   if(group_==2&&ready)ReadScenes();

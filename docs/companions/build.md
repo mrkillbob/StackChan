@@ -1,0 +1,11 @@
+# Source qualification and build
+
+`firmware/CMakePresets.json` defines `muse-ram-reference`: five named companions plus Stock, Music/Games excluded, Muse credentials RAM-only, local portraits off. Bounded motion is independently selectable before flashing and stays off in this preset; it has no automatic startup caller. No profile grants native permissions or creates a transport.
+
+Fetch the pinned public source dependencies using the existing repository workflow, then build with the ESP-IDF environment and `cmake --preset muse-ram-reference -S firmware` (or the equivalent cache values). Supply only separately approved local trust/binding inputs through the existing generator when enabling remembered companion boot. Never commit local config, credentials, keys, SDK tokens or portrait payloads. Default/public CI configuration is a source build, not the private locally qualified device image; byte identity is not claimed across these configurations.
+
+Firmware host checks: prepare the existing exact host fixture dependencies, configure `firmware/tests`, build with assertions enabled and run CTest with no skipped tests. The new declaration-only cJSON header is byte-pinned to the qualified SDK source with its MIT license; the UI fixture does not import a library binary. `CMAKE_COMMAND` and `NINJA_COMMAND` can select existing tools; otherwise PATH is used.
+
+Standalone companion checks: install only the hash-pinned hosted-test dependencies in an isolated environment, then run `python scripts/ci/test_companion_routes.py`. It runs the actual HTTPS/parser/deadline, typed-tool, repeated-turn and signed event/room code with controlled last-mile ports and forbids real socket connects. Actual installed MCP2.3 schema/handler compatibility was separately qualified locally without a server/listener; CI's source tests are not that SDK qualification.
+
+The existing PR workflow uses disposable standard GitHub-hosted runners, read-only repository permissions and pinned actions/container. No private runner, PR-target trigger, deployment, credentials, manual duplicate run or paid service is added. ESP32-S3 CI selects the RAM-only no-Music/no-Games source profile; it does not flash hardware. Runtime native ownership, live credentials, capture/output, physical stop/rearm, exact chat/context and recovery boot require separate acceptance.

@@ -12,6 +12,7 @@
 #include <functional>
 #include <vector>
 #include <memory>
+#include <optional>
 #include "screensaver_styles.hpp"
 
 namespace view {
@@ -31,7 +32,7 @@ public:
 
     std::function<void(int appID)> onAppClicked;
 
-    void init(std::vector<mooncake::AppProps_t> appPorps);
+    void init(std::vector<mooncake::AppProps_t> appPorps,std::optional<int> preferredAppID=std::nullopt);
     void update();
 
 private:

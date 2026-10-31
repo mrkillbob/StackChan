@@ -741,3 +741,5 @@ bool ble_prph_stop_checked(void) {
     const stackchan_ble_callbacks_t revoked={0};stackchan_ble_register_callbacks(&revoked);
     atomic_store(&home_ble_initialized,false);return true;
 }
+
+bool ble_prph_initialized(void){return atomic_load(&home_ble_initialized)&&atomic_load(&home_ble_host_started);}

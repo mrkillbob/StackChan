@@ -220,7 +220,7 @@ struct Ota{static bool Upgrade(const std::string&,std::function<void(int,size_t)
 struct Application{std::unique_ptr<Protocol> protocol_;Audio audio_service_;
  template<class...T>void Alert(T...){}void SetDeviceState(int){}void Schedule(const std::function<void()>& action){action();}
  void Reboot();bool UpgradeFirmware(const std::string&,const std::string&);};
-''' + extract(stock_source, 'void Application::Reboot()') + '\n' + extract(stock_source, 'bool Application::UpgradeFirmware(') + r'''
+''' + extract(stock_source, 'static void ReportAudioStartupFailure(') + '\n' + extract(stock_source, 'void Application::Reboot()') + '\n' + extract(stock_source, 'bool Application::UpgradeFirmware(') + r'''
 void reset(){assert(!pending_boot);home=false;selection_ok=true;boots=reboots=waits=cancel_wait=stops=fail_stop=0;status.clear();}
 int main(){Application app;
  reset();assert(app.UpgradeFirmware("https://example.invalid/fw.bin","test"));assert(boots==1&&reboots==1&&!pending_boot);

@@ -84,3 +84,7 @@ CONFIG_LV_USE_SNAPSHOT=y
 CONFIG_LV_USE_IMGFONT=y
 CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_BUILD_DEMOS=n
+
+# Muse Noise key derivation calls mbedtls_hkdf directly.
+# Declare the primitive explicitly; it is already enabled in the qualified profile.
+CONFIG_MBEDTLS_HKDF_C=y

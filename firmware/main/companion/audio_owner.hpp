@@ -3,8 +3,8 @@
 #include <limits>
 #include <mutex>
 namespace companion {
-enum class AudioOwner { None, Mira, Stock, Native, DirectUsb };
-enum class AudioPurpose { Session, StockRuntime, NativeRuntime, DirectUsbSession, LocalWake, PhysicalListen };
+enum class AudioOwner { None, Mira, Stock, Native, DirectUsb, Muse };
+enum class AudioPurpose { Session, StockRuntime, NativeRuntime, DirectUsbSession, LocalWake, PhysicalListen, MusePushToTalk };
 // Custody identity, not consent: pairing/reconnect or reservation never authorizes capture.
 class AudioLease {
     const void* authority_=nullptr;
@@ -37,7 +37,8 @@ public:
         const bool valid=(owner==AudioOwner::Mira&&(purpose==AudioPurpose::Session||purpose==AudioPurpose::LocalWake||purpose==AudioPurpose::PhysicalListen))||
             (owner==AudioOwner::Stock&&purpose==AudioPurpose::StockRuntime)||
             (owner==AudioOwner::Native&&purpose==AudioPurpose::NativeRuntime)||
-            (owner==AudioOwner::DirectUsb&&purpose==AudioPurpose::DirectUsbSession);
+            (owner==AudioOwner::DirectUsb&&purpose==AudioPurpose::DirectUsbSession)||
+            (owner==AudioOwner::Muse&&purpose==AudioPurpose::MusePushToTalk);
         if(!valid)return false;
         held_.authority_=this;held_.owner_=owner;held_.purpose_=purpose;held_.epoch_=epoch;held_.generation_=++next_;
         revoked_=false;out=held_;return true;

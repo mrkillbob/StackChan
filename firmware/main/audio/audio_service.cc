@@ -109,8 +109,8 @@ bool AudioService::Initialize(AudioCodec* codec) {
     esp_opus_dec_cfg_t opus_dec_cfg = OPUS_DEC_CFG(codec->output_sample_rate(), OPUS_FRAME_DURATION_MS);
     auto ret = esp_opus_dec_open(&opus_dec_cfg, sizeof(esp_opus_dec_cfg_t), &opus_decoder_);
     if (ret!=ESP_AUDIO_ERR_OK || opus_decoder_ == nullptr) {
-        return fail();
         ESP_LOGE(TAG, "Failed to create audio decoder, error code: %d", ret);
+        return fail();
     } else {
         decoder_sample_rate_ = codec->output_sample_rate();
         decoder_duration_ms_ = OPUS_FRAME_DURATION_MS;
@@ -119,8 +119,8 @@ bool AudioService::Initialize(AudioCodec* codec) {
     esp_opus_enc_config_t opus_enc_cfg = AS_OPUS_ENC_CONFIG();
     ret = esp_opus_enc_open(&opus_enc_cfg, sizeof(esp_opus_enc_config_t), &opus_encoder_);
     if (ret!=ESP_AUDIO_ERR_OK || opus_encoder_ == nullptr) {
-        return fail();
         ESP_LOGE(TAG, "Failed to create audio encoder, error code: %d", ret);
+        return fail();
     } else {
         encoder_sample_rate_ = 16000;
         encoder_duration_ms_ = OPUS_FRAME_DURATION_MS;
@@ -133,8 +133,8 @@ bool AudioService::Initialize(AudioCodec* codec) {
             codec->input_sample_rate(), ESP_AUDIO_SAMPLE_RATE_16K, codec->input_channels());
         auto resampler_ret = esp_ae_rate_cvt_open(&input_resampler_cfg, &input_resampler_);
         if (resampler_ret!=ESP_AE_ERR_OK || input_resampler_ == nullptr) {
-            return fail();
             ESP_LOGE(TAG, "Failed to create input resampler, error code: %d", resampler_ret);
+            return fail();
         }
     }
 

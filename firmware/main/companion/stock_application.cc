@@ -36,6 +36,17 @@ static void PollInactiveAudioService(AudioService& service,Display* display,bool
     display->SetStatus(closed?"Audio unavailable":"Audio cleanup pending");
 }
 
+static void ReportAudioStartupFailure(Display* display,bool initialized,bool closed){
+    display->SetStatus(closed?"Audio unavailable":"Audio cleanup pending");
+    if(!closed){
+        display->SetChatMessage("system","Audio cleanup is pending. Session is inactive.");
+    }else if(!initialized){
+        display->SetChatMessage("system","Audio initialization failed. Audio is inactive.");
+    }else{
+        display->SetChatMessage("system","Audio service startup failed. Audio is inactive.");
+    }
+}
+
 
 Application::Application() {
     event_group_ = xEventGroupCreate();
@@ -88,10 +99,11 @@ void Application::Initialize() {
 
     // Setup the audio service
     auto codec = board.GetAudioCodec();
-    if(!audio_service_.Initialize(codec) || !audio_service_.Start()){
+    const bool audio_initialized=audio_service_.Initialize(codec);
+    const bool audio_started=audio_initialized && audio_service_.Start();
+    if(!audio_started){
         const bool closed=audio_service_.Stop();
-        display->SetStatus("Audio unavailable");
-        display->SetChatMessage("system",closed?"Audio failed to start. Session is inactive.":"Audio cleanup pending. Session is inactive.");
+        ReportAudioStartupFailure(display,audio_initialized,closed);
         return; // No callbacks, protocol setup or network start after audio failure.
     }
 
@@ -1057,9 +1069,11 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     if (!upgrade_success) {
         // Upgrade failed, restart audio service and continue running
         ESP_LOGE(TAG, "Firmware upgrade failed, restarting audio service and continuing operation...");
-        if(!audio_service_.Initialize(board.GetAudioCodec()) || !audio_service_.Start()){
+        const bool audio_initialized=audio_service_.Initialize(board.GetAudioCodec());
+        const bool audio_started=audio_initialized && audio_service_.Start();
+        if(!audio_started){
             const bool closed=audio_service_.Stop();
-            display->SetStatus(closed?"Audio unavailable":"Audio cleanup pending");
+            ReportAudioStartupFailure(display,audio_initialized,closed);
             return false;
         }
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER); // Restore power save level

@@ -100,6 +100,7 @@ namespace view {std::function<void()> home;template<class F>void create_home_ind
 namespace companion {
  struct FeatureUiAction{};struct PublicStatus {template<class F>void Set(void*,F){}};
  PublicStatus& PublicStatusOwner(){static PublicStatus s;return s;}
+ bool CompanionCharacterVisible(){return false;}
  void OpenView(lv_obj_t* parent){
   LvglLockGuard lock;auto label=lv_label_create(parent);lv_label_set_text(label,"Connect");
  }
@@ -121,6 +122,7 @@ public:
 ''' + body(joint, 'void ShowControls(bool visible)') + '\n' + body(joint, 'void onOpen()override') + r'''
 };
 int main(){
+ screen.w=320;screen.h=240;
  for(unsigned cycle=0;cycle<20;++cycle){
   JointApp app;unsigned partial_frames=0,final_frames=0;
   on_unlock=[&]{

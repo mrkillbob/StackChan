@@ -18,6 +18,8 @@
 #include "audio_owner.hpp"
 #include "lease_reactive_avatar.hpp"
 #include "companion_reactive_view.hpp"
+#include "provider_room_runtime.h"
+#include "companion_character_layout.hpp"
 #include "reactive_avatar_service.hpp"
 #include "closing_view_policy.hpp"
 #include "usb_owner.hpp"
@@ -27,6 +29,11 @@
 #include "enrollment_observation.hpp"
 #include "public_status_owner.hpp"
 #include "companion_header_layout.hpp"
+#include "companion_details_view.hpp"
+#include "companion_initial_status.hpp"
+#ifndef STACKCHAN_COMPANION_REMEMBERED_RUNTIME
+#define STACKCHAN_COMPANION_REMEMBERED_RUNTIME 0
+#endif
 #include "pair_connection_consent.hpp"
 #include "pair_ui_action.hpp"
 #include "local_tls.h"
@@ -312,6 +319,7 @@ struct Runtime {
     uint64_t saved_deadline=0;uint32_t saved_expiry=0;
     desk::LeaseReactiveAvatar reactive;
     desk::CompanionReactiveView reactive_view;
+    CompanionDetailsView details_view;
     desk::ClosingViewPolicy closing_view;
     lv_obj_t* closing_fallback=nullptr;
     CodecTasks tasks;
@@ -321,6 +329,8 @@ struct Runtime {
     PairConnectionConsent matching_consent;
     PairUiAction pair_ui;
     lv_obj_t* status=nullptr;
+    lv_obj_t *status_panel=nullptr,*connection_badge=nullptr,*presentation_toggle=nullptr,*details_toggle=nullptr,*settings_button=nullptr;
+    int view_width=320,view_height=240;bool view_supported=false,character_surface=false,presentation_prompt=false,remembered_view_pending=false;
     lv_obj_t* diagnostic_button=nullptr;
     lv_obj_t* public_status_button=nullptr;
     lv_obj_t* public_status_root=nullptr;lv_obj_t* public_status_text=nullptr;
@@ -330,7 +340,7 @@ struct Runtime {
     lv_obj_t* pair_button=nullptr;
     lv_obj_t* remember_button=nullptr;lv_obj_t* connect_button=nullptr;lv_obj_t* listen_button=nullptr;
     Runtime(){numeric_pairing.ConfigureRemembered(CurrentPairPolicy,SaveRememberedPair);}
-    const char* message="Mira companion\nChecking saved Mac - capture unverified\nCamera and motion inactive";
+    const char* message=InitialViewStatus(STACKCHAN_COMPANION_REMEMBERED_RUNTIME!=0,RememberedStatusText());
 };
 Runtime& runtime() { static auto* value=new Runtime;return *value; }
 bool CloseRuntimeBorrower(Runtime& state,bool joined){
@@ -382,8 +392,33 @@ void OpenPublicStatus(){
     auto close_label=lv_label_create(close);lv_label_set_text(close_label,"Close status");lv_obj_center(close_label);
     lv_obj_add_event_cb(close,[](lv_event_t*){public_status_close=true;},LV_EVENT_CLICKED,nullptr);RenderPublicStatus();
 }
+void SetViewStatus(lv_obj_t* label,const char* text){
+    if(std::strcmp(lv_label_get_text(label),text)==0)return;
+    lv_label_set_text(label,text);
+    lv_obj_scroll_to_y(lv_obj_get_parent(label),0,LV_ANIM_OFF);
+}
+void UpdateViewPresentation(const char* display,bool comparing,bool camera_prompt,bool closing=false){
+    auto& s=runtime();if(!s.view_supported||!s.status_panel||!s.presentation_toggle)return;
+    const bool prompt=comparing||camera_prompt;
+    const bool controls=!s.reactive.Selected()||prompt||closing;
+    auto visible=[](lv_obj_t* object,bool show){if(!object)return;if(show)lv_obj_remove_flag(object,LV_OBJ_FLAG_HIDDEN);else lv_obj_add_flag(object,LV_OBJ_FLAG_HIDDEN);};
+    s.character_surface=!controls;s.presentation_prompt=prompt;
+    visible(s.status_panel,controls);visible(s.connection_badge,!controls);visible(s.presentation_toggle,controls&&!closing);visible(s.details_toggle,controls&&!closing);visible(s.settings_button,!controls);
+    visible(s.pair_button,controls&&!camera_prompt&&!closing);
+    visible(s.connect_button,controls&&!prompt&&!closing);visible(s.listen_button,controls&&!prompt&&!closing);
+    visible(s.camera_allow_button,camera_prompt&&!closing);visible(s.camera_decline_button,camera_prompt&&!closing);
+    if(prompt||closing)lv_obj_add_state(s.presentation_toggle,LV_STATE_DISABLED);else lv_obj_remove_state(s.presentation_toggle,LV_STATE_DISABLED);
+    lv_label_set_text(lv_obj_get_child(s.presentation_toggle,0),"Mira");
+    const auto compact=desk::CharacterConnectionStatus(display);lv_label_set_text(s.connection_badge,compact.c_str());
+    if(closing)s.details_view.Hide();
+    const auto frame=s.reactive.SnapshotCurrent(uint32_t(esp_timer_get_time()/1000));
+    if(frame.status.stop&&*frame.status.stop)visible(s.connection_badge,false);
+    s.reactive_view.Render(frame,controls);
+}
 void HeaderRect(lv_obj_t* object,header_layout::Rect rect){lv_obj_set_pos(object,rect.x,rect.y);lv_obj_set_size(object,rect.width,rect.height);}
 }
+bool CompanionCharacterVisible(){return runtime().view_supported&&runtime().character_surface;}
+void ShowMiraCharacter(){auto& s=runtime();if(!s.view_supported||s.presentation_prompt||s.closing_view.Pending())return;LvglLockGuard lock;s.reactive_view.SelectRoom(false);s.reactive.Select(true);UpdateViewPresentation(s.message,false,false);}
 bool StageFeatureAudioGrant(FeatureLink& link,uint64_t now){
  if(CompanionClosingPending())return false;
  auto& state=runtime();
@@ -459,46 +494,55 @@ bool RememberedStartAllowed(){
  auto& s=runtime();std::lock_guard<std::mutex> lock(grant_mutex);
  return !s.feature_authority&&!s.grant_connected&&!s.numeric_until&&!s.forget_pending&&!s.public_status_root&&!wifi_survey_busy.load()&&!pending_grant&&s.provisioner.Stopped()&&s.tasks.IsStopped()&&CurrentAudioOwner()==AudioOwner::None;
 }
+void CancelRememberedViewConnection(){runtime().remembered_view_pending=false;}
+// Run only from the first ordinary UI tick after the completed view is published.
+// A close cancels this pending user-open intent before it can start any worker.
+void BeginRememberedViewConnection(){
+    auto& state=runtime();if(!state.remembered_view_pending)return;
+    if(!state.view_supported||state.closing_view.Pending()){state.remembered_view_pending=false;return;}
+    if(!RememberedRuntimeStopped()){state.remembered_view_pending=false;return;}
+    if(!RememberedStartAllowed())return;
+    state.remembered_view_pending=false;BootRememberedRuntime();
+    if(STACKCHAN_COMPANION_REMEMBERED_RUNTIME&&!RememberedRuntimePresent())state.message="Mira companion\nSaved connection unavailable - see Settings\nCapture unverified; camera/motion inactive";
+}
 void OpenView(lv_obj_t* parent) {
     if(runtime().closing_view.Pending()){RenderClosingCompanionView();return;}
-    if(RememberedRuntimeStopped()&&RememberedStartAllowed())BootRememberedRuntime();
+    {LvglLockGuard lock;auto& state=runtime();state.view_supported=false;state.view_width=lv_obj_get_width(parent);state.view_height=lv_obj_get_height(parent);
+     if(!desk::CharacterScreen(state.view_width,state.view_height).supported){
+         state.reactive_view.Detach();state.details_view.Detach();state.character_surface=false;state.remembered_view_pending=false;state.status=state.status_panel=state.connection_badge=state.presentation_toggle=state.details_toggle=state.settings_button=nullptr;
+         auto label=lv_label_create(parent);lv_obj_set_pos(label,0,0);lv_obj_set_size(label,state.view_width,state.view_height);
+         lv_label_set_long_mode(label,LV_LABEL_LONG_WRAP);lv_label_set_text(label,"Mira needs a 320x240 or larger display");return;
+     }state.view_supported=true;}
+    room::SelectProvider(room::Provider::Mira);
+    runtime().remembered_view_pending=true;
     diagnostic_requested=false;
     public_status_requested=false;ClosePublicStatus();
-    auto& state=runtime();state.pair_ui.Reset();auto& status=state.status;
+    auto& state=runtime();state.pair_ui.Reset();state.reactive.Select(true);auto& status=state.status;
     if(state.local_view_generation!=UINT64_MAX)++state.local_view_generation;
     pair_requested=false;connect_requested=false;listen_requested=false;listen_epoch_requested=0;remembered_listen_requested=0;remember_requested=false;forget_requested=false;mute_requested=false;confirm_requested=false;reject_requested=false;
     {LvglLockGuard lock;auto screen=parent;
-     lv_obj_set_style_bg_color(screen,lv_color_hex(0x10232d),0);
-     status=lv_label_create(screen);lv_obj_set_size(status,304,76);lv_label_set_long_mode(status,LV_LABEL_LONG_DOT);lv_obj_set_pos(status,8,78);
+     lv_obj_set_style_bg_color(screen,lv_color_hex(0x000000),0);
+     // A bounded scrollable status area preserves long errors and consent copy.
+     auto status_panel=lv_obj_create(screen);state.status_panel=status_panel;lv_obj_set_pos(status_panel,8,48);lv_obj_set_size(status_panel,304,78);
+     lv_obj_set_style_pad_all(status_panel,0,0);lv_obj_set_style_border_width(status_panel,0,0);lv_obj_set_style_bg_opa(status_panel,LV_OPA_TRANSP,0);
+     status=lv_label_create(status_panel);lv_obj_set_width(status,304);lv_obj_set_height(status,LV_SIZE_CONTENT);lv_label_set_long_mode(status,LV_LABEL_LONG_WRAP);lv_obj_set_pos(status,0,0);
      lv_obj_set_style_text_font(status,&lv_font_montserrat_14,0);
      lv_obj_set_style_text_color(status,lv_color_hex(0xffffff),0);
-     lv_label_set_text(status,"Mira companion\nChecking saved Mac - capture unverified\nCamera and motion inactive");
+     lv_label_set_text(status,InitialViewStatus(STACKCHAN_COMPANION_REMEMBERED_RUNTIME!=0,RememberedStatusText()));
      state.reactive_view.Open(screen);
-     auto face_select=lv_button_create(screen);lv_obj_set_pos(face_select,152,2);lv_obj_set_size(face_select,32,28);
-     lv_obj_set_style_pad_all(face_select,0,0);auto face_label=lv_label_create(face_select);lv_obj_set_style_text_font(face_label,&lv_font_montserrat_14,0);lv_label_set_text(face_label,"Face");lv_obj_center(face_label);
-     lv_obj_add_event_cb(face_select,[](lv_event_t*){auto& r=runtime();r.reactive.Select(!r.reactive.Selected());},LV_EVENT_CLICKED,nullptr);
-     auto diagnostics=lv_button_create(screen);state.diagnostic_button=diagnostics;HeaderRect(diagnostics,header_layout::Export);
-     auto diagnostic_label=lv_label_create(diagnostics);lv_label_set_text(diagnostic_label,"Export");lv_obj_center(diagnostic_label);
-     lv_obj_add_event_cb(diagnostics,[](lv_event_t*){diagnostic_requested=true;},LV_EVENT_CLICKED,nullptr);
-     auto public_status=lv_button_create(screen);state.public_status_button=public_status;HeaderRect(public_status,header_layout::Status);
-     auto public_label=lv_label_create(public_status);lv_label_set_text(public_label,"Status");lv_obj_center(public_label);
-     lv_obj_add_event_cb(public_status,[](lv_event_t*){public_status_requested=true;},LV_EVENT_CLICKED,nullptr);
-     auto remember=lv_button_create(screen);state.remember_button=remember;HeaderRect(remember,header_layout::Remember);
-     auto remember_label=lv_label_create(remember);lv_label_set_text(remember_label,"Pair and Remember");lv_obj_center(remember_label);
-     lv_obj_add_event_cb(remember,[](lv_event_t*){remember_requested=true;},LV_EVENT_CLICKED,nullptr);
-     auto forget=lv_button_create(screen);HeaderRect(forget,header_layout::Forget);
-     auto forget_label=lv_label_create(forget);lv_label_set_text(forget_label,"Forget");lv_obj_center(forget_label);
-     lv_obj_add_event_cb(forget,[](lv_event_t*){forget_requested=true;},LV_EVENT_CLICKED,nullptr);
-     auto connect=lv_button_create(screen);state.connect_button=connect;lv_obj_set_size(connect,140,32);lv_obj_set_pos(connect,8,200);
+     auto face_select=lv_button_create(screen);state.presentation_toggle=face_select;lv_obj_set_pos(face_select,116,2);lv_obj_set_size(face_select,68,40);
+     lv_obj_set_style_pad_all(face_select,0,0);auto face_label=lv_label_create(face_select);lv_obj_set_style_text_font(face_label,&lv_font_montserrat_14,0);lv_label_set_text(face_label,"Controls");lv_obj_center(face_label);
+     lv_obj_add_event_cb(face_select,[](lv_event_t*){auto& r=runtime();r.reactive.Select(!r.reactive.Selected());UpdateViewPresentation(r.message,false,false);},LV_EVENT_CLICKED,nullptr);
+     auto connect=lv_button_create(screen);state.connect_button=connect;lv_obj_set_size(connect,148,40);lv_obj_set_pos(connect,8,174);
      auto connect_label=lv_label_create(connect);lv_label_set_text(connect_label,"Connect");lv_obj_center(connect_label);
      lv_obj_add_event_cb(connect,[](lv_event_t*){connect_requested=true;},LV_EVENT_CLICKED,nullptr);
-     auto listen=lv_button_create(screen);state.listen_button=listen;lv_obj_set_size(listen,140,32);lv_obj_set_pos(listen,168,200);
+     auto listen=lv_button_create(screen);state.listen_button=listen;lv_obj_set_size(listen,148,40);lv_obj_set_pos(listen,164,174);
      auto listen_label=lv_label_create(listen);lv_label_set_text(listen_label,"Listen");lv_obj_center(listen_label);
      lv_obj_add_event_cb(listen,[](lv_event_t* event){auto& r=runtime();const auto view=static_cast<uint64_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event)));if(!view||view!=r.local_view_generation||lv_event_get_target(event)!=r.listen_button)return;auto captured=CaptureRememberedListen();if(RouteRememberedListen(captured,r.grant_connected)){CaptureRememberedLocalProcessingGesture(r.listen_button,view,captured);remembered_listen_requested=captured;}else if(r.socket.GetState()==CompanionSocket::State::ConsentRequired){r.local_intent.CapturePhysicalListen(Runtime::LocalIntentClock(nullptr));listen_epoch_requested=r.socket.Epoch();}},LV_EVENT_CLICKED,reinterpret_cast<void*>(static_cast<uintptr_t>(state.local_view_generation)));
      RegisterRememberedPhysicalControl(listen,state.local_view_generation);
-     auto camera_allow=lv_button_create(screen);state.camera_allow_button=camera_allow;lv_obj_set_size(camera_allow,140,32);lv_obj_set_pos(camera_allow,8,200);
+     auto camera_allow=lv_button_create(screen);state.camera_allow_button=camera_allow;lv_obj_set_size(camera_allow,148,40);lv_obj_set_pos(camera_allow,8,174);
      auto camera_allow_label=lv_label_create(camera_allow);lv_label_set_text(camera_allow_label,"Allow camera");lv_obj_center(camera_allow_label);
-     auto camera_decline=lv_button_create(screen);state.camera_decline_button=camera_decline;lv_obj_set_size(camera_decline,140,32);lv_obj_set_pos(camera_decline,168,200);
+     auto camera_decline=lv_button_create(screen);state.camera_decline_button=camera_decline;lv_obj_set_size(camera_decline,148,40);lv_obj_set_pos(camera_decline,164,174);
      auto camera_decline_label=lv_label_create(camera_decline);lv_label_set_text(camera_decline_label,"Decline camera");lv_obj_center(camera_decline_label);
      lv_obj_add_flag(camera_allow,LV_OBJ_FLAG_HIDDEN);lv_obj_add_flag(camera_decline,LV_OBJ_FLAG_HIDDEN);
      state.socket.PublishCameraPhysicalControls(camera_allow,camera_decline,state.local_view_generation);
@@ -509,23 +553,53 @@ void OpenView(lv_obj_t* parent) {
          else r.socket.CaptureCameraLocalChoice(lv_event_get_target(event),view);};
      lv_obj_add_event_cb(camera_allow,camera_click,LV_EVENT_CLICKED,reinterpret_cast<void*>(static_cast<uintptr_t>(state.local_view_generation)));
      lv_obj_add_event_cb(camera_decline,camera_click,LV_EVENT_CLICKED,reinterpret_cast<void*>(static_cast<uintptr_t>(state.local_view_generation)));
-     if(wake_runtime::kLocalWakeOptInHookEnabled){
-         auto local_wake=lv_button_create(screen);state.local_wake_button=local_wake;lv_obj_set_size(local_wake,72,40);lv_obj_set_pos(local_wake,240,158);
-         auto label=lv_label_create(local_wake);lv_label_set_text(label,"Local\nwake");lv_obj_center(label);
-         state.local_wake.PublishControl(local_wake,state.local_view_generation);
-         lv_obj_add_event_cb(local_wake,[](lv_event_t* event){runtime().local_wake.QueueExplicitLocalWakeOptIn(lv_event_get_target(event),static_cast<uint64_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event))));},LV_EVENT_CLICKED,reinterpret_cast<void*>(static_cast<uintptr_t>(state.local_view_generation)));
-     }
-     auto pair=lv_button_create(screen);state.pair_button=pair;lv_obj_set_size(pair,228,40);lv_obj_set_pos(pair,8,158);
+     auto pair=lv_button_create(screen);state.pair_button=pair;lv_obj_set_size(pair,304,40);lv_obj_set_pos(pair,8,130);
      auto pair_label=lv_label_create(pair);lv_label_set_text(pair_label,"Pair");lv_obj_center(pair_label);
      lv_obj_add_event_cb(pair,[](lv_event_t*){runtime().pair_ui.Click();},LV_EVENT_CLICKED,nullptr);
-     auto mute=lv_button_create(screen);lv_obj_set_pos(mute,244,158);lv_obj_set_size(mute,68,40);
+
+     auto details_toggle=lv_button_create(screen);state.details_toggle=details_toggle;lv_obj_set_pos(details_toggle,8,2);lv_obj_set_size(details_toggle,100,40);
+     auto details_label=lv_label_create(details_toggle);lv_label_set_text(details_label,"Tools");lv_obj_center(details_label);
+     lv_obj_add_event_cb(details_toggle,[](lv_event_t*){runtime().details_view.Toggle();},LV_EVENT_CLICKED,nullptr);
+     auto badge=lv_label_create(screen);state.connection_badge=badge;lv_obj_set_pos(badge,8,state.view_height-24);lv_obj_set_size(badge,state.view_width-152,20);
+     lv_obj_set_style_bg_color(badge,lv_color_hex(0x000000),0);lv_obj_set_style_bg_opa(badge,200,0);lv_obj_set_style_text_color(badge,lv_color_hex(0xffffff),0);
+     lv_label_set_long_mode(badge,LV_LABEL_LONG_DOT);lv_obj_set_style_text_font(badge,&lv_font_montserrat_14,0);
+     auto settings=lv_button_create(screen);state.settings_button=settings;lv_obj_set_pos(settings,state.view_width-88,8);lv_obj_set_size(settings,80,36);
+     lv_obj_set_style_bg_color(settings,lv_color_hex(0x000000),0);lv_obj_set_style_bg_opa(settings,180,0);lv_obj_set_style_pad_all(settings,0,0);
+     auto settings_label=lv_label_create(settings);lv_label_set_text(settings_label,"Settings");lv_obj_center(settings_label);
+     lv_obj_add_event_cb(settings,[](lv_event_t*){auto& r=runtime();r.reactive.Select(false);UpdateViewPresentation(r.message,false,false);},LV_EVENT_CLICKED,nullptr);
+     auto details=state.details_view.Open(screen);
+     auto diagnostics=lv_button_create(details);state.diagnostic_button=diagnostics;HeaderRect(diagnostics,header_layout::Export);
+     auto diagnostic_label=lv_label_create(diagnostics);lv_label_set_text(diagnostic_label,"Export");lv_obj_center(diagnostic_label);
+     lv_obj_add_event_cb(diagnostics,[](lv_event_t*){runtime().details_view.Hide();diagnostic_requested=true;},LV_EVENT_CLICKED,nullptr);
+     auto public_status=lv_button_create(details);state.public_status_button=public_status;HeaderRect(public_status,header_layout::Status);
+     auto public_label=lv_label_create(public_status);lv_label_set_text(public_label,"Status");lv_obj_center(public_label);
+     lv_obj_add_event_cb(public_status,[](lv_event_t*){runtime().details_view.Hide();public_status_requested=true;},LV_EVENT_CLICKED,nullptr);
+     auto remember=lv_button_create(details);state.remember_button=remember;HeaderRect(remember,header_layout::Remember);
+     auto remember_label=lv_label_create(remember);lv_label_set_text(remember_label,"Pair and Remember");lv_obj_center(remember_label);
+     lv_obj_add_event_cb(remember,[](lv_event_t*){runtime().details_view.Hide();remember_requested=true;},LV_EVENT_CLICKED,nullptr);
+     auto forget=lv_button_create(details);HeaderRect(forget,header_layout::Forget);
+     auto forget_label=lv_label_create(forget);lv_label_set_text(forget_label,"Forget");lv_obj_center(forget_label);
+     lv_obj_add_event_cb(forget,[](lv_event_t*){runtime().details_view.Hide();forget_requested=true;},LV_EVENT_CLICKED,nullptr);
+     if(wake_runtime::kLocalWakeOptInHookEnabled){
+         auto local_wake=lv_button_create(details);state.local_wake_button=local_wake;HeaderRect(local_wake,header_layout::LocalWake);
+         auto label=lv_label_create(local_wake);lv_label_set_text(label,"Local\nwake");lv_obj_center(label);
+         state.local_wake.PublishControl(local_wake,state.local_view_generation);
+         lv_obj_add_event_cb(local_wake,[](lv_event_t* event){runtime().details_view.Hide();runtime().local_wake.QueueExplicitLocalWakeOptIn(lv_event_get_target(event),static_cast<uint64_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(event))));},LV_EVENT_CLICKED,reinterpret_cast<void*>(static_cast<uintptr_t>(state.local_view_generation)));
+     }
+     auto room_button=lv_button_create(details);HeaderRect(room_button,header_layout::Room);
+     auto room_label=lv_label_create(room_button);lv_label_set_text(room_label,"Room");lv_obj_center(room_label);
+     lv_obj_add_event_cb(room_button,[](lv_event_t*){auto& r=runtime();r.details_view.Hide();r.reactive.Select(true);r.reactive_view.SelectRoom(true);UpdateViewPresentation(r.message,false,false);},LV_EVENT_CLICKED,nullptr);
+     state.reactive_view.SetDecisionSink([](const std::string& choice,const std::string& ticket){return room::QueueDecision(room::Provider::Mira,choice,ticket,uint64_t(esp_timer_get_time()/1000));});
+     auto mute=lv_button_create(details);HeaderRect(mute,header_layout::Mute);
      auto mute_label=lv_label_create(mute);lv_label_set_text(mute_label,"Mute");lv_obj_center(mute_label);
-     lv_obj_add_event_cb(mute,[](lv_event_t*){runtime().reactive.RequestStop();InterruptRememberedRuntimeImmediately();physical_mute_requested=true;mute_requested=true;},LV_EVENT_CLICKED,nullptr);
-     lv_obj_add_event_cb(mute,[](lv_event_t*){runtime().reactive.RequestStop();InterruptRememberedRuntimeImmediately();physical_mute_requested=true;mute_requested=true;},LV_EVENT_LONG_PRESSED,nullptr);
+     lv_obj_add_event_cb(mute,[](lv_event_t*){runtime().details_view.Hide();runtime().reactive.RequestStop();InterruptRememberedRuntimeImmediately();physical_mute_requested=true;mute_requested=true;},LV_EVENT_CLICKED,nullptr);
+     lv_obj_add_event_cb(mute,[](lv_event_t*){runtime().details_view.Hide();runtime().reactive.RequestStop();InterruptRememberedRuntimeImmediately();physical_mute_requested=true;mute_requested=true;},LV_EVENT_LONG_PRESSED,nullptr);
     }
-    state.message="Mira companion\nChecking saved Mac - capture unverified\nCamera and motion inactive";
+    state.message=InitialViewStatus(STACKCHAN_COMPANION_REMEMBERED_RUNTIME!=0,RememberedStatusText());
+    if(STACKCHAN_COMPANION_REMEMBERED_RUNTIME&&!RememberedStatusText())state.message="Mira companion\nOpening saved connection\nCapture unverified; camera/motion inactive";
+    {LvglLockGuard lock;SetViewStatus(state.status,state.message);UpdateViewPresentation(state.message,false,false);}
 }
-static bool CloseViewOwned() {MuteRememberedRuntime();TickRememberedRuntime();led_expression::PublishStatus(led_expression::Status::None);
+static bool CloseViewOwned() {room::DisconnectProvider(room::Provider::Mira);CancelRememberedViewConnection();MuteRememberedRuntime();TickRememberedRuntime();led_expression::PublishStatus(led_expression::Status::None);
     diagnostic_requested=false;
     public_status_requested=false;ClosePublicStatus();
     auto& state=runtime();state.local_wake.PublishControl(nullptr,0);RegisterRememberedPhysicalControl(nullptr,0);
@@ -553,6 +627,8 @@ void TickView() {
         return;
     }
     TickRememberedRuntime();
+    if(!runtime().view_supported)return;
+    BeginRememberedViewConnection();
     auto& state=runtime();if(!state.status)return;
     if(state.local_wake_button)state.local_wake.PublishControl(state.local_wake_button,state.local_view_generation);
     state.local_wake.StartPending();
@@ -569,6 +645,7 @@ void TickView() {
     auto& wifi_started=state.wifi_started;auto& grant_connected=state.grant_connected;
     auto& connect_gate=state.connect_gate;auto& message=state.message;auto status=state.status;
     uint64_t now=esp_timer_get_time()/1000;
+    {LvglLockGuard lock;state.reactive_view.SetProviderSnapshot(room::ViewProvider(room::Provider::Mira,now),now);}
     switch(state.pair_ui.Take(state.numeric_pairing.Code(),state.numeric_request.request,state.numeric_pairing.AudioRequested())) {
         case PairUiAction::Action::Pair:pair_requested=true;break;
         case PairUiAction::Action::Confirm:confirm_requested=true;break;
@@ -796,17 +873,13 @@ void TickView() {
             auto connect_label=lv_obj_get_child(state.connect_button,0);lv_label_set_text(connect_label,RouteRememberedConnect(RememberedRuntimePresent(),diagnostic_pending,state.feature_authority!=nullptr,grant_connected,state.numeric_until!=0)?"Sync":"Connect");
             auto pair_label=lv_obj_get_child(state.pair_button,0);
             lv_label_set_text(pair_label,compare&&state.remember_enrollment?"Pair and Remember":compare?(state.numeric_pairing.AudioRequested()?"Pair & authorize mic/speaker":"Pair - confirm code"):"Pair");
-            const bool face_selected=state.reactive.Selected()&&!compare;
-            lv_obj_set_size(status,face_selected?220:304,76);
             if(state.audio_lease)state.reactive.UpdateMediaEpoch(state.audio_lease,socket.Epoch());
-            state.reactive_view.Render(state.reactive.SnapshotCurrent(uint32_t(now)),compare);
             if(!compare&&RouteRememberedStatus(RememberedRuntimePresent(),diagnostic_pending,state.feature_authority!=nullptr,grant_connected,state.numeric_until!=0)){if(auto text=RememberedStatusText())message=text;}
             std::string camera_prompt;
             if(!compare&&!state.public_status_root)camera_prompt=RememberedTransportActive()?ShowRememberedCameraPermission():socket.ShowCameraPermission();
             else{socket.HideCameraPermission();HideRememberedCameraPermission();}
-            for(auto object:{state.camera_allow_button,state.camera_decline_button}){if(camera_prompt.empty())lv_obj_add_flag(object,LV_OBJ_FLAG_HIDDEN);else lv_obj_remove_flag(object,LV_OBJ_FLAG_HIDDEN);}
-            for(auto object:{state.connect_button,state.listen_button}){if(camera_prompt.empty())lv_obj_remove_flag(object,LV_OBJ_FLAG_HIDDEN);else lv_obj_add_flag(object,LV_OBJ_FLAG_HIDDEN);}
-            std::string display=compare?"Compare code: "+state.numeric_pairing.Code()+(state.numeric_pairing.AudioRequested()?"\nConfirm permits local mic/speaker\nfor this temporary session":"\nPairing only - audio stays muted")+(state.numeric_pairing.Confirmed()?"\nRobot confirmed - confirm on Mac":"\nCompare on Mac, then tap Pair"):message;if(!camera_prompt.empty())display=camera_prompt;lv_label_set_text(status,display.c_str());
+            state.details_view.UpdatePrompt(compare?"pair:"+state.numeric_pairing.Code():camera_prompt.empty()?"":"camera:"+camera_prompt);
+            std::string display=compare?"Compare code: "+state.numeric_pairing.Code()+(state.numeric_pairing.AudioRequested()?"\nConfirm permits local mic/speaker\nfor this temporary session":"\nPairing only - audio stays muted")+(state.numeric_pairing.Confirmed()?"\nRobot confirmed - confirm on Mac":"\nCompare on Mac, then tap Pair"):message;if(!camera_prompt.empty())display=camera_prompt;SetViewStatus(status,display.c_str());UpdateViewPresentation(display.c_str(),compare,!camera_prompt.empty());
         }
         diagnostic::Stage(diagnostic::Task::Main,diagnostic::StageCode::LvglReleased);
  }
@@ -828,13 +901,13 @@ void RenderClosingCompanionView(){
     if(state.closing_fallback)lv_label_set_text(state.closing_fallback,state.closing_view.Text());
     else if(state.status){
         lv_label_set_text(state.status,"Mic/output state unverified\nStop unconfirmed - retrying closure");
-        state.reactive_view.Render(state.reactive.SnapshotCurrent(uint32_t(esp_timer_get_time()/1000)),false);
+        UpdateViewPresentation("Mic/output state unverified\nStop unconfirmed - retrying closure",false,false,true);
     }
 }
 void DetachClosingCompanionView(){
     auto& state=runtime();state.closing_view.Retain();
     {LvglLockGuard lock;
-        state.reactive_view.Detach();state.status=nullptr;
+        CancelRememberedViewConnection();state.details_view.Detach();state.reactive_view.Detach();state.view_supported=false;state.status=nullptr;state.status_panel=state.connection_badge=state.presentation_toggle=state.details_toggle=nullptr;
         state.diagnostic_button=state.public_status_button=state.pair_button=state.remember_button=state.connect_button=state.listen_button=nullptr;
         if(!state.closing_fallback){
             state.closing_fallback=lv_label_create(lv_layer_top());lv_obj_set_pos(state.closing_fallback,0,188);lv_obj_set_size(state.closing_fallback,320,52);

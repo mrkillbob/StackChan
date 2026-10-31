@@ -1,3 +1,4 @@
+#include <build_profiles/features.hpp>
 #include "local_tools_app.h"
 #include "local_audio.h"
 #include "audio_view.hpp"
@@ -110,5 +111,11 @@ public:
  void onClose()override{if(owned_){AudioTools().RequestStop();AudioTools().PollStopped();}LvglLockGuard lock;if(root_)lv_obj_delete(root_);root_=nullptr;callbacks_.clear();canvas_pixels_.clear();action_=0;}
 };
 std::unique_ptr<mooncake::AppAbility> MakeAudioToolsApp(){return std::make_unique<AudioToolsApp>();}
-std::unique_ptr<mooncake::AppAbility> MakeApp(){return MakePetApp();}
+std::unique_ptr<mooncake::AppAbility> MakeApp(){
+#if STACKCHAN_BUILD_GAMES
+ return MakePetApp();
+#else
+ return {}; // Legacy pet alias cannot pull a parked games module into music.
+#endif
+}
 }

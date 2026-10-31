@@ -97,9 +97,9 @@ int main(){
     const auto first_frame=guarded;
     player.onRender(0.06f);
     assert(!player._effect_failed&&player._animation_ms==elapsed+60);
-    // Visible but frozen consumers must fail too. Gears changes geometry each
+    // Visible but frozen consumers must fail too. Carousel changes geometry each
     // frame; intentionally static catalog entries have no such requirement.
-    if(std::string(effect_catalog::Name(uint16_t(id-1)))=="Gears")assert(guarded!=first_frame);
+    if(std::string(effect_catalog::Name(uint16_t(id-1)))=="Carousel")assert(guarded!=first_frame);
    }
    Preview preview;preview.id_=id;preview.canvas_=&canvas;preview.count_=&count;
    preview.pixels_=guarded.data()+1;preview.thumbnail_=thumbnail.data();
@@ -109,15 +109,15 @@ int main(){
    if(!canvas.hidden){
     const auto first_frame=guarded;
     preview.preview(elapsed+60);assert(!preview.preview_failed_);
-    if(std::string(effect_catalog::Name(uint16_t(id-1)))=="Gears")assert(guarded!=first_frame);
+    if(std::string(effect_catalog::Name(uint16_t(id-1)))=="Carousel")assert(guarded!=first_frame);
    }
    if(std::any_of(thumbnail.begin(),thumbnail.end(),[](uint16_t v){return v!=0;}))++painted;
    assert(guarded.front()==0xa55a&&guarded.back()==0xa55a);
   }
  }
  std::printf("selectable=%u playback_visible=%u preview_visible=%u painted_samples=%u\n",selectable,playback_visible,preview_visible,painted);std::fflush(stdout);
- assert(selectable==215);
- assert(playback_visible==215);assert(preview_visible==215);assert(painted>215);
+ assert(selectable==view::saver::AllowedCount-1);
+ assert(playback_visible==selectable);assert(preview_visible==selectable);assert(painted>selectable);
  // Invalid modes remain actual errors; valid slow timing must not reach this UI.
  lv_obj_t canvas;std::vector<uint16_t> pixels(320*240);
  Screensaver invalid;invalid._style=static_cast<view::saver::Style>(65535);

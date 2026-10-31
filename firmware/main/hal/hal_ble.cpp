@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 #include "hal.h"
+#include <companion/ble_owner.hpp>
+#include <mutex>
 #include "utils/bleprph/bleprph.h"
 #include "utils/secret_logic/secret_logic.h"
 #include <ArduinoJson.hpp>
@@ -25,6 +27,9 @@ void wipe_config_text(std::string& value) {
 }
 
 static std::atomic<bool> config_server_started{false};
+static std::mutex stock_ble_mutex;
+static companion::BleLease stock_ble_lease;
+static bool stock_ble_alt_profile=false;
 static const std::string_view _tag              = "HAL-BLE";
 static const uint8_t _ble_fragment_magic0       = 0xAA;
 static const uint8_t _ble_fragment_magic1       = 0x55;
@@ -323,8 +328,13 @@ static uint8_t _handle_ble_battery_read(void)
     return 96;
 }
 
-void Hal::ble_init(bool useAltUuid)
+bool Hal::ble_init(bool useAltUuid)
 {
+    std::lock_guard<std::mutex> lock(stock_ble_mutex);
+    auto& authority=companion::CommonBleAuthority();
+    if(stock_ble_lease)return stock_ble_alt_profile==useAltUuid&&authority.Current(stock_ble_lease);
+    if(!authority.Acquire(companion::BleOwner::Stock,stock_ble_lease))return false;
+    stock_ble_alt_profile=useAltUuid;
     mclog::tagInfo(_tag, "init");
 
     static stackchan_ble_callbacks_t ble_callbacks = {
@@ -347,7 +357,10 @@ void Hal::ble_init(bool useAltUuid)
 
     ble_prph_init(useAltUuid);
 
+    const bool started=ble_prph_initialized();
+    if(!started)authority.Revoke(stock_ble_lease); // Keep failed custody until checked cleanup.
     mclog::tagInfo(_tag, "init done");
+    return started;
 }
 
 void Hal::startBleServer()
@@ -656,7 +669,7 @@ void Hal::startAppConfigServer()
     if (config_server_started.exchange(true)) return;
     mclog::tagInfo(_tag, "start app config server");
 
-    ble_init(true);
+    if(!ble_init(true)){config_server_started=false;return;}
 
     mooncake::GetMooncake().extensionManager()->createAbility(std::make_unique<AppConfigServerWorker>());
 }
@@ -674,7 +687,12 @@ void Hal::resetAppConfiged()
 }
 
 bool Hal::stopBleServer(){
+    std::lock_guard<std::mutex> lock(stock_ble_mutex);
+    auto& authority=companion::CommonBleAuthority();
+    if(authority.Owner()==companion::BleOwner::Muse)return false;
+    if(stock_ble_lease)authority.Revoke(stock_ble_lease);
     if(!ble_prph_stop_checked())return false;
     if(retained_config_server&&!retained_config_server->StopChecked())return false;
-    retained_config_server.reset();config_server_started=false;return true;
+    retained_config_server.reset();config_server_started=false;
+    return !stock_ble_lease||authority.Release(stock_ble_lease,true);
 }

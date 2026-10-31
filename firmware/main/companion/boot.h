@@ -46,3 +46,9 @@ void CopyWifiSurveySnapshot(survey::Snapshot& output);
 }
 
 namespace companion { bool RememberedStartAllowed(); }
+
+namespace companion {
+// Presentation-only routing for the wrapper; no owner, capture or pairing action.
+bool CompanionCharacterVisible();
+void ShowMiraCharacter();
+}

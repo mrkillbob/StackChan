@@ -101,5 +101,39 @@ add_test(NAME moire_removal_test COMMAND moire_removal_test)
 add_test(NAME companion_home_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/companion_home_test.py)
 
+add_test(NAME companion_layout_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/companion_layout_test.py)
+add_test(NAME companion_native_layout_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/companion_native_layout_test.py)
+add_test(NAME companion_status_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/companion_status_test.py)
+
 add_test(NAME espnow_stop_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/navigation/espnow_stop_test.py)
+
+add_test(NAME provider_companion_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/provider_companion_test.py)
+
+add_test(NAME provider_room_view_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/navigation/provider_room_view_test.py)
+
+# Portable static contracts: no runtime authority, device or external artwork.
+add_test(NAME adapter_boundary_test COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_LIST_DIR}/test_adapter_boundary.py)
+add_test(NAME portrait_geometry_test COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_LIST_DIR}/test_portrait_geometry.py)
+add_test(NAME voice_profile_test COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_LIST_DIR}/test_voice_profile.py)
+add_test(NAME voice_context_test COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_LIST_DIR}/test_voice_context.py)
+add_test(NAME voice_api_test COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_LIST_DIR}/test_voice_api.py)
+
+add_test(NAME bounded_profile_test COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_LIST_DIR}/test_bounded_profile.py)
+
+add_test(NAME voice_bridge_test COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_LIST_DIR}/test_voice_bridge.py)
+
+add_test(NAME voice_handoff_test COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_LIST_DIR}/test_voice_handoff.py)

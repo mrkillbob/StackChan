@@ -1,3 +1,4 @@
+#include <build_profiles/features.hpp>
 #include <usb_composite_v2/product_controls.h>
 #include <apps/common/tool_visual.hpp>
 // Stock Mooncake shell, original native Tools and game implementations.
@@ -6,6 +7,7 @@
 #include <apps/runtime_lifecycle/cleanup.h>
 #include "sd_status_app.h"
 #include "feature_apps.h"
+#include "provider_companion_app.h"
 #include <apps/local_tools/local_tools_app.h>
 #include <apps/instruments/instrument_apps.h>
 #include <companion/direct_usb_pcm/usb_pcm_app.h>
@@ -158,6 +160,7 @@ public:
         companion::TickView();
     }
 };
+#if STACKCHAN_BUILD_TOOLBOX
 class ToolsApp : public Page {
     using Screen = stock_tools::ui::Screen;
     stock_tools::Infrared ir_;
@@ -679,6 +682,8 @@ public:
         title_ = summary_ = detail_ = status_ = primary_ = url_input_ = graphic_ = nullptr;
     }
 };
+#endif
+#if STACKCHAN_BUILD_GAMES
 class GamesApp : public Page {
     stock_tools::Game2048 game_;
     local_tools_ui::Model dice_;
@@ -761,6 +766,7 @@ public:
         }
     }
 };
+#endif
 void DestroyShellForTransfer(mooncake::Mooncake& shell)
 {
     while(!TearDownShell<LvglLockGuard>(shell,[]{
@@ -791,19 +797,38 @@ void DestroyShellForTransfer(mooncake::Mooncake& shell)
     auto setup_owned=std::make_unique<AppSetup>();auto* setup=setup_owned.get();
     int setup_id=shell.installApp(std::move(setup_owned));
     shell.installApp(stock_tools::MakeJointCompanionApp());
+#if STACKCHAN_BUILD_PROVIDERS
+    for(const auto& provider:companion_modes::Catalog)
+        if(provider.route==companion_modes::Route::AdapterRequired)
+            shell.installApp(stock_tools::MakeProviderCompanionApp(provider.provider));
+#endif
     // USB Mira is part of Mira, not a separate launcher entry.
+#if STACKCHAN_BUILD_LED_CONTROLS
     shell.installApp(stock_tools::MakeLedExpressionApp());
+#endif
+#if STACKCHAN_BUILD_TOOLBOX
     shell.installApp(std::make_unique<ToolsApp>());
+#endif
+#if STACKCHAN_BUILD_GAMES
     shell.installApp(std::make_unique<GamesApp>());
+#endif
     shell.installApp(stock_tools::MakeSdStatusApp());
+#if STACKCHAN_BUILD_GAMES
     shell.installApp(local_tools_ui::MakePetApp());
+#endif
+#if STACKCHAN_BUILD_MUSIC
     shell.installApp(local_tools_ui::MakeAudioToolsApp());
     shell.installApp(instrument_ui::MakeApp(instrument_ui::Kind::Synth));
     shell.installApp(instrument_ui::MakeApp(instrument_ui::Kind::Groovebox));
     shell.installApp(instrument_ui::MakeApp(instrument_ui::Kind::Sampler));
+#endif
+#if STACKCHAN_BUILD_MUSIC || STACKCHAN_BUILD_TOOLBOX
     shell.installApp(usb_composite_v2::MakeControlsApp());
+#endif
+#if STACKCHAN_BUILD_NETWORK_TOOLS
     shell.installApp(stock_tools::MakeProximityExpressionApp());
     shell.installApp(stock_tools::MakeNetworkToolsApp());
+#endif
     bool stopped_preview=false;
     bool setup_return=ConsumeSetupReturn(); // consume even when a more specific preview wins
     if(stock_agent::ConsumePreviewRequest()){stopped_preview=true;launcher->openApp(stock_agent_id);}

@@ -92,7 +92,7 @@ void AppLauncher::onLauncherDestroy()
     mclog::tagInfo(getAppInfo().name, "on close");
 }
 
-void AppLauncher::create_launcher_view()
+void AppLauncher::create_launcher_view(int preferredAppID)
 {
     _launcher_screen=lv_screen_active();
     const auto installed=getAppProps();
@@ -111,7 +111,8 @@ void AppLauncher::create_launcher_view()
     // Retire callbacks/helpers before replacing their shared runtime.
     _view.reset();
     _view = std::make_unique<view::LauncherView>();
-    _view->init(std::move(shown));
+    const int focusAppID=_category&&!shown.empty()?shown.front().appID:preferredAppID;
+    _view->init(std::move(shown),focusAppID);
     _view->onAppClicked = [&](int appID) {_pending_navigation=appID;};
 }
 
@@ -120,7 +121,10 @@ void AppLauncher::handle_category_navigation()
     // Called after LauncherView::update returns; never destroy its view in a callback.
     const int action=_pending_navigation;_pending_navigation=-1;
     if(action==-1)return;
-    if(action==launcher_categories::Back){_category.reset();create_launcher_view();return;}
+    if(action==launcher_categories::Back){
+        const auto focus=_category?launcher_categories::Token(*_category):launcher_categories::Token(launcher_categories::Group::Companions);
+        _category.reset();create_launcher_view(focus);return;
+    }
     if(launcher_categories::IsGroup(action)){
         const auto group=launcher_categories::Decode(action);int only=-1;unsigned count=0;
         for(const auto& props:getAppProps())if(launcher_categories::Assign(props.info.name)==group){only=props.appID;++count;}

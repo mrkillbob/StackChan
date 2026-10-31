@@ -34,6 +34,6 @@ private:
     std::optional<launcher_categories::Group> _category;
     int _pending_navigation=-1;
     void handle_category_navigation();
-    void create_launcher_view();
+    void create_launcher_view(int preferredAppID=launcher_categories::Token(launcher_categories::Group::Companions));
     void screensaver_update();
 };

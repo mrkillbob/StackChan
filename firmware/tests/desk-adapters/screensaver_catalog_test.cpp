@@ -1,5 +1,6 @@
 #include "effect_catalog/effect_catalog.hpp"
 #include "screensaver_filter.hpp"
+#include "effect_catalog/raster.hpp"
 #include <algorithm>
 #include <cassert>
 #include <vector>
@@ -22,7 +23,8 @@ int main(){
  }
  effect_catalog::Reset(0);assert(effect_catalog::Render(0,0,pixels.data(),320,240));
  assert(std::count(pixels.begin(),pixels.end(),uint16_t(0))>65000); // True black remains black.
- effect_catalog::Reset(33);assert(effect_catalog::Render(33,0,pixels.data(),320,240));
- assert(std::count(pixels.begin(),pixels.end(),uint16_t(21130))>60000); // Intentional gray retained.
+ assert(!effect_catalog::Render(33,0,pixels.data(),320,240)); // User explicitly hid Crackberg.
+ Raster gray;gray.bind(pixels.data(),320,240);gray.beginFrame(1000000);gray.fillScreen(21130);gray.unbind();
+ assert(std::count(pixels.begin(),pixels.end(),uint16_t(21130))==int(pixels.size())); // Preserve exact intentional gray.
  assert(!effect_catalog::Render(65535,0,pixels.data(),320,240));
 }

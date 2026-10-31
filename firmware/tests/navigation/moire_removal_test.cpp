@@ -40,7 +40,11 @@ int main() {
     while(std::getline(options,name)){assert(name!="Moire");retained|=name=="Moire2";}
     assert(retained);
     auto defaults=Selection::defaults();
-    assert(defaults.count()==216&&!defaults.selected(226)&&defaults.selected(225)&&defaults.selected(227));
+    // Defaults include DVD and every implemented retained effect. Stable catalog
+    // tombstones must remain unselected after the separately approved pruning.
+    unsigned usable=1;assert(defaults.selected(0));
+    for(unsigned id=1;id<SlideCount;++id){const bool implemented=effect_catalog::Usable(uint16_t(id-1));assert(defaults.selected(id)==implemented);usable+=implemented;}
+    assert(defaults.count()==usable&&!defaults.selected(226)&&defaults.selected(225)&&defaults.selected(227));
     Library library;
     assert(!library.visible(226)&&!library.inView(226,true));
     library.setHidden(226,true);assert(!library.hidden.selected(226));
