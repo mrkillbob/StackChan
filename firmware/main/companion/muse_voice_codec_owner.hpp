@@ -78,10 +78,12 @@ public:
    // supposedly idle state is inconsistent. Never claim an unknown stop.
    input_attempted_=output_attempted_=true;input_closed_=output_closed_=false;Stop(g,now);return false;
   }
-  if(!Guard(g,now,false))return false;state_=State::Ready;return true;
+  if(!Guard(g,now,false))return false;
+  state_=State::Ready;return true;
  }
  bool Flush(uint64_t g,int64_t now){
-  if(!Guard(g,now))return false;const auto flush=protocol_.FlushTicket();if(!flush)return true;
+  if(!Guard(g,now))return false;
+  const auto flush=protocol_.FlushTicket();if(!flush)return true;
   Wipe();Observation observed;
   if(!Observe(observed)){Stop(g,now);return false;}
   if(!Guard(g,now))return false;
@@ -135,7 +137,8 @@ public:
   if(wrote!=n||!DirectionGuard(g,now,false)){Stop(g,now);return false;}return true;
  }
  bool Stop(uint64_t g,int64_t now){
-  if(!Same(g))return false;if(!leased_)return state_==State::Closed;
+  if(!Same(g))return false;
+  if(!leased_)return state_==State::Closed;
   state_=State::Retained;talking_=false;ticket_=0;Wipe();lease_.Stop(false);
   // Protocol cancellation is an intent only: this owner never sends it or
   // claims transport completion. Its separate owner retains that obligation.
@@ -144,9 +147,11 @@ public:
    const bool input=CloseInput();const bool output=CloseOutput();
    if(!input||!output)return false;
    Observation observed;if(!Observe(observed)||observed.mic_open||observed.speaker_open)return false;
-   if(!codec_.Join(g)||!codec_.Release(g))return false;bound_=false;
+   if(!codec_.Join(g)||!codec_.Release(g))return false;
+   bound_=false;
   }
-  if(!lease_.Stop(true))return false;leased_=false;state_=State::Closed;return true;
+  if(!lease_.Stop(true))return false;
+  leased_=false;state_=State::Closed;return true;
  }
  bool Poll(uint64_t g,int64_t now){return Guard(g,now);}
  Snapshot View(uint64_t g,int64_t now){
