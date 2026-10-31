@@ -9,7 +9,7 @@ and filenames for every capture; existing output and status files are rejected.
 Use the project's pinned Python environment (Python 3.13.15, pySerial 3.5):
 
 ```sh
-PYTHON=/Users/mikedemott/Developer/AgentWork/StackChan/.tools/espressif/python_env/idf5.5_py3.13_env/bin/python
+PYTHON=$STACKCHAN_ROOT/.tools/espressif/python_env/idf5.5_py3.13_env/bin/python
 # Start only after authorization for a single stopped-only hardware capture.
 "$PYTHON" -B companion/host/read_diagnostic_snapshot.py \
   --port /dev/cu.usbmodem31201 --timeout-seconds 300 \

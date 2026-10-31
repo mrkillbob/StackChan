@@ -68,6 +68,18 @@ class ProjectionTests(unittest.TestCase):
         for value in ([],{},123,None):
             result=d.project_diagnostics({'fault':{'type':value,'phase':value,'stack':[{'file':value,'function':value,'line':1}]},'last_control':value,'phase':value})
             self.assertEqual(result['fault']['type'],'OtherError');self.assertEqual(result['fault']['stack'],[])
+    def test_native_backpressure_trace_projects_only_allowlisted_call_sites(self):
+        value=d.project_diagnostics({'fault':{'type':'AudioBackpressure','phase':'audio_receive','stack':[
+            {'file':'native_adapter.py','function':'robot_pcm','line':87},
+            {'file':'native_conversation.py','function':'receive_opus','line':60},
+            {'file':'/private/path/native_adapter.py','function':'robot_pcm','line':88},
+            {'file':'native_adapter.py','function':'unlisted','line':89},
+        ]}})
+        self.assertEqual(value['fault']['stack'],[
+            {'file':'native_adapter.py','function':'robot_pcm','line':87},
+            {'file':'native_conversation.py','function':'receive_opus','line':60},
+        ])
+
     def test_close_code_without_reason(self):
         ConnectionClosedError=type('ConnectionClosedError',(Exception,),{})
         error=ConnectionClosedError(SECRET);error.rcvd=SimpleNamespace(code=1006,reason=SECRET)

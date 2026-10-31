@@ -1,6 +1,6 @@
 # Tools and selectable agents
 
-The Tools screen uses full task pages at 320×240: Infrared → Learn or Review & Send, and NFC URL → Edit or Emulate. Touch targets are at least 44 pixels tall. IR capture lasts ten seconds; transmission is one explicit action. NFC emulation lasts sixty seconds or until Stop/Back. Back completes resource shutdown before leaving. A learned signal and URL are held in RAM and cleared when Tools closes.
+The Tools screen uses full task pages at 320×240: Infrared → Learn, Review & Send or Saved remotes; NFC URL → Edit or Emulate; UART Terminal → explicitly labeled local demo and line editor. Touch targets are at least 44 pixels tall. IR capture lasts ten seconds; transmission is one explicit action after review. Up to eight saved remotes, the learned signal and URL stay in RAM and clear when Tools closes. SD storage and Grove UART hardware adapters are unavailable. NFC emulation lasts sixty seconds or until Stop/Back. Back completes resource shutdown before leaving. See `TOOLS-EXTRAS-OFFLINE.md` for limits, recovered decisions and remaining hardware qualification.
 
 Open `tools-preview.html` for an interactive design simulation. It does not operate hardware; it is not an actual device screenshot. Portable checks cover target bounds, editor key layout, navigation scope, and mutually exclusive audio ownership.
 
