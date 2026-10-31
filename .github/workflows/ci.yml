@@ -175,11 +175,23 @@ jobs:
           fi
           git log --all --full-history --remerge-diff --max-count=1 --format= >/dev/null
           scan_log="$RUNNER_TEMP/gitleaks-history.log"
-          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --no-color --log-opts='--all --full-history --remerge-diff' . 2>&1 | tee "$scan_log"
+          report="$RUNNER_TEMP/gitleaks-redacted.json"
+          scan_status=0
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --no-color --report-format=json --report-path="$report" --log-opts='--all --full-history --remerge-diff' . 2>&1 | tee "$scan_log" || scan_status=$?
+          # Print only finding locations/fingerprints; never Match or Secret.
+          python3 - "$report" <<'REPORT'
+          import json, pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          if path.exists():
+              for item in json.loads(path.read_text()):
+                  print(json.dumps({key: item.get(key) for key in
+                        ('RuleID', 'File', 'StartLine', 'Commit', 'Fingerprint')}, sort_keys=True))
+          REPORT
           if grep -Eq '(^|[[:space:]])(ERR|FTL)([[:space:]]|$)' "$scan_log"; then
             echo "Secret scanner emitted errors; partial history is not a passing scan." >&2
             exit 1
           fi
+          exit "$scan_status"
 
   required:
     name: All required checks pass

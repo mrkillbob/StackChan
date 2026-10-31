@@ -1,3 +1,4 @@
+from test_https_wire import qualified_context
 import unittest,json,ssl
 import test_hermes_adapter as fixtures
 from test_hermes_adapter import E,ROOM,decode_wire
@@ -9,7 +10,7 @@ class Pipeline(unittest.TestCase):
  setUp=fixtures.Tests.setUp
  def test_actual_https_adapter_and_signed_room_pipeline(self):
   post,get=Connection(),Connection();get.response=Response(json.dumps({'object':'hermes.run','run_id':'run-1','session_id':'api-session-1','status':'completed','output':'Hello from Hermes'}).encode())
-  connections=iter([post,get]);wire=HTTPSWire('https://127.0.0.1',TOKEN,ssl.create_default_context(),connection_factory=lambda *a,**kw:next(connections))
+  connections=iter([post,get]);wire=HTTPSWire('https://127.0.0.1',TOKEN,qualified_context(),connection_factory=lambda *a,**kw:next(connections))
   adapter=HermesAdapter(self.scope,self.source,wire,self.session,E,lambda:self.frames.append(self.room.snapshot()),lambda:self.now)
   self.assertTrue(adapter.submit_text('Hi'));self.assertTrue(adapter.poll_once());self.assertEqual(adapter.result()['text'],'Hello from Hermes');self.assertEqual(decode_wire(E,self.frames[0],ROOM)['scene'],'completion')
   self.assertEqual(get.calls[1][0:2],('GET','/p/robot-hermes/v1/runs/run-1'));self.assertNotIn('Idempotency-Key',get.calls[1][3]);self.assertEqual(post.calls[-1],get.calls[-1])

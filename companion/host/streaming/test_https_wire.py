@@ -1,6 +1,10 @@
 import unittest,ssl,json
 from hermes_adapter import HTTPSWire,Unknown,Refused
 TOKEN=b'fixture-credential-only-never-real'
+def qualified_context():
+ context=ssl.create_default_context()
+ context.minimum_version=ssl.TLSVersion.TLSv1_2
+ return context
 class Response:
  status=202
  def __init__(self,data=b'{"run_id":"run-1","status":"started"}',headers=None):self.data=data;self.headers=headers or {'Content-Type':'application/json'}
@@ -14,7 +18,7 @@ class Connection:
  def close(self):self.calls.append('close');self.on_close();
 class Tests(unittest.TestCase):
  def setUp(self):
-  self.context=ssl.create_default_context();self.c=Connection();self.valid=True
+  self.context=qualified_context();self.c=Connection();self.valid=True
   self.w=HTTPSWire('https://127.0.0.1:443',TOKEN,self.context,connection_factory=lambda *a,**kw:self.c)
  def call(self):return self.w.exchange('POST','/p/robot-hermes/v1/runs',{'session_id':'session-1','input':'hi'},'operation-1',lambda:self.valid)
  def test_real_wire_encodes_authenticated_bounded_request(self):
@@ -54,4 +58,16 @@ class Tests(unittest.TestCase):
  def test_close_wipes_owned_credential_and_future_operations_inert(self):
   secret=self.w._secret;self.w.close();self.assertEqual(set(secret),{0})
   with self.assertRaises(Refused):self.call()
+
+
+class FixtureTlsPolicy(unittest.TestCase):
+ def test_fixture_pins_minimum_when_platform_policy_is_unspecified(self):
+  from unittest.mock import patch
+  ambient=ssl.create_default_context();ambient.minimum_version=ssl.TLSVersion.MINIMUM_SUPPORTED
+  with self.assertRaises(ValueError):HTTPSWire('https://127.0.0.1',TOKEN,ambient)
+  with patch.object(ssl,'create_default_context',return_value=ambient):context=qualified_context()
+  self.assertEqual(context.minimum_version,ssl.TLSVersion.TLSv1_2)
+  self.assertEqual(context.verify_mode,ssl.CERT_REQUIRED);self.assertTrue(context.check_hostname)
+  HTTPSWire('https://127.0.0.1',TOKEN,context,connection_factory=Connection).close()
+
 if __name__=='__main__':unittest.main()

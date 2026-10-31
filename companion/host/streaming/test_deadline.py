@@ -1,3 +1,4 @@
+from test_https_wire import qualified_context
 import unittest,ssl,http.client
 from unittest.mock import patch
 from hermes_adapter import HTTPSWire,Unknown,Refused
@@ -45,7 +46,7 @@ class Tests(unittest.TestCase):
   clock=Clock();sock=Sock(clock,header_delay,body_delay)
   class Connection(http.client.HTTPSConnection):
    def connect(self):self.sock=sock
-  return HTTPSWire('https://127.0.0.1',TOKEN,ssl.create_default_context(),connection_factory=Connection,clock=clock),clock,sock
+  return HTTPSWire('https://127.0.0.1',TOKEN,qualified_context(),connection_factory=Connection,clock=clock),clock,sock
  def call(self,wire,remaining=None):return wire.exchange('POST','/p/hermes/v1/runs',{'session_id':'session-1','input':'hello'},'operation-1',lambda:True,remaining=remaining)
  def test_header_slow_drip_stops_at_elapsed_budget(self):
   wire,clock,sock=self.wire(.2,0.)
@@ -63,5 +64,5 @@ class Tests(unittest.TestCase):
   wire,clock,sock=self.wire(0.,0.);self.assertEqual(self.call(wire)['run_id'],'run-1');self.assertTrue(sock.closed)
  def test_ambient_dns_is_not_a_supported_route(self):
   with patch('socket.getaddrinfo',side_effect=AssertionError('DNS lookup')):
-   with self.assertRaises(ValueError):HTTPSWire('https://ambient.invalid',TOKEN,ssl.create_default_context())
+   with self.assertRaises(ValueError):HTTPSWire('https://ambient.invalid',TOKEN,qualified_context())
 if __name__=='__main__':unittest.main()
