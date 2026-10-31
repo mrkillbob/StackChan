@@ -39,6 +39,7 @@ build/
 cmake-build-*/
 /components/*
 !/components/mira_wake/
+!/components/muse_direct_protocol/
 !/components/espressif__esp_video/
 !/components/M5Unit-NFC/
 !/components/M5UnitUnified/

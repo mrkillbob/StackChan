@@ -59,6 +59,12 @@ jobs:
         run: |
           echo "Full streaming integration requires private HomeLab source; see scripts/ci/DEPENDENCIES.md."
           "$RUNNER_TEMP/fixture-venv/bin/python" scripts/ci/test_public_python.py
+      - name: Install hash-pinned companion route fixture dependencies
+        run: '"$RUNNER_TEMP/fixture-venv/bin/python" -m pip install --require-hashes --only-binary=:all: -r scripts/ci/requirements-companion-routes.txt'
+      - name: Fail-closed companion route and outbound source fixtures
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: '"$RUNNER_TEMP/fixture-venv/bin/python" scripts/ci/test_companion_routes.py'
       - name: Public gateway startup and cleanup regressions
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -122,7 +128,8 @@ jobs:
           . /opt/esp/idf/export.sh
           cd firmware
           python3 fetch_repos.py
-          idf.py build
+          # Source-only RAM profile; no runtime or real binding is activated.
+          idf.py -DSTACKCHAN_BUILD_PROFILE=custom -DSTACKCHAN_FEATURE_MANIFEST="$PWD/profiles/muse-ram.json" -DSTACKCHAN_MUSE_RAM_ONLY=ON -DSTACKCHAN_ENABLE_LOCAL_PORTRAITS=OFF build
           sha256sum repos.json main/idf_component.yml dependencies.lock build/stack-chan.bin
 
   companion-app:

@@ -131,3 +131,9 @@ add_test(NAME voice_api_test COMMAND ${Python3_EXECUTABLE}
 
 add_test(NAME bounded_profile_test COMMAND ${Python3_EXECUTABLE}
   ${CMAKE_CURRENT_LIST_DIR}/test_bounded_profile.py)
+
+add_test(NAME voice_bridge_test COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_LIST_DIR}/test_voice_bridge.py)
+
+add_test(NAME voice_handoff_test COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_LIST_DIR}/test_voice_handoff.py)

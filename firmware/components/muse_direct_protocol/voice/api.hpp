@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "voice_protocol.hpp"
+#include "review_bridge.hpp"
 namespace voice_prep {
 // Internal C++ ABI, data processing only. No authority, transport or native I/O.
 // All calls on an instance must be serialized by its retained owner. The owner
@@ -30,6 +31,11 @@ struct Api {
  decltype(&Protocol::FlushTicket) flush_ticket;
  decltype(&Protocol::AckPlaybackFlush) ack_playback_flush;
  decltype(&Protocol::ReturnedTarget) returned_target;
+ // Review data projection only. Borrowed protocol/clock/custody must outlive
+ // this serialized owner; no native voice permit is provided by this ABI.
+ size_t review_bytes,review_alignment;
+ muse_native_review::Bridge* (*construct_review)(void*,size_t,Protocol*,muse_native_review::Clock*,muse_native_review::Custody*);
+ void (*destroy_review)(muse_native_review::Bridge*);
 };
 }
 extern "C" const voice_prep::Api* stackchan_muse_voice_protocol_api();
