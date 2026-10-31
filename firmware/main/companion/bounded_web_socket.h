@@ -27,6 +27,7 @@ public:
     void SetReceiveBufferSize(size_t size);
     bool IsConnected() const;
     bool Connect(const char* uri);
+    int HandshakeStatus()const{return handshake_status_.load();}
     bool Send(const std::string& data);
     bool Send(const void* data, size_t len, bool binary = false, bool fin = true);
     void Ping();
@@ -41,6 +42,7 @@ public:
     int GetLastError();
 
 private:
+    std::atomic<int> handshake_status_{0};
     NetworkInterface* network_;
     int connect_id_;
     std::unique_ptr<Tcp> tcp_;

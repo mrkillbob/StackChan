@@ -80,6 +80,7 @@ protected:
 
 class ToastManager : public mooncake::BasicAbility {
 public:
+    ~ToastManager() override;
     void onCreate() override;
     void onRunning() override;
 

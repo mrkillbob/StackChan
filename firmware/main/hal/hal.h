@@ -236,6 +236,8 @@ public:
     void setRgbColor(uint8_t index, uint8_t r, uint8_t g, uint8_t b);
     void showRgbColor(uint8_t r, uint8_t g, uint8_t b);
     void refreshRgb();
+    bool rgbHardwareAvailable() const;
+    bool submitRgb565Frame(const uint8_t* bytes, size_t size);
 
     /* ---------------------------------- Power --------------------------------- */
     void setServoPowerEnabled(bool enabled);
@@ -256,6 +258,7 @@ public:
 
     /* ----------------------------------- IMU ---------------------------------- */
     uitk::Signal<ImuMotionEvent> onImuMotionEvent;
+    bool prepareImuExpression(); // Explicit IMU-only start; no servo/head-touch/camera.
 
     /* ---------------------------------- Time ---------------------------------- */
     void syncRtcTimeToSystem();
@@ -273,6 +276,8 @@ public:
     void requestWarmReboot(int appIndex);
     int getWarmRebootTarget();
     void clearWarmRebootRequest();
+    [[noreturn]] void requestAppSetup();
+    bool consumeAppSetupRequest();
 
     /* --------------------------------- Network -------------------------------- */
     void startNetwork(std::function<void(std::string_view)> onLog);
@@ -302,6 +307,9 @@ public:
     void getMicWaveformFrame(std::vector<int16_t>& data);
     void clearupMicTest();
 
+    void forgetNativeNetwork();
+    bool stopBleServer();
+    bool stopEspNow();
     bool prepareStockFeatureHardware(bool motion, bool camera);
 
 private:
@@ -310,7 +318,7 @@ private:
     void xiaozhi_board_init();
     void lvgl_init();
     void xiaozhi_mcp_init();
-    void ble_init(bool useAltUuid);
+    bool ble_init(bool useAltUuid);
     void servo_init();
     void head_touch_init();
     void io_expander_init();

@@ -1,3 +1,4 @@
+#include <apps/runtime_lifecycle/session.h>
 /*
  * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
  *
@@ -10,6 +11,7 @@
 #include <assets/assets.h>
 #include <stackchan/stackchan.h>
 #include <apps/common/common.h>
+#include "workers/screensaver_setup.hpp"
 
 #ifdef STACKCHAN_COMPANION_BOOT
 #include <companion/settings_policy.hpp>
@@ -24,7 +26,7 @@ using namespace setup_workers;
 AppSetup::AppSetup()
 {
     // 配置 App 名
-    setAppInfo().name = "SETUP";
+    setAppInfo().name = "Settings";
     // 配置 App 图标
     static auto icon  = assets::get_image("icon_setup.bin");
     setAppInfo().icon = (void*)&icon;
@@ -60,11 +62,21 @@ void AppSetup::onOpen()
                   _destroy_menu    = true;
                   _need_warm_reset = true;
                   _worker          = std::make_unique<WifiSetupWorker>();
+              }},
+             {"Testing service",
+              [&]() {
+                  _destroy_menu = true;
+                  _worker       = std::make_unique<NetworkTestWorker>();
               }}},
         },
         {
             "Device",
-            {{"Brightness",
+            {{"Screensaver",
+              [&]() {
+                  _destroy_menu = true;
+                  _worker = setup_workers::MakeScreensaverWorker();
+              }},
+             {"Brightness",
               [&]() {
                   _destroy_menu = true;
                   _worker       = std::make_unique<BrightnessSetupWorker>();
@@ -81,7 +93,7 @@ void AppSetup::onOpen()
               }}},
         },
         {
-            "AI.Agent",
+            "Stackchan",
             {{"General",
               [&]() {
                   _destroy_menu    = true;
@@ -164,7 +176,10 @@ void AppSetup::onOpen()
             Scope scope = Scope::None;
             std::function<std::unique_ptr<WorkerBase>()> factory;
             if (item.label == "Change Wi-Fi") factory = [] { return network_setup::MakeWorker(); };
-            else if (item.label == "Brightness") {
+            else if (item.label == "Screensaver") {
+                scope = Scope::Screensaver;
+                factory = [] { return setup_workers::MakeScreensaverWorker(); };
+            } else if (item.label == "Brightness") {
                 scope = Scope::Brightness;
                 factory = [] { return std::make_unique<BrightnessSetupWorker>(); };
             } else if (item.label == "Volume") {
@@ -202,6 +217,15 @@ void AppSetup::onOpen()
             };
         }
     }
+#endif
+#ifdef STACKCHAN_COMPANION_BOOT
+    _menu_sections.push_back({"Setup & login", {{"Welcome setup", [this]() {
+        _destroy_menu = true;
+        _need_warm_reset = false;
+        _worker.reset();
+        companion::SetSettingsScope(companion::SettingsScope::None);
+        _worker = stock_services::MakeWorker(stock_services::Feature::Onboarding);
+    }}}});
 #endif
     LvglLockGuard lock;
 
@@ -251,6 +275,9 @@ void AppSetup::onRunning()
 
 void AppSetup::onClose()
 {
+#ifdef STACKCHAN_COMPANION_BOOT
+    if(runtime_lifecycle::DeferNativeClose())return;
+#endif
     mclog::tagInfo(getAppInfo().name, "on close");
 
     LvglLockGuard lock;

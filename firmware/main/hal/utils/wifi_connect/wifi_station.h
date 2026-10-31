@@ -4,6 +4,9 @@
 #include <string>
 #include <functional>
 #include <mutex>
+#include <atomic>
+#include <cstdint>
+#include "wifi_failure.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
@@ -20,9 +23,11 @@ public:
     StackChanWifiStation();
     ~StackChanWifiStation();
 
-    bool AddAuth(const std::string& ssid, const std::string& password);
-    void Start();
+    bool AddAuth(const std::string& ssid, const std::string& password, const WifiBandInfo& band = {});
+    bool Start();
+    bool StopChecked();
     void Stop();
+    void Poll();
     bool IsConnected();
     bool WaitForConnected(int timeout_ms = 10000);
     int8_t GetRssi();
@@ -42,16 +47,23 @@ public:
     void OnConnect(std::function<void(const std::string& ssid)> on_connect);
     void OnConnected(std::function<void(const std::string& ssid)> on_connected);
     void OnConnectFailed(std::function<void(const std::string& ssid)> on_connect_failed);
+    void OnConnectFailed(std::function<void(const std::string&, const WifiConnectionFailure&)> on_connect_failed);
 
 private:
     mutable std::mutex mutex_;
+    std::atomic<bool> callbacks_enabled_{false};
+    uint64_t network_generation_=0;
+    bool driver_touched_=false;
     std::string pending_password_;
+    WifiBandInfo band_;
+    int64_t connection_started_at_ = 0;
     bool pending_ = false;
     bool associated_ = false;
     bool awaiting_disconnect_ = false;
     bool committing_ = false;
     bool ApplyPending();
-    void FailPending();
+    void FailPending(WifiConnectionFailure failure = {"connection_failed", "Wi-Fi connection failed."},
+                     bool only_if_uncommitted = false);
     void WipePendingLocked();
     EventGroupHandle_t event_group_;
     esp_event_handler_instance_t instance_any_id_ = nullptr;
@@ -64,7 +76,7 @@ private:
     bool is_connecting_  = false;
     std::function<void(const std::string& ssid)> on_connect_;
     std::function<void(const std::string& ssid)> on_connected_;
-    std::function<void(const std::string& ssid)> on_connect_failed_;
+    std::function<void(const std::string&, const WifiConnectionFailure&)> on_connect_failed_;
 
     static void WifiEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
     static void IpEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);

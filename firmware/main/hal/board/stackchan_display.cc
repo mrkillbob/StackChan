@@ -288,7 +288,7 @@ void StackChanAvatarDisplay::SetupUI()
         stackchan.addModifier(std::make_unique<ImuEventModifier>());
     }
 
-    preview_image_ = lv_image_create(lv_screen_active());
+    if(!preview_image_)preview_image_ = lv_image_create(lv_screen_active());
     lv_obj_set_size(preview_image_, 320, 240);
     lv_obj_align(preview_image_, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
@@ -593,4 +593,10 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
 
 void StackChanAvatarDisplay::ShowNotification(const char* notification, int duration_ms)
 {
+}
+
+void StackChanAvatarDisplay::ResetSessionUi(){
+    SetPreviewImage(nullptr); // persistent preview object stays alive for timer callbacks
+    setup_ui_called_=false;is_sleeping_=false;
+    speaking_modifier_id_=idle_motion_modifier_id_=idle_expression_modifier_id_=blink_modifier_id_=-1;
 }

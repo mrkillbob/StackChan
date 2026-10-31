@@ -6,11 +6,13 @@
 #include <cstdint>
 namespace stock_shell {
 namespace {
-std::atomic<bool> setup_context{false};
+std::atomic<bool> setup_context{false},settings_requested{false};
 constexpr uint32_t kMagic=0x53455455;
 struct ReturnCookie {uint32_t magic,inverse;};
 RTC_NOINIT_ATTR ReturnCookie setup_return;
 }
+void RequestSettings(){settings_requested=true;}
+bool ConsumeSettingsRequest(){return settings_requested.exchange(false);}
 void SetSetupContext(bool active){setup_context=active;}
 void SaveSetupReturnForReset(){
  auto feature=stock_services::CurrentFeature();

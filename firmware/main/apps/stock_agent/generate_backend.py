@@ -5,8 +5,12 @@ import hashlib
 from pathlib import Path
 
 PINNED = {
-    'application.cc': '75e4955346138c14e5bb72da9319d4bce5d54b9f737eba3cdbe63eb487cb58c5',
-    'ota.cc': '7b046477f51deace32169f177c69c368cb6a94294305910f62078410f43893cf',
+    'dns_server.cc': '8e6f03dc39f7386a149e227c756a53e3f715454b1d024c7ce38b75cdf00045d1',
+    'protocols/mqtt_protocol.cc': 'f555738d12d6ef8e7b43dbe2cb45d6135de3d393b4f6374c99388457d34d6555',
+    'protocols/websocket_protocol.cc': 'f8454cdd600ce024d24207405125f6e5730084a2805be413ccf69fbdcfd55a97',
+    'device_state_machine.cc': 'c1167dc89493d275de3a9b267eb67bff171404613192e5daca6dc3eb65443ba5',
+    'application.cc': '7c9e9bb1b720c405ea52e4991edc555c0fb90887e68524d30aa69dd34bd92f0f',
+    'ota.cc': 'd5340cb20b3b4651656c619a138b6f8b0907b86b3a6541f3376f22bb5dd459d8',
     'boards/common/wifi_board.cc': 'df4afcfdd13bae8ebdf0eb6b8d31f7a334aefb01b660f95bf7d4ababecbf789c',
     'wifi_manager.cc': '3346377f3595774d8a8d07b259f4860a9aabaf323e39fba6c1cac598e44d5d20',
     'wifi_configuration_ap.cc': '05e2d1fe46ce57de433078f287accfc06df771c326a23b9eac894d6657a465c3',
@@ -31,6 +35,19 @@ def replace_region(source, begin, end, replacement):
 
 def generate(xiaozhi, wifi, output):
     output.mkdir(parents=True, exist_ok=True)
+    state = pinned(xiaozhi / 'device_state_machine.cc', 'device_state_machine.cc')
+    state = '#include <apps/runtime_lifecycle/session.h>\n' + state
+    state = replace_once(state, '    DeviceState old_state = current_state_.load();',
+        '    if(new_state==kDeviceStateStarting && runtime_lifecycle::ConsumeStateReset())current_state_=kDeviceStateUnknown;\n    DeviceState old_state = current_state_.load();')
+    (output / 'stock_device_state_machine.cc').write_text(state)
+    source=pinned(xiaozhi/'protocols/websocket_protocol.cc','protocols/websocket_protocol.cc')
+    source=replace_once(source,'WebsocketProtocol::~WebsocketProtocol() {','WebsocketProtocol::~WebsocketProtocol() {\n    websocket_.reset(); // Join while callback state and event group are alive.')
+    (output/'stock_websocket_protocol.cc').write_text(source)
+    source=pinned(xiaozhi/'protocols/mqtt_protocol.cc','protocols/mqtt_protocol.cc')
+    source=replace_once(source,'    if (reconnect_timer_ != nullptr) {',
+        '    if(mqtt_)mqtt_->Disconnect();\n    mqtt_.reset();\n    udp_.reset();\n    if (reconnect_timer_ != nullptr) {')
+    source=replace_once(source,'    udp_.reset();\n    mqtt_.reset();','    // Transport callbacks have joined before timer and event-group destruction.')
+    (output/'stock_mqtt_protocol.cc').write_text(source)
     source = pinned(xiaozhi / 'application.cc', 'application.cc')
     source = '#include <apps/stock_services/firmware_install_policy.h>\n#include <apps/stock_services/firmware_install_ui.h>\n#include <hal/hal.h>\n' + source
     source = replace_once(source, '''        if (ota_->HasNewVersion()) {
@@ -59,13 +76,14 @@ def generate(xiaozhi, wifi, output):
     source = replace_once(source,
         '        ESP_LOGE(TAG, "Failed to activate, code: %d, body: %s", status_code, http->ReadAll().c_str());',
         '        ESP_LOGE(TAG, "Failed to activate, code: %d", status_code);')
-    source = '#include <apps/stock_services/firmware_install_policy.h>\n#include <apps/stock_services/firmware_install_ui.h>\n' + source
+    source = '#include <apps/runtime_lifecycle/session.h>\n#include <apps/stock_services/firmware_install_policy.h>\n#include <apps/stock_services/firmware_install_ui.h>\n' + source
     source = replace_once(source,
         'bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback) {',
         '''bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback) {
-    if (!stock_services::FirmwareInstallAllowed() ||
+    if (runtime_lifecycle::HomeRequested() || !stock_services::FirmwareInstallAllowed() ||
         !stock_services::IsFirmwareImageUrl(firmware_url) ||
-        !stock_services::PrepareOriginalFirmwareWifi()) return false;''')
+        !stock_services::PrepareOriginalFirmwareWifi()) return false;
+    if (runtime_lifecycle::HomeRequested() || !stock_services::FirmwareInstallAllowed()) return false;''')
     source = replace_once(source, '    if (content_length == 0) {',
         '    if (content_length < sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t) || content_length > update_partition->size) {')
     source = replace_once(source, '    auto http = network->CreateHttp(0);\n    if (!http->Open("GET", firmware_url)) {',
@@ -76,6 +94,32 @@ def generate(xiaozhi, wifi, output):
         '    auto last_calc_time = esp_timer_get_time();\n    const auto install_deadline = last_calc_time + 180000000;\n    while (true) {\n        if (esp_timer_get_time() > install_deadline) {\n            if (image_header_checked) esp_ota_abort(update_handle);\n            heap_caps_free(buffer);\n            return false;\n        }')
     source = replace_once(source, '            image_header.append(buffer, buffer_offset);',
         '            image_header.assign(buffer, buffer_offset);')
+    source = source.replace('    auto http = network->CreateHttp(0);', '    auto http = network->CreateHttp(0);\n    http->SetTimeout(4000);')
+    source = replace_once(source, '    size_t buffer_offset = 0;  // Current data size in buffer', '''    auto cancelled = [] { return runtime_lifecycle::HomeRequested() || !stock_services::FirmwareInstallAllowed(); };
+    auto abort_download = [&] {
+        if (image_header_checked) esp_ota_abort(update_handle);
+        http->Close();
+        heap_caps_free(buffer);
+    };
+    size_t buffer_offset = 0;  // Current data size in buffer''')
+    source = replace_once(source, '        if (esp_timer_get_time() > install_deadline) {\n            if (image_header_checked) esp_ota_abort(update_handle);\n            heap_caps_free(buffer);\n            return false;\n        }',
+        '        if (cancelled() || esp_timer_get_time() > install_deadline) { abort_download(); return false; }')
+    source = replace_once(source, '        if (ret < 0) {',
+        '        if (cancelled()) { abort_download(); return false; }\n        if (ret < 0) {')
+    source = replace_once(source, '        if (!image_header_checked) {',
+        '        if (cancelled()) { abort_download(); return false; }\n        if (!image_header_checked) {')
+    source = replace_once(source, '        if (buffer_offset == PAGE_SIZE || (is_last_chunk && buffer_offset > 0)) {',
+        '        if (buffer_offset == PAGE_SIZE || (is_last_chunk && buffer_offset > 0)) {\n            if (cancelled()) { abort_download(); return false; }')
+    source = replace_once(source, '    esp_err_t err = esp_ota_end(update_handle);',
+        '    if (cancelled()) { if (image_header_checked) esp_ota_abort(update_handle); return false; }\n    esp_err_t err = esp_ota_end(update_handle);')
+    source = replace_once(source, '''    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {''', '''    // Leave the running image selected through caller cleanup and delays.
+    // Only the final serialized reboot commit can select this candidate.
+    const bool staged = stock_services::FirmwareInstallAllowed() &&
+        runtime_lifecycle::StageFirmwareInstall([update_partition] {
+            return esp_ota_set_boot_partition(update_partition) == ESP_OK;
+        });
+    if (!staged) {''')
     (output / 'stock_ota.cc').write_text(source)
 
     source = pinned(xiaozhi / 'boards/common/wifi_board.cc', 'boards/common/wifi_board.cc')
@@ -83,7 +127,9 @@ def generate(xiaozhi, wifi, output):
         Application::GetInstance().Alert("Stock AI", "Wi-Fi failed. Stop / Home to return.", "triangle_exclamation");
         return;
     }''')
-    source = '#include <apps/network_setup/persistence_gate.h>\n' + source
+    source = '#include <apps/network_setup/persistence_gate.h>\n#include <apps/runtime_lifecycle/session.h>\n#include <mutex>\nstatic std::recursive_mutex runtime_network_callback_mutex;\n' + source
+    source = replace_once(source, 'void WifiBoard::OnNetworkEvent(NetworkEvent event, const std::string& data) {', 'void WifiBoard::OnNetworkEvent(NetworkEvent event, const std::string& data) {\n    std::lock_guard<std::recursive_mutex> callback_lock(runtime_network_callback_mutex);\n    if(runtime_lifecycle::HomeRequested())return;')
+    source = replace_once(source, 'void WifiBoard::SetNetworkEventCallback(NetworkEventCallback callback) {', 'void WifiBoard::SetNetworkEventCallback(NetworkEventCallback callback) {\n    std::lock_guard<std::recursive_mutex> callback_lock(runtime_network_callback_mutex);')
     source = replace_once(source,
         '    Application::GetInstance().SetDeviceState(kDeviceStateWifiConfiguring);',
         '    Application::GetInstance().SetDeviceState(kDeviceStateWifiConfiguring);\n    network_setup::BeginStockWifiProvisioningSession();')
@@ -91,12 +137,47 @@ def generate(xiaozhi, wifi, output):
         '            case WifiEvent::ConfigModeExit:\n                network_setup::EndStockWifiProvisioningSession();')
     (output / 'stock_wifi_board.cc').write_text(source)
 
+    source=pinned(wifi/'dns_server.cc','dns_server.cc')
+    source='''#include <mutex>
+#include <map>
+// These receipts outlive DNS objects; publication releases this mutex before
+// cleanup may erase the receipt and free the former callback owner.
+static std::mutex home_dns_mutex;
+static std::map<void*,bool> home_dns_receipts;
+static void home_dns_arm(void* owner){std::lock_guard<std::mutex> lock(home_dns_mutex);home_dns_receipts[owner]=false;}
+static void home_dns_publish(void* owner){std::lock_guard<std::mutex> lock(home_dns_mutex);auto item=home_dns_receipts.find(owner);if(item!=home_dns_receipts.end())item->second=true;}
+static bool home_dns_joined(void* owner){std::lock_guard<std::mutex> lock(home_dns_mutex);auto item=home_dns_receipts.find(owner);if(item==home_dns_receipts.end())return true;if(!item->second)return false;home_dns_receipts.erase(item);return true;}
+'''+source
+    source=replace_once(source,'    if (running_) {\n        Stop();\n    }','    Stop();')
+    source=replace_once(source,'    xTaskCreate([](void* arg) {','    home_dns_arm(this);\n    if(xTaskCreate([](void* arg) {')
+    source=replace_once(source,'        dns_server->Run();','        dns_server->Run();\n        home_dns_publish(dns_server); // no owner access after publication')
+    source=replace_once(source,'    }, "DnsServerTask", 4096, this, 5, &task_handle_);','    }, "DnsServerTask", 4096, this, 5, &task_handle_)!=pdPASS){running_=false;home_dns_publish(this);}')
+    source=replace_once(source,'    if (!running_) {\n        return;\n    }','    // A passive exit or failed startup can still require joining.')
+    source=replace_once(source,'''    if (task_handle_ != nullptr) {
+        // Give the task some time to exit gracefully
+        vTaskDelay(pdMS_TO_TICKS(100));
+        task_handle_ = nullptr;
+    }''','''    while(!home_dns_joined(this))vTaskDelay(pdMS_TO_TICKS(1));
+    task_handle_=nullptr;''')
+    source=replace_once(source,'    task_handle_ = nullptr;\n    ESP_LOGI(TAG, "DNS server task exiting");','    ESP_LOGI(TAG, "DNS server task exiting");')
+    source=replace_once(source,'recvfrom(fd_, buffer, sizeof(buffer),','recvfrom(fd_, buffer, sizeof(buffer)-16,')
+    source=replace_once(source,'        // Simple DNS response:', '        if(len<12)continue; // Header and appended answer must fit.\n        // Simple DNS response:')
+    (output/'stock_dns_server.cc').write_text(source)
+
     source = pinned(wifi / 'wifi_manager.cc', 'wifi_manager.cc')
+    source = '#include <companion/station_authority.hpp>\n' + source
+    for signature in ['bool WifiManager::Initialize(const WifiManagerConfig& config) {','void WifiManager::StartStation() {','void WifiManager::StartConfigAp() {']:
+        result='false' if signature.startswith('bool') else ''
+        source=replace_once(source,signature,signature+'\n    if(!companion::network::Authority().CanAcquire(companion::network::Owner::Vendor) || companion::network::Authority().Current()!=companion::network::Owner::Vendor)return '+result+';')
     source = replace_once(source, '''    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_LOGW(TAG, "Erasing NVS...");
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }''', '    // Preserve pairing, calibration and Wi-Fi on every initialization error.')
+    source = replace_once(source, '    ret = esp_wifi_init(&cfg);\n    if (ret != ESP_OK) {', '''    wifi_mode_t reused_mode{};
+    ret = esp_wifi_init(&cfg);
+    if (ret == ESP_ERR_WIFI_INIT_STATE && (esp_wifi_get_mode(&reused_mode)!=ESP_OK || reused_mode!=WIFI_MODE_NULL))return false;
+    if (ret != ESP_OK && ret != ESP_ERR_WIFI_INIT_STATE) {''')
     (output / 'stock_wifi_manager.cc').write_text(source)
 
     source = pinned(wifi / 'wifi_configuration_ap.cc', 'wifi_configuration_ap.cc')
