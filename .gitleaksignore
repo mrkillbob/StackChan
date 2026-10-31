@@ -16,3 +16,9 @@ c1ccff7db70390f7fd18e0f48a3ff62c9e50b4a3:companion/MENU-RESTORATION-FIRMWARE-BUI
 3081e2d0529683843b220db6d295976358364d14:companion/STOCK-SHELL-FIRMWARE-BUILD.json:generic-api-key:210
 3081e2d0529683843b220db6d295976358364d14:companion/STOCK-SHELL-FIRMWARE-BUILD.json:generic-api-key:211
 3081e2d0529683843b220db6d295976358364d14:companion/STOCK-SHELL-FIRMWARE-BUILD.json:generic-api-key:226
+
+# Same byte-identical reviewed public files under reconciliation commit; exact fingerprints only.
+# Evidence: docs/companions/secret-scan-provenance.json
+14468887abde1753bdf5f7890aac8ff686e9c8dc:firmware/components/M5Utility/test/crypto_des_test.cpp:generic-api-key:421
+14468887abde1753bdf5f7890aac8ff686e9c8dc:firmware/components/mira_wake/SOURCE-PINS.json:generic-api-key:376
+14468887abde1753bdf5f7890aac8ff686e9c8dc:firmware/components/mira_wake/SOURCE-PINS.json:generic-api-key:384
